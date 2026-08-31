@@ -6,13 +6,15 @@ enum UsageRailLayout {
     static let minimumPanelHeight: CGFloat = scaled(140)
     static let leftEdgeInset: CGFloat = scaled(8)
     static let transitionHeight: CGFloat = panelWidth - leftEdgeInset
-    static let contentInset: CGFloat = scaled(64)
-    static let bottomContentInset: CGFloat = scaled(16)
+    static let contentInset: CGFloat = scaled(88)
     static let settingsDiameter: CGFloat = scaled(56)
     static let settingsAreaHeight: CGFloat = scaled(68)
     static let settingsBottomPadding: CGFloat = scaled(6)
-    static let rightEdgeExtension: CGFloat = scaled(16)
+    static let rightEdgeExtension: CGFloat = scaled(24)
     static let bottomExteriorSpace: CGFloat = scaled(4)
+    static let bottomContentInset: CGFloat = contentInset
+        - settingsAreaHeight
+        + bottomExteriorSpace
 
     static func scaled(_ value: CGFloat) -> CGFloat {
         value * scale
@@ -229,7 +231,12 @@ private struct UsageRailShape: Shape {
         path.move(to: CGPoint(x: width, y: 0))
         path.addLine(to: CGPoint(x: width, y: height))
         addUsageRailBottomCurve(to: &path, in: rect, transition: bottomTransition)
-        path.addLine(to: CGPoint(x: width - topTransition, y: topTransition))
+        path.addLine(
+            to: CGPoint(
+                x: UsageRailLayout.leftEdgeInset,
+                y: topTransition
+            )
+        )
         addUsageRailTopCurve(to: &path, in: rect, transition: topTransition)
         path.closeSubpath()
         return path
