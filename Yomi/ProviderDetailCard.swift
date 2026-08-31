@@ -4,11 +4,6 @@ struct ProviderDetailCard: View {
     let descriptor: ProviderDescriptor
     let usage: ProviderUsage
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 16, alignment: .leading),
-        GridItem(.flexible(), spacing: 16, alignment: .leading),
-    ]
-
     private var tint: Color {
         ProviderBrandColors.color(for: descriptor.id)
     }
@@ -26,35 +21,6 @@ struct ProviderDetailCard: View {
         return "\(window.label) · 已用"
     }
 
-    private var summaryMetrics: [DetailMetric] {
-        var metrics: [DetailMetric] = []
-        if let balance = usage.balance {
-            metrics.append(DetailMetric(label: "≈ 余额", value: balance))
-        }
-        if let first = usage.windows.first {
-            metrics.append(DetailMetric(
-                label: "剩余额度",
-                value: "\(Int(((1 - first.clampedFraction) * 100).rounded()))%"
-            ))
-        }
-        for window in usage.windows.dropFirst().prefix(2) {
-            metrics.append(DetailMetric(
-                label: window.label,
-                value: "\(Int((window.clampedFraction * 100).rounded()))% 已用"
-            ))
-        }
-        if let nextReset = usage.windows.compactMap(\.resetsAt).min() {
-            metrics.append(DetailMetric(label: "下次重置", value: compactDuration(until: nextReset)))
-        }
-        if let updatedAt = usage.updatedAt {
-            metrics.append(DetailMetric(
-                label: "更新时间",
-                value: updatedAt.formatted(date: .omitted, time: .shortened)
-            ))
-        }
-        return metrics
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
@@ -63,17 +29,6 @@ struct ProviderDetailCard: View {
                 emptyState
             } else {
                 headline
-
-                if !summaryMetrics.isEmpty {
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
-                        ForEach(summaryMetrics) { metric in
-                            DetailMetricView(metric: metric)
-                        }
-                    }
-                }
-
-                Divider()
-                    .overlay(.white.opacity(0.14))
 
                 VStack(spacing: 11) {
                     ForEach(Array(usage.windows.prefix(3))) { window in
@@ -215,30 +170,6 @@ private struct ProviderDetailPanelShape: Shape {
         path.addLine(to: CGPoint(x: cardRect.maxX - 1, y: midpoint + 10))
         path.closeSubpath()
         return path
-    }
-}
-
-private struct DetailMetric: Identifiable {
-    let label: String
-    let value: String
-
-    var id: String { "\(label)-\(value)" }
-}
-
-private struct DetailMetricView: View {
-    let metric: DetailMetric
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(metric.label)
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.44))
-            Text(metric.value)
-                .font(.system(size: 12.5, weight: .bold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.92))
-                .monospacedDigit()
-                .lineLimit(1)
-        }
     }
 }
 
