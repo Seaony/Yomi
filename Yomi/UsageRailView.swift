@@ -10,6 +10,8 @@ enum UsageRailLayout {
     static let settingsDiameter: CGFloat = scaled(56)
     static let settingsAreaHeight: CGFloat = scaled(68)
     static let settingsBottomPadding: CGFloat = scaled(6)
+    static let settingsArcSize: CGFloat = scaled(64)
+    static let settingsArcBottomPadding: CGFloat = scaled(4)
 
     static func scaled(_ value: CGFloat) -> CGFloat {
         value * scale
@@ -87,11 +89,11 @@ struct UsageRailView: View {
             }
             .padding(.bottom, UsageRailLayout.settingsBottomPadding)
         }
-        .overlay {
-            UsageRailBottomArcShape()
+        .overlay(alignment: .bottom) {
+            SettingsQuarterArcShape()
                 .trim(
-                    from: isHovering ? 0.5 : 0.34,
-                    to: isHovering ? 0.5 : 0.68
+                    from: isHovering ? 0.5 : 0,
+                    to: isHovering ? 0.5 : 1
                 )
                 .stroke(
                     .black,
@@ -100,7 +102,12 @@ struct UsageRailView: View {
                         lineCap: .round
                     )
                 )
-                .offset(y: UsageRailLayout.scaled(12))
+                .frame(
+                    width: UsageRailLayout.settingsArcSize,
+                    height: UsageRailLayout.settingsArcSize
+                )
+                .offset(x: -UsageRailLayout.scaled(16))
+                .padding(.bottom, UsageRailLayout.settingsArcBottomPadding)
                 .opacity(isHovering ? 0 : 1)
                 .animation(
                     .spring(response: 0.34, dampingFraction: 0.78),
@@ -239,16 +246,20 @@ private struct UsageRailShape: Shape {
     }
 }
 
-private struct UsageRailBottomArcShape: Shape {
+private struct SettingsQuarterArcShape: Shape {
     func path(in rect: CGRect) -> Path {
-        let topTransition = min(UsageRailLayout.transitionHeight, rect.height / 2)
-        let bottomTransition = min(
-            UsageRailLayout.transitionHeight + UsageRailLayout.bottomContentInset,
-            rect.height - topTransition
-        )
+        let radius = min(rect.width, rect.height)
+        let control = radius * 0.552_284_75
         var path = Path()
-        path.move(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        addUsageRailBottomCurve(to: &path, in: rect, transition: bottomTransition)
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addCurve(
+            to: CGPoint(x: rect.minX + radius, y: rect.minY + radius),
+            control1: CGPoint(x: rect.minX + control, y: rect.minY),
+            control2: CGPoint(
+                x: rect.minX + radius,
+                y: rect.minY + radius - control
+            )
+        )
         return path
     }
 }
@@ -260,15 +271,34 @@ private func addUsageRailBottomCurve(
 ) {
     let width = rect.width
     let height = rect.height
+    let horizontalRadius = width / 2
+    let verticalRadius = transition / 2
+    let control = 0.552_284_75
+    let midpoint = CGPoint(
+        x: horizontalRadius,
+        y: height - verticalRadius
+    )
     path.addCurve(
-        to: CGPoint(x: width * 0.52, y: height - transition * 0.52),
-        control1: CGPoint(x: width, y: height - transition * 0.32),
-        control2: CGPoint(x: width * 0.86, y: height - transition * 0.5)
+        to: midpoint,
+        control1: CGPoint(
+            x: width,
+            y: height - verticalRadius * control
+        ),
+        control2: CGPoint(
+            x: horizontalRadius + horizontalRadius * control,
+            y: midpoint.y
+        )
     )
     path.addCurve(
         to: CGPoint(x: 0, y: height - transition),
-        control1: CGPoint(x: width * 0.18, y: height - transition * 0.54),
-        control2: CGPoint(x: 0, y: height - transition * 0.68)
+        control1: CGPoint(
+            x: horizontalRadius - horizontalRadius * control,
+            y: midpoint.y
+        ),
+        control2: CGPoint(
+            x: 0,
+            y: height - transition + verticalRadius * control
+        )
     )
 }
 
