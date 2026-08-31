@@ -1,5 +1,9 @@
 import SwiftUI
 
+enum UsageRailLayout {
+    static let transitionHeight: CGFloat = 48
+}
+
 struct UsageRailView: View {
     @ObservedObject var store: UsageStore
     let openSettings: (ProviderID?) -> Void
@@ -14,6 +18,9 @@ struct UsageRailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            Color.clear
+                .frame(height: UsageRailLayout.transitionHeight)
+
             ScrollView(.vertical) {
                 VStack(spacing: 12) {
                     ForEach(Array(store.enabledProviders.enumerated()), id: \.element.id) { index, descriptor in
@@ -84,25 +91,19 @@ struct UsageRailView: View {
                     )
                 }
             }
+
+            Color.clear
+                .frame(height: UsageRailLayout.transitionHeight)
         }
         .background {
-            UnevenRoundedRectangle(
-                topLeadingRadius: 36,
-                bottomLeadingRadius: 36,
-                bottomTrailingRadius: 0,
-                topTrailingRadius: 0,
-                style: .continuous
-            )
-            .fill(.black.opacity(isHovering ? 0.96 : 0.92))
-            .overlay(alignment: .leading) {
-                LinearGradient(
-                    colors: [.white.opacity(0.08), .clear],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(width: 1)
-            }
+            UsageRailShape()
+                .fill(.black.opacity(isHovering ? 0.96 : 0.92))
+                .overlay {
+                    UsageRailShape()
+                        .stroke(.white.opacity(0.06), lineWidth: 1)
+                }
         }
+        .contentShape(UsageRailShape())
         .scaleEffect(appeared ? 1 : 0.96, anchor: .trailing)
         .opacity(appeared ? 1 : 0)
         .onAppear {
@@ -124,7 +125,44 @@ struct UsageRailView: View {
 
     private func reportContentHeight(providerSection: CGFloat, footer: CGFloat) {
         guard providerSection > 0, footer > 0 else { return }
-        contentHeightChanged(providerSection + footer)
+        contentHeightChanged(
+            providerSection + footer + UsageRailLayout.transitionHeight * 2
+        )
+    }
+}
+
+private struct UsageRailShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let width = rect.width
+        let height = rect.height
+        let transition = min(UsageRailLayout.transitionHeight, height / 3)
+
+        var path = Path()
+        path.move(to: CGPoint(x: width, y: 0))
+        path.addLine(to: CGPoint(x: width, y: height))
+        path.addCurve(
+            to: CGPoint(x: width * 0.5, y: height - transition * 0.55),
+            control1: CGPoint(x: width, y: height - transition * 0.35),
+            control2: CGPoint(x: width * 0.82, y: height - transition * 0.55)
+        )
+        path.addCurve(
+            to: CGPoint(x: 0, y: height - transition),
+            control1: CGPoint(x: width * 0.18, y: height - transition * 0.55),
+            control2: CGPoint(x: 0, y: height - transition * 0.7)
+        )
+        path.addLine(to: CGPoint(x: 0, y: transition))
+        path.addCurve(
+            to: CGPoint(x: width * 0.5, y: transition * 0.55),
+            control1: CGPoint(x: 0, y: transition * 0.7),
+            control2: CGPoint(x: width * 0.18, y: transition * 0.55)
+        )
+        path.addCurve(
+            to: CGPoint(x: width, y: 0),
+            control1: CGPoint(x: width * 0.82, y: transition * 0.55),
+            control2: CGPoint(x: width, y: transition * 0.35)
+        )
+        path.closeSubpath()
+        return path
     }
 }
 
