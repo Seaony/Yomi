@@ -1,6 +1,13 @@
 import AppKit
 import SwiftUI
 
+enum UsageRailSide: String {
+    static let storageKey = "panel-side"
+
+    case left
+    case right
+}
+
 enum UsageRailLayout {
     static let scale: CGFloat = 0.5
     static let panelWidth: CGFloat = scaled(104)
@@ -40,8 +47,13 @@ struct UsageRailView: View {
     @State private var isHovering = false
     @State private var providerAnchorY: [ProviderID: CGFloat] = [:]
     @State private var providerRowHeights: [ProviderID: CGFloat] = [:]
+    @AppStorage(UsageRailSide.storageKey) private var railSideValue = UsageRailSide.right.rawValue
     @AppStorage("show-provider-names") private var showProviderNames = true
     @Environment(\.colorScheme) private var colorScheme
+
+    private var railSide: UsageRailSide {
+        UsageRailSide(rawValue: railSideValue) ?? .right
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -97,7 +109,7 @@ struct UsageRailView: View {
                 )
         }
         .overlay(alignment: .bottom) {
-            SettingsHoverControl(isHovering: isHovering) {
+            SettingsHoverControl(isHovering: isHovering, railSide: railSide) {
                 openSettings(nil)
             }
             .padding(.bottom, UsageRailLayout.settingsBottomPadding)
@@ -105,7 +117,7 @@ struct UsageRailView: View {
         .coordinateSpace(name: "usageRail")
         .background {
             GeometryReader { proxy in
-                UsageRailShape()
+                UsageRailShape(side: railSide)
                     .fill(AppTheme.railBackground(for: colorScheme))
                     .frame(
                         height: max(
@@ -116,8 +128,11 @@ struct UsageRailView: View {
                     )
             }
         }
-        .contentShape(UsageRailHitShape())
-        .scaleEffect(appeared ? 1 : 0.96, anchor: .trailing)
+        .contentShape(UsageRailHitShape(side: railSide))
+        .scaleEffect(
+            appeared ? 1 : 0.96,
+            anchor: railSide == .right ? .trailing : .leading
+        )
         .opacity(appeared ? 1 : 0)
         .onAppear {
             withAnimation(.spring(response: 0.48, dampingFraction: 0.82)) { appeared = true }
@@ -159,6 +174,7 @@ struct UsageRailView: View {
 
 private struct SettingsHoverControl: View {
     let isHovering: Bool
+    let railSide: UsageRailSide
     let action: () -> Void
 
     @State private var isControlHovering = false
@@ -180,6 +196,7 @@ private struct SettingsHoverControl: View {
                         )
                     )
                     .rotationEffect(.degrees(-90))
+                    .scaleEffect(x: railSide == .right ? 1 : -1)
                     .opacity(isHovering ? 0 : 1)
 
                 Circle()
@@ -245,6 +262,8 @@ private struct ProviderRowHeightKey: PreferenceKey {
 }
 
 private struct UsageRailShape: Shape {
+    let side: UsageRailSide
+
     func path(in rect: CGRect) -> Path {
         let width = rect.width
         let height = rect.height
@@ -258,7 +277,15 @@ private struct UsageRailShape: Shape {
         path.addLine(to: curve.point(curve.leftEndpoint, at: .top, height: height))
         addUsageRailEdgeCurve(to: &path, curve: curve, edge: .top, height: height)
         path.closeSubpath()
-        return path
+        guard side == .left else { return path }
+        return path.applying(CGAffineTransform(
+            a: -1,
+            b: 0,
+            c: 0,
+            d: 1,
+            tx: rect.minX + rect.maxX,
+            ty: 0
+        ))
     }
 }
 
@@ -350,6 +377,8 @@ private struct UsageRailEdgeCurve {
 }
 
 private struct UsageRailHitShape: Shape {
+    let side: UsageRailSide
+
     func path(in rect: CGRect) -> Path {
         let railRect = CGRect(
             x: rect.minX,
@@ -357,7 +386,7 @@ private struct UsageRailHitShape: Shape {
             width: rect.width,
             height: max(0, rect.height - UsageRailLayout.bottomExteriorSpace)
         )
-        var path = UsageRailShape().path(in: railRect)
+        var path = UsageRailShape(side: side).path(in: railRect)
         path.addEllipse(
             in: CGRect(
                 x: rect.midX - UsageRailLayout.settingsDiameter / 2,
@@ -469,9 +498,14 @@ private struct ProviderRailItem: View {
         ProviderBrandColors.color(for: descriptor.id)
     }
 
+    private var remainingFraction: Double {
+        guard !usage.windows.isEmpty else { return 0 }
+        return 1 - usage.headlineFraction
+    }
+
     private var percentage: String {
         guard !usage.windows.isEmpty else { return "—" }
-        return "\(Int((usage.headlineFraction * 100).rounded()))%"
+        return "\(Int((remainingFraction * 100).rounded()))%"
     }
 
     var body: some View {
@@ -549,8 +583,8 @@ private struct ProviderRailItem: View {
         .onDisappear {
             if hovered { NSCursor.arrow.set() }
         }
-        .onAppear { animate(to: usage.headlineFraction) }
-        .onChange(of: usage.headlineFraction) { _, value in animate(to: value) }
+        .onAppear { animate(to: remainingFraction) }
+        .onChange(of: remainingFraction) { _, value in animate(to: value) }
     }
 
     private func animate(to value: Double) {

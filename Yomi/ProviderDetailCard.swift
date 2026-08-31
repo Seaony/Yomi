@@ -1,5 +1,13 @@
 import SwiftUI
 
+enum ProviderDetailLayout {
+    static let arrowWidth: CGFloat = 8
+    static let arrowHalfHeight: CGFloat = 7
+    static let outerPadding: CGFloat = 16
+    static let railGap: CGFloat = 6
+    static let transitionOffset: CGFloat = 8
+}
+
 struct ProviderDetailCard: View {
     let descriptor: ProviderDescriptor
     let usage: ProviderUsage
@@ -150,6 +158,7 @@ struct ProviderDetailPanelView: View {
     @ObservedObject var store: UsageStore
     @ObservedObject private var appPreferences = AppPreferences.shared
     let descriptor: ProviderDescriptor
+    let railSide: UsageRailSide
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -157,12 +166,15 @@ struct ProviderDetailPanelView: View {
             descriptor: descriptor,
             usage: store.usage(for: descriptor.id)
         )
-        .padding(.trailing, ProviderDetailPanelShape.arrowWidth)
+        .padding(
+            railSide == .right ? .trailing : .leading,
+            ProviderDetailLayout.arrowWidth
+        )
         .background {
-            ProviderDetailPanelShape()
+            ProviderDetailPanelShape(railSide: railSide)
                 .fill(AppTheme.detailBackground(for: colorScheme))
         }
-        .padding(16)
+        .padding(ProviderDetailLayout.outerPadding)
         .environment(\.appLanguage, appPreferences.language)
         .environment(\.locale, appPreferences.language.locale)
         .preferredColorScheme(appPreferences.appearance.colorScheme)
@@ -170,13 +182,13 @@ struct ProviderDetailPanelView: View {
 }
 
 private struct ProviderDetailPanelShape: Shape {
-    static let arrowWidth: CGFloat = 12
+    let railSide: UsageRailSide
 
     func path(in rect: CGRect) -> Path {
         let cardRect = CGRect(
-            x: rect.minX,
+            x: railSide == .right ? rect.minX : rect.minX + ProviderDetailLayout.arrowWidth,
             y: rect.minY,
-            width: rect.width - Self.arrowWidth,
+            width: rect.width - ProviderDetailLayout.arrowWidth,
             height: rect.height
         )
         let midpoint = rect.midY
@@ -186,9 +198,17 @@ private struct ProviderDetailPanelShape: Shape {
             cornerRadius: 18,
             style: .continuous
         )
-        path.move(to: CGPoint(x: cardRect.maxX - 1, y: midpoint - 10))
-        path.addLine(to: CGPoint(x: rect.maxX, y: midpoint))
-        path.addLine(to: CGPoint(x: cardRect.maxX - 1, y: midpoint + 10))
+        let cardEdge = railSide == .right ? cardRect.maxX - 1 : cardRect.minX + 1
+        let arrowTip = railSide == .right ? rect.maxX : rect.minX
+        path.move(to: CGPoint(
+            x: cardEdge,
+            y: midpoint - ProviderDetailLayout.arrowHalfHeight
+        ))
+        path.addLine(to: CGPoint(x: arrowTip, y: midpoint))
+        path.addLine(to: CGPoint(
+            x: cardEdge,
+            y: midpoint + ProviderDetailLayout.arrowHalfHeight
+        ))
         path.closeSubpath()
         return path
     }

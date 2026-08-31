@@ -66,20 +66,22 @@ final class UsageStore: ObservableObject {
             return (descriptor, configuration, secret)
         }
 
+        var loadingUsage = usageByID
         for job in jobs {
-            usageByID[job.0.id] = ProviderUsage(
+            loadingUsage[job.0.id] = ProviderUsage(
                 id: job.0.id,
                 state: .loading,
-                windows: usageByID[job.0.id]?.windows ?? [],
-                balance: usageByID[job.0.id]?.balance,
-                plan: usageByID[job.0.id]?.plan,
-                today: usageByID[job.0.id]?.today,
-                last30Days: usageByID[job.0.id]?.last30Days,
-                weeklyEstimate: usageByID[job.0.id]?.weeklyEstimate,
-                updatedAt: usageByID[job.0.id]?.updatedAt,
+                windows: loadingUsage[job.0.id]?.windows ?? [],
+                balance: loadingUsage[job.0.id]?.balance,
+                plan: loadingUsage[job.0.id]?.plan,
+                today: loadingUsage[job.0.id]?.today,
+                last30Days: loadingUsage[job.0.id]?.last30Days,
+                weeklyEstimate: loadingUsage[job.0.id]?.weeklyEstimate,
+                updatedAt: loadingUsage[job.0.id]?.updatedAt,
                 message: nil
             )
         }
+        usageByID = loadingUsage
 
         await withTaskGroup(of: ProviderUsage.self) { group in
             let concurrencyLimit = 6

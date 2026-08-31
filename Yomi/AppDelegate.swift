@@ -3,6 +3,8 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private static let panelVerticalPositionKey = "panel-vertical-position"
+
     let store = UsageStore.shared
 
     private var panel: FloatingPanel?
@@ -11,9 +13,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var globalClickMonitor: Any?
     private var settingsWindow: NSWindow?
     private var verticalPosition: CGFloat = 0.5
+    private var railSide = UsageRailSide.right
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        restorePanelPosition()
         createPanel()
         store.start()
 
@@ -115,6 +119,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.originConstraint = { [weak self] origin, size in
             self?.constrainedPanelOrigin(origin, size: size) ?? origin
         }
+        panel.onDragEnded = { [weak self] in
+            self?.panelDragEnded()
+        }
         self.panel = panel
         panel.contentView = NSHostingView(rootView: UsageRailView(
             store: store,
@@ -149,7 +156,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let root = ProviderDetailPanelView(
             store: store,
-            descriptor: descriptor
+            descriptor: descriptor,
+            railSide: railSide
         )
         let hostingView = NSHostingView(rootView: root)
         let fittingSize = hostingView.fittingSize
@@ -173,26 +181,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let maximumY = max(minimumY, visibleFrame.maxY - fittingSize.height - 8)
         let anchorY = panel.frame.maxY - localY
         let proposedY = anchorY - fittingSize.height / 2
-        let origin = NSPoint(
-            x: panel.frame.minX - fittingSize.width + UsageRailLayout.panelWidth / 2,
+        let finalX = switch railSide {
+        case .left:
+            panel.frame.maxX
+                + ProviderDetailLayout.railGap
+                - ProviderDetailLayout.outerPadding
+        case .right:
+            panel.frame.minX
+                - fittingSize.width
+                + ProviderDetailLayout.outerPadding
+                - ProviderDetailLayout.railGap
+        }
+        let transitionDirection: CGFloat = railSide == .right ? 1 : -1
+        let finalOrigin = NSPoint(
+            x: finalX,
             y: min(max(proposedY, minimumY), maximumY)
         )
-        detailPanel.setFrameOrigin(origin)
+        detailPanel.alphaValue = 0
+        detailPanel.setFrameOrigin(NSPoint(
+            x: finalOrigin.x + ProviderDetailLayout.transitionOffset * transitionDirection,
+            y: finalOrigin.y
+        ))
 
         self.providerDetailPanel = detailPanel
         selectedProviderID = descriptor.id
         panel.addChildWindow(detailPanel, ordered: .above)
         detailPanel.orderFrontRegardless()
         installDetailClickMonitor()
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            detailPanel.animator().alphaValue = 1
+            detailPanel.animator().setFrameOrigin(finalOrigin)
+        }
     }
 
     private func closeProviderDetail() {
         guard let detailPanel = providerDetailPanel else { return }
-        panel?.removeChildWindow(detailPanel)
-        detailPanel.orderOut(nil)
         providerDetailPanel = nil
         selectedProviderID = nil
         removeDetailClickMonitor()
+
+        let transitionDirection: CGFloat = railSide == .right ? 1 : -1
+        let targetOrigin = NSPoint(
+            x: detailPanel.frame.origin.x
+                + ProviderDetailLayout.transitionOffset * transitionDirection,
+            y: detailPanel.frame.origin.y
+        )
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.16
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            detailPanel.animator().alphaValue = 0
+            detailPanel.animator().setFrameOrigin(targetOrigin)
+        }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(0.16))
+            self?.panel?.removeChildWindow(detailPanel)
+            detailPanel.orderOut(nil)
+        }
     }
 
     private func installDetailClickMonitor() {
@@ -226,6 +273,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func constrainedPanelOrigin(_ origin: NSPoint, size: NSSize) -> NSPoint {
         guard let visible = targetScreen()?.visibleFrame else { return origin }
+        let minimumX = visible.minX - UsageRailLayout.screenEdgeOverlap
+        let maximumX = visible.maxX - size.width + UsageRailLayout.screenEdgeOverlap
         let minimumY = visible.minY + UsageRailLayout.screenVerticalMargin
         let maximumY = max(
             minimumY,
@@ -235,7 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let travel = maximumY - minimumY
         verticalPosition = travel > 0 ? (constrainedY - minimumY) / travel : 0.5
         return NSPoint(
-            x: visible.maxX - size.width + UsageRailLayout.screenEdgeOverlap,
+            x: min(max(origin.x, minimumX), maximumX),
             y: constrainedY
         )
     }
@@ -259,7 +308,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             visible.maxY - height - UsageRailLayout.screenVerticalMargin
         )
         return NSRect(
-            x: visible.maxX - frame.width + UsageRailLayout.screenEdgeOverlap,
+            x: pinnedX(in: visible, panelWidth: frame.width),
             y: minimumY + (maximumY - minimumY) * verticalPosition,
             width: frame.width,
             height: height
@@ -275,13 +324,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return NSScreen.screens.first { $0.frame.contains(point) }
     }
 
+    private func restorePanelPosition() {
+        if let savedSide = UserDefaults.standard.string(forKey: UsageRailSide.storageKey),
+           let side = UsageRailSide(rawValue: savedSide) {
+            railSide = side
+        }
+        guard let saved = UserDefaults.standard.object(
+            forKey: Self.panelVerticalPositionKey
+        ) as? NSNumber else { return }
+        verticalPosition = min(max(CGFloat(saved.doubleValue), 0), 1)
+    }
+
+    private func persistPanelPosition() {
+        UserDefaults.standard.set(railSide.rawValue, forKey: UsageRailSide.storageKey)
+        UserDefaults.standard.set(
+            Double(verticalPosition),
+            forKey: Self.panelVerticalPositionKey
+        )
+    }
+
+    private func panelDragEnded() {
+        guard let panel,
+              let visible = targetScreen()?.visibleFrame else { return }
+        closeProviderDetail()
+        railSide = panel.frame.midX < visible.midX ? .left : .right
+        persistPanelPosition()
+        positionPanel(animated: true)
+    }
+
+    private func pinnedX(in visible: NSRect, panelWidth: CGFloat) -> CGFloat {
+        switch railSide {
+        case .left:
+            visible.minX - UsageRailLayout.screenEdgeOverlap
+        case .right:
+            visible.maxX - panelWidth + UsageRailLayout.screenEdgeOverlap
+        }
+    }
+
 }
 
 final class FloatingPanel: NSPanel {
     var originConstraint: ((NSPoint, NSSize) -> NSPoint)?
+    var onDragEnded: (() -> Void)?
     private var dragStartMouseLocation: NSPoint?
     private var dragStartOrigin: NSPoint?
-    private var isDraggingVertically = false
+    private var isDragging = false
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -298,7 +385,7 @@ final class FloatingPanel: NSPanel {
                 y: frame.minY + event.locationInWindow.y
             )
             dragStartOrigin = frame.origin
-            isDraggingVertically = false
+            isDragging = false
             super.sendEvent(event)
 
         case .leftMouseDragged:
@@ -316,24 +403,29 @@ final class FloatingPanel: NSPanel {
             let horizontalDistance = currentMouse.x - startMouse.x
             let verticalDistance = currentMouse.y - startMouse.y
 
-            if !isDraggingVertically {
-                guard abs(verticalDistance) > 6,
-                      abs(verticalDistance) > abs(horizontalDistance)
-                else {
+            if !isDragging {
+                guard hypot(horizontalDistance, verticalDistance) > 6 else {
                     super.sendEvent(event)
                     return
                 }
                 super.sendEvent(event)
-                isDraggingVertically = true
+                isDragging = true
             }
 
-            setFrameOrigin(NSPoint(x: startOrigin.x, y: startOrigin.y + verticalDistance))
+            setFrameOrigin(NSPoint(
+                x: startOrigin.x + horizontalDistance,
+                y: startOrigin.y + verticalDistance
+            ))
 
         case .leftMouseUp:
+            let finishedDragging = isDragging
             dragStartMouseLocation = nil
             dragStartOrigin = nil
-            isDraggingVertically = false
+            isDragging = false
             super.sendEvent(event)
+            if finishedDragging {
+                onDragEnded?()
+            }
 
         default:
             super.sendEvent(event)

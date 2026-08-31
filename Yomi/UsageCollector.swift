@@ -28,7 +28,9 @@ enum UsageCollectionError: LocalizedError {
 actor UsageCollector {
     private let session: URLSession
     private var pricingCatalog: ModelPricingCatalog?
+    private var pricingCatalogLoadTask: Task<ModelPricingCatalog?, Never>?
     private var pricingCatalogReloadAt = Date.distantPast
+    private let localUsageScanner = LocalDailyUsageScanner()
 
     init() {
         let configuration = URLSessionConfiguration.ephemeral
@@ -49,8 +51,15 @@ actor UsageCollector {
             configuration: configuration,
             secret: secret
         )
+        guard descriptor.id.rawValue == "codex" || descriptor.id.rawValue == "claude" else {
+            return usage
+        }
         let catalog = await resolvedPricingCatalog()
-        return addingLocalMetadata(to: usage, descriptor: descriptor, pricingCatalog: catalog)
+        return await addingLocalMetadata(
+            to: usage,
+            descriptor: descriptor,
+            pricingCatalog: catalog
+        )
     }
 
     private func collectRaw(
@@ -224,7 +233,7 @@ actor UsageCollector {
         to usage: ProviderUsage,
         descriptor: ProviderDescriptor,
         pricingCatalog: ModelPricingCatalog?
-    ) -> ProviderUsage {
+    ) async -> ProviderUsage {
         var enriched = usage
         if enriched.plan == nil {
             enriched.plan = localPlan(for: descriptor)
@@ -235,7 +244,7 @@ actor UsageCollector {
         let weekStart = weeklyReset
             .flatMap { Calendar.current.date(byAdding: .day, value: -7, to: $0) }
             ?? now.addingTimeInterval(-7 * 24 * 60 * 60)
-        let localUsage = LocalDailyUsageScanner.scan(
+        let localUsage = await localUsageScanner.scan(
             providerID: descriptor.id,
             currentWeekStart: weekStart,
             now: now,
@@ -283,8 +292,18 @@ actor UsageCollector {
     private func resolvedPricingCatalog() async -> ModelPricingCatalog? {
         let now = Date()
         if now < pricingCatalogReloadAt { return pricingCatalog }
-        pricingCatalog = await ModelPricingCatalog.load(session: session)
-        pricingCatalogReloadAt = now.addingTimeInterval(24 * 60 * 60)
+        if let pricingCatalogLoadTask {
+            return await pricingCatalogLoadTask.value
+        }
+
+        let task = Task { [session] in
+            await ModelPricingCatalog.load(session: session, now: now)
+        }
+        pricingCatalogLoadTask = task
+        pricingCatalog = await task.value
+        pricingCatalogLoadTask = nil
+        let retryInterval: TimeInterval = pricingCatalog == nil ? 15 * 60 : 24 * 60 * 60
+        pricingCatalogReloadAt = now.addingTimeInterval(retryInterval)
         return pricingCatalog
     }
 

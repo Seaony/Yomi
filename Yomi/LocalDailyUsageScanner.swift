@@ -1,7 +1,8 @@
+import Darwin
 import Foundation
 
-nonisolated enum LocalDailyUsageScanner {
-    private struct Tokens: Equatable {
+actor LocalDailyUsageScanner {
+    private struct Tokens: Codable, Equatable {
         var input = 0
         var cacheRead = 0
         var cacheWrite = 0
@@ -11,11 +12,133 @@ nonisolated enum LocalDailyUsageScanner {
         var claudeTotal: Int { input + cacheRead + cacheWrite + output }
     }
 
-    private struct ClaudeSample {
+    private struct ClaudeSample: Codable {
         let timestamp: Date
         let model: String
         let tokens: Tokens
         let cacheWrite1h: Int
+        let isSidechain: Bool
+    }
+
+    private struct CodexSample: Codable {
+        let timestamp: Date
+        let model: String?
+        let tokens: Tokens
+    }
+
+    private struct JSONLResumeState: Codable {
+        var offset: UInt64 = 0
+        var discardingOversizedLine = false
+    }
+
+    private struct JSONLReadResult {
+        let resumeState: JSONLResumeState
+        let observedFileSize: UInt64
+    }
+
+    private struct LogFile {
+        let url: URL
+        let size: UInt64
+        let modificationNanoseconds: Int64
+        let fileID: String
+    }
+
+    private struct LogTokenUsage: Decodable {
+        let inputTokens: Int?
+        let cachedInputTokens: Int?
+        let cacheReadInputTokens: Int?
+        let cacheCreationInputTokens: Int?
+        let cacheWriteInputTokens: Int?
+        let outputTokens: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case inputTokens = "input_tokens"
+            case cachedInputTokens = "cached_input_tokens"
+            case cacheReadInputTokens = "cache_read_input_tokens"
+            case cacheCreationInputTokens = "cache_creation_input_tokens"
+            case cacheWriteInputTokens = "cache_write_input_tokens"
+            case outputTokens = "output_tokens"
+        }
+    }
+
+    private struct CodexLogLine: Decodable {
+        let type: String?
+        let timestamp: String?
+        let payload: Payload?
+
+        struct Payload: Decodable {
+            let type: String?
+            let model: String?
+            let modelName: String?
+            let info: Info?
+
+            enum CodingKeys: String, CodingKey {
+                case type
+                case model
+                case modelName = "model_name"
+                case info
+            }
+        }
+
+        struct Info: Decodable {
+            let model: String?
+            let modelName: String?
+            let lastTokenUsage: LogTokenUsage?
+            let totalTokenUsage: LogTokenUsage?
+
+            enum CodingKeys: String, CodingKey {
+                case model
+                case modelName = "model_name"
+                case lastTokenUsage = "last_token_usage"
+                case totalTokenUsage = "total_token_usage"
+            }
+        }
+    }
+
+    private struct ClaudeLogLine: Decodable {
+        let type: String?
+        let timestamp: String?
+        let requestID: String?
+        let isSidechain: Bool?
+        let message: Message?
+
+        enum CodingKeys: String, CodingKey {
+            case type
+            case timestamp
+            case requestID = "requestId"
+            case isSidechain
+            case message
+        }
+
+        struct Message: Decodable {
+            let id: String?
+            let model: String?
+            let usage: Usage?
+        }
+
+        struct Usage: Decodable {
+            let inputTokens: Int?
+            let cacheReadInputTokens: Int?
+            let cacheCreationInputTokens: Int?
+            let outputTokens: Int?
+            let cacheCreation: CacheCreation?
+
+            enum CodingKeys: String, CodingKey {
+                case inputTokens = "input_tokens"
+                case cacheReadInputTokens = "cache_read_input_tokens"
+                case cacheCreationInputTokens = "cache_creation_input_tokens"
+                case outputTokens = "output_tokens"
+                case cacheCreation = "cache_creation"
+            }
+        }
+
+        struct CacheCreation: Decodable {
+            let ephemeral1hInputTokens: Int?
+
+            enum CodingKeys: String, CodingKey {
+                case ephemeral1hInputTokens = "ephemeral_1h_input_tokens"
+            }
+        }
     }
 
     private struct PeriodAccumulator {
@@ -77,7 +200,7 @@ nonisolated enum LocalDailyUsageScanner {
         }
     }
 
-    private struct CodexTotalsTracker {
+    private struct CodexTotalsTracker: Codable {
         private(set) var watermark: Tokens?
         private(set) var seen: [Tokens] = []
         private(set) var sawInterleavedTotals = false
@@ -109,7 +232,7 @@ nonisolated enum LocalDailyUsageScanner {
         }
     }
 
-    private struct CodexAccumulator {
+    private struct CodexAccumulator: Codable {
         var countedTotals: Tokens?
         var rawTotalsBaseline: Tokens?
         var sawDivergentTotals = false
@@ -200,13 +323,48 @@ nonisolated enum LocalDailyUsageScanner {
         }
     }
 
-    static func scan(
+    private struct CodexFileState: Codable {
+        var size: UInt64 = 0
+        var modificationNanoseconds: Int64 = 0
+        var fileID = ""
+        var resumeState = JSONLResumeState()
+        var resumeFingerprint = Data()
+        var currentModel: String?
+        var accumulator = CodexAccumulator()
+        var samples: [CodexSample] = []
+    }
+
+    private struct ClaudeFileState: Codable {
+        var size: UInt64 = 0
+        var modificationNanoseconds: Int64 = 0
+        var fileID = ""
+        var resumeState = JSONLResumeState()
+        var resumeFingerprint = Data()
+        var keyedSamples: [String: ClaudeSample] = [:]
+        var unkeyedSamples: [ClaudeSample] = []
+    }
+
+    private var codexFileStates: [String: CodexFileState] = [:]
+    private var claudeFileStates: [String: ClaudeFileState] = [:]
+    private var loadedProviders: Set<String> = []
+    private let cacheStore = LocalUsageCacheStore()
+    private let cacheEncoder = JSONEncoder()
+    private let cacheDecoder = JSONDecoder()
+    private let fractionalDateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private let dateFormatter = ISO8601DateFormatter()
+
+    func scan(
         providerID: ProviderID,
         currentWeekStart: Date,
         now: Date = Date(),
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         pricingCatalog: ModelPricingCatalog? = nil
     ) -> LocalTokenUsageSummary? {
+        loadCachedStatesIfNeeded(provider: providerID.rawValue)
         let calendar = Calendar.current
         let todayStart = calendar.startOfDay(for: now)
         guard let end = calendar.date(byAdding: .day, value: 1, to: todayStart),
@@ -233,50 +391,106 @@ nonisolated enum LocalDailyUsageScanner {
         }
     }
 
-    private static func scanCodex(
+    private func scanCodex(
         periods: PeriodAccumulators,
         homeDirectory: URL,
         pricingCatalog: ModelPricingCatalog?
     ) -> LocalTokenUsageSummary? {
         let root = homeDirectory.appending(path: ".codex/sessions")
-        let files = filesModified(since: periods.last30DaysStart, below: root)
-        var accumulated = periods
+        let files = Self.filesModified(since: periods.last30DaysStart, below: root)
+        let currentPaths = Set(files.map { $0.url.path })
+        let deletedPaths = Set(codexFileStates.keys).subtracting(currentPaths)
+        codexFileStates = codexFileStates.filter { currentPaths.contains($0.key) }
+        var changedPaths: Set<String> = []
 
         for file in files {
-            var currentModel: String?
-            var accumulator = CodexAccumulator()
-            readJSONLines(
-                from: file,
-                matchingAny: [#""type":"turn_context""#, #""type":"token_count""#]
-            ) { object in
-                let type = object["type"] as? String
-                if type == "turn_context", let payload = object["payload"] as? [String: Any] {
-                    currentModel = string(payload["model"]) ?? string(payload["model_name"])
+            let path = file.url.path
+            var state = codexFileStates[path] ?? CodexFileState()
+            let previousSampleCount = state.samples.count
+            state.samples.removeAll {
+                $0.timestamp < periods.last30DaysStart || $0.timestamp >= periods.end
+            }
+            if state.samples.count != previousSampleCount {
+                changedPaths.insert(path)
+            }
+
+            if state.fileID == file.fileID,
+               state.size == file.size,
+               state.modificationNanoseconds == file.modificationNanoseconds {
+                codexFileStates[path] = state
+                continue
+            }
+            if state.size > 0, !Self.canResume(
+                file: file,
+                fileID: state.fileID,
+                previousSize: state.size,
+                resumeState: state.resumeState,
+                fingerprint: state.resumeFingerprint
+            ) {
+                state = CodexFileState()
+            }
+
+            let resumeState = state.resumeState
+            let readResult = Self.readJSONLines(
+                from: file.url,
+                resumeState: resumeState,
+                matchingAny: [#""type":"turn_context""#, #""type":"token_count""#],
+                as: CodexLogLine.self
+            ) { line in
+                if line.type == "turn_context", let payload = line.payload {
+                    state.currentModel = payload.model ?? payload.modelName
                     return
                 }
-                guard type == "event_msg",
-                      let payload = object["payload"] as? [String: Any],
-                      payload["type"] as? String == "token_count",
-                      let info = payload["info"] as? [String: Any],
-                      let timestamp = date(object["timestamp"])
+                guard line.type == "event_msg",
+                      let payload = line.payload,
+                      payload.type == "token_count",
+                      let info = payload.info,
+                      let timestamp = date(line.timestamp)
                 else { return }
 
-                let model = string(info["model"])
-                    ?? string(info["model_name"])
-                    ?? string(payload["model"])
-                    ?? currentModel
-                let last = tokenValues(info["last_token_usage"])
-                let cumulative = tokenValues(info["total_token_usage"])
+                let model = info.model
+                    ?? info.modelName
+                    ?? payload.model
+                    ?? state.currentModel
+                let last = Self.tokenValues(info.lastTokenUsage)
+                let cumulative = Self.tokenValues(info.totalTokenUsage)
 
-                let delta = accumulator.apply(last: last, total: cumulative)
+                let delta = state.accumulator.apply(last: last, total: cumulative)
 
-                guard let delta, delta.codexTotal > 0 else { return }
-                let valueUSD = model
-                    .flatMap { codexRates(for: $0, catalog: pricingCatalog) }
-                    .map { codexCost(tokens: delta, rates: $0) }
-                accumulated.add(
+                guard let delta,
+                      delta.codexTotal > 0,
+                      timestamp >= periods.last30DaysStart,
+                      timestamp < periods.end
+                else { return }
+                state.samples.append(CodexSample(
                     timestamp: timestamp,
-                    tokens: delta.codexTotal,
+                    model: model,
+                    tokens: delta
+                ))
+            }
+            state.resumeState = readResult.resumeState
+            let latest = Self.fileMetadata(for: file.url) ?? file
+            state.size = readResult.observedFileSize
+            state.modificationNanoseconds = latest.modificationNanoseconds
+            state.fileID = latest.fileID
+            state.resumeFingerprint = Self.resumeFingerprint(
+                for: file.url,
+                endingAt: state.resumeState.offset
+            )
+            codexFileStates[path] = state
+            changedPaths.insert(path)
+        }
+        persistCodexStates(changedPaths: changedPaths, deletedPaths: deletedPaths)
+
+        var accumulated = periods
+        for state in codexFileStates.values {
+            for sample in state.samples {
+                let valueUSD = sample.model
+                    .flatMap { Self.codexRates(for: $0, at: sample.timestamp, catalog: pricingCatalog) }
+                    .map { Self.codexCost(tokens: sample.tokens, rates: $0) }
+                accumulated.add(
+                    timestamp: sample.timestamp,
+                    tokens: sample.tokens.codexTotal,
                     valueUSD: valueUSD
                 )
             }
@@ -284,63 +498,130 @@ nonisolated enum LocalDailyUsageScanner {
         return accumulated.summary
     }
 
-    private static func scanClaude(
+    private func scanClaude(
         periods: PeriodAccumulators,
         homeDirectory: URL,
         pricingCatalog: ModelPricingCatalog?
     ) -> LocalTokenUsageSummary? {
         let root = homeDirectory.appending(path: ".claude/projects")
-        let files = filesModified(since: periods.last30DaysStart, below: root)
+        let files = Self.filesModified(since: periods.last30DaysStart, below: root)
+        let currentPaths = Set(files.map { $0.url.path })
+        let deletedPaths = Set(claudeFileStates.keys).subtracting(currentPaths)
+        claudeFileStates = claudeFileStates.filter { currentPaths.contains($0.key) }
+        var changedPaths: Set<String> = []
 
-        var keyedSamples: [String: ClaudeSample] = [:]
-        var unkeyedSamples: [ClaudeSample] = []
         for file in files {
-            readJSONLines(
-                from: file,
-                matchingAny: [#""type":"assistant""#]
-            ) { object in
-                guard object["type"] as? String == "assistant",
-                      let timestamp = date(object["timestamp"]),
+            let path = file.url.path
+            var state = claudeFileStates[path] ?? ClaudeFileState()
+            let previousKeyedCount = state.keyedSamples.count
+            let previousUnkeyedCount = state.unkeyedSamples.count
+            state.keyedSamples = state.keyedSamples.filter {
+                $0.value.timestamp >= periods.last30DaysStart && $0.value.timestamp < periods.end
+            }
+            state.unkeyedSamples.removeAll {
+                $0.timestamp < periods.last30DaysStart || $0.timestamp >= periods.end
+            }
+            if state.keyedSamples.count != previousKeyedCount
+                || state.unkeyedSamples.count != previousUnkeyedCount {
+                changedPaths.insert(path)
+            }
+
+            if state.fileID == file.fileID,
+               state.size == file.size,
+               state.modificationNanoseconds == file.modificationNanoseconds {
+                claudeFileStates[path] = state
+                continue
+            }
+            if state.size > 0, !Self.canResume(
+                file: file,
+                fileID: state.fileID,
+                previousSize: state.size,
+                resumeState: state.resumeState,
+                fingerprint: state.resumeFingerprint
+            ) {
+                state = ClaudeFileState()
+            }
+
+            let resumeState = state.resumeState
+            let readResult = Self.readJSONLines(
+                from: file.url,
+                resumeState: resumeState,
+                matchingAny: [#""type":"assistant""#],
+                as: ClaudeLogLine.self
+            ) { line in
+                guard line.type == "assistant",
+                      let timestamp = date(line.timestamp),
                       timestamp >= periods.last30DaysStart,
                       timestamp < periods.end,
-                      let message = object["message"] as? [String: Any],
-                      let model = message["model"] as? String,
-                      let usage = message["usage"] as? [String: Any]
+                      let message = line.message,
+                      let model = message.model,
+                      let usage = message.usage
                 else { return }
 
                 let tokens = Tokens(
-                    input: integer(usage["input_tokens"]),
-                    cacheRead: integer(usage["cache_read_input_tokens"]),
-                    cacheWrite: integer(usage["cache_creation_input_tokens"]),
-                    output: integer(usage["output_tokens"])
+                    input: max(0, usage.inputTokens ?? 0),
+                    cacheRead: max(0, usage.cacheReadInputTokens ?? 0),
+                    cacheWrite: max(0, usage.cacheCreationInputTokens ?? 0),
+                    output: max(0, usage.outputTokens ?? 0)
                 )
                 guard tokens.claudeTotal > 0 else { return }
 
-                let cacheCreation = usage["cache_creation"] as? [String: Any]
                 let sample = ClaudeSample(
                     timestamp: timestamp,
                     model: model,
                     tokens: tokens,
                     cacheWrite1h: min(
                         tokens.cacheWrite,
-                        integer(cacheCreation?["ephemeral_1h_input_tokens"])
-                    )
+                        max(0, usage.cacheCreation?.ephemeral1hInputTokens ?? 0)
+                    ),
+                    isSidechain: line.isSidechain ?? false
                 )
-                if let messageID = message["id"] as? String,
-                   let requestID = object["requestId"] as? String {
-                    keyedSamples["\(messageID):\(requestID)"] = sample
+                if let messageID = message.id, let requestID = line.requestID {
+                    state.keyedSamples["\(messageID):\(requestID)"] = sample
                 } else {
-                    unkeyedSamples.append(sample)
+                    state.unkeyedSamples.append(sample)
                 }
             }
+            state.resumeState = readResult.resumeState
+            let latest = Self.fileMetadata(for: file.url) ?? file
+            state.size = readResult.observedFileSize
+            state.modificationNanoseconds = latest.modificationNanoseconds
+            state.fileID = latest.fileID
+            state.resumeFingerprint = Self.resumeFingerprint(
+                for: file.url,
+                endingAt: state.resumeState.offset
+            )
+            claudeFileStates[path] = state
+            changedPaths.insert(path)
         }
+        persistClaudeStates(changedPaths: changedPaths, deletedPaths: deletedPaths)
 
-        let samples = Array(keyedSamples.values) + unkeyedSamples
+        var keyedSamples: [String: (path: String, sample: ClaudeSample)] = [:]
+        var unkeyedSamples: [ClaudeSample] = []
+        for path in files.map({ $0.url.path }).sorted() {
+            guard let state = claudeFileStates[path] else { continue }
+            for (key, sample) in state.keyedSamples {
+                let candidate = (path: path, sample: sample)
+                if let existing = keyedSamples[key] {
+                    if Self.claudeCandidateWins(candidate, over: existing) {
+                        keyedSamples[key] = candidate
+                    }
+                } else {
+                    keyedSamples[key] = candidate
+                }
+            }
+            unkeyedSamples.append(contentsOf: state.unkeyedSamples)
+        }
+        let samples = keyedSamples.values.map(\.sample) + unkeyedSamples
         guard !samples.isEmpty else { return nil }
         var accumulated = periods
         for sample in samples {
-            let valueUSD = claudeRates(for: sample.model, catalog: pricingCatalog)
-                .map { claudeCost(sample: sample, rates: $0) }
+            let valueUSD = Self.claudeRates(
+                for: sample.model,
+                at: sample.timestamp,
+                catalog: pricingCatalog
+            )
+                .map { Self.claudeCost(sample: sample, rates: $0) }
             accumulated.add(
                 timestamp: sample.timestamp,
                 tokens: sample.tokens.claudeTotal,
@@ -350,51 +631,74 @@ nonisolated enum LocalDailyUsageScanner {
         return accumulated.summary
     }
 
-    private static func filesModified(since start: Date, below root: URL) -> [URL] {
-        let keys: [URLResourceKey] = [.contentModificationDateKey, .isRegularFileKey]
+    private static func filesModified(since start: Date, below root: URL) -> [LogFile] {
         guard let enumerator = FileManager.default.enumerator(
             at: root,
-            includingPropertiesForKeys: keys,
+            includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else { return [] }
 
-        return enumerator.compactMap { element -> URL? in
+        return enumerator.compactMap { element -> LogFile? in
             guard let url = element as? URL,
                   url.pathExtension.lowercased() == "jsonl",
-                  let values = try? url.resourceValues(forKeys: Set(keys)),
-                  values.isRegularFile == true,
-                  let modified = values.contentModificationDate,
-                  modified >= start
+                  let file = fileMetadata(for: url),
+                  TimeInterval(file.modificationNanoseconds) / 1_000_000_000 >= start.timeIntervalSince1970
             else { return nil }
-            return url
+            return file
         }
     }
 
-    private static func readJSONLines(
+    private static func readJSONLines<Value: Decodable>(
         from url: URL,
+        resumeState initialState: JSONLResumeState,
         matchingAny patterns: [String],
-        handle: ([String: Any]) -> Void
-    ) {
-        guard let file = try? FileHandle(forReadingFrom: url) else { return }
+        as type: Value.Type,
+        handle: (Value) -> Void
+    ) -> JSONLReadResult {
+        guard let file = try? FileHandle(forReadingFrom: url) else {
+            return JSONLReadResult(
+                resumeState: initialState,
+                observedFileSize: initialState.offset
+            )
+        }
         defer { try? file.close() }
+        do {
+            try file.seek(toOffset: initialState.offset)
+        } catch {
+            return JSONLReadResult(
+                resumeState: initialState,
+                observedFileSize: initialState.offset
+            )
+        }
 
         let bytePatterns = patterns.map { Data($0.utf8) }
+        let decoder = JSONDecoder()
 
         func process(_ line: Data.SubSequence) {
             guard bytePatterns.contains(where: { line.range(of: $0) != nil }),
-                  let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any]
+                  let value = try? decoder.decode(type, from: line)
             else { return }
-            handle(object)
+            handle(value)
         }
 
+        var state = initialState
+        var observedFileSize = initialState.offset
         var pending = Data()
-        var discardingOversizedLine = false
         let maximumLineBytes = 512 * 1024
-        while var chunk = try? file.read(upToCount: 64 * 1024), !chunk.isEmpty {
-            if discardingOversizedLine {
-                guard let newline = chunk.firstIndex(of: 0x0A) else { continue }
+        while autoreleasepool(invoking: { () -> Bool in
+            guard var chunk = try? file.read(upToCount: 64 * 1024), !chunk.isEmpty else {
+                return false
+            }
+            observedFileSize += UInt64(chunk.count)
+            if state.discardingOversizedLine {
+                guard let newline = chunk.firstIndex(of: 0x0A) else {
+                    state.offset += UInt64(chunk.count)
+                    return true
+                }
+                let consumed = chunk.distance(from: chunk.startIndex, to: newline) + 1
+                state.offset += UInt64(consumed)
                 chunk.removeSubrange(chunk.startIndex...newline)
-                discardingOversizedLine = false
+                state.discardingOversizedLine = false
             }
             pending.append(chunk)
             var lineStart = pending.startIndex
@@ -407,46 +711,179 @@ nonisolated enum LocalDailyUsageScanner {
                 lineStart = pending.index(after: newline)
             }
             if lineStart > pending.startIndex {
+                let consumed = pending.distance(from: pending.startIndex, to: lineStart)
+                state.offset += UInt64(consumed)
                 pending.removeSubrange(pending.startIndex..<lineStart)
             }
             if pending.count > maximumLineBytes {
+                state.offset += UInt64(pending.count)
                 pending.removeAll(keepingCapacity: true)
-                discardingOversizedLine = true
+                state.discardingOversizedLine = true
             }
+            return true
+        }) {}
+        if !state.discardingOversizedLine, !pending.isEmpty {
+            let isRelevant = bytePatterns.contains(where: { pending.range(of: $0) != nil })
+            let isComplete = autoreleasepool {
+                if isRelevant {
+                    guard let value = try? decoder.decode(type, from: pending) else { return false }
+                    handle(value)
+                    return true
+                }
+                return (try? JSONSerialization.jsonObject(with: pending)) != nil
+            }
+            if isComplete { state.offset += UInt64(pending.count) }
         }
-        if !discardingOversizedLine, !pending.isEmpty {
-            process(pending[pending.startIndex..<pending.endIndex])
-        }
-    }
-
-    private static func tokenValues(_ value: Any?) -> Tokens? {
-        guard let usage = value as? [String: Any] else { return nil }
-        return Tokens(
-            input: integer(usage["input_tokens"]),
-            cacheRead: max(
-                integer(usage["cached_input_tokens"]),
-                integer(usage["cache_read_input_tokens"])
-            ),
-            cacheWrite: integer(usage["cache_write_input_tokens"]),
-            output: integer(usage["output_tokens"])
+        return JSONLReadResult(
+            resumeState: state,
+            observedFileSize: observedFileSize
         )
     }
 
-    private static func integer(_ value: Any?) -> Int {
-        max(0, (value as? NSNumber)?.intValue ?? 0)
+    private static func fileMetadata(for url: URL) -> LogFile? {
+        var status = stat()
+        guard url.path.withCString({ fstatat(AT_FDCWD, $0, &status, 0) }) == 0,
+              status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG)
+        else { return nil }
+        let modificationNanoseconds = Int64(status.st_mtimespec.tv_sec) * 1_000_000_000
+            + Int64(status.st_mtimespec.tv_nsec)
+        return LogFile(
+            url: url,
+            size: UInt64(max(0, status.st_size)),
+            modificationNanoseconds: modificationNanoseconds,
+            fileID: "\(status.st_dev):\(status.st_ino)"
+        )
     }
 
-    private static func string(_ value: Any?) -> String? {
-        guard let value = value as? String, !value.isEmpty else { return nil }
-        return value
+    private static func canResume(
+        file: LogFile,
+        fileID: String,
+        previousSize: UInt64,
+        resumeState: JSONLResumeState,
+        fingerprint: Data
+    ) -> Bool {
+        guard file.fileID == fileID,
+              file.size > previousSize,
+              resumeState.offset <= previousSize,
+              resumeState.offset <= file.size,
+              resumeState.offset == 0 || !fingerprint.isEmpty
+        else { return false }
+        return resumeFingerprint(for: file.url, endingAt: resumeState.offset) == fingerprint
     }
 
-    private static func date(_ value: Any?) -> Date? {
-        guard let value = value as? String else { return nil }
-        if let parsed = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value) {
-            return parsed
+    private static func resumeFingerprint(for url: URL, endingAt offset: UInt64) -> Data {
+        guard offset > 0,
+              let file = try? FileHandle(forReadingFrom: url)
+        else { return Data() }
+        defer { try? file.close() }
+
+        let byteCount = min(offset, 64)
+        do {
+            try file.seek(toOffset: offset - byteCount)
+            return try file.read(upToCount: Int(byteCount)) ?? Data()
+        } catch {
+            return Data()
         }
-        return try? Date.ISO8601FormatStyle().parse(value)
+    }
+
+    private func loadCachedStatesIfNeeded(provider: String) {
+        guard loadedProviders.insert(provider).inserted,
+              let cacheStore
+        else { return }
+
+        var invalidPaths: Set<String> = []
+        for record in cacheStore.records(provider: provider) {
+            switch provider {
+            case "codex":
+                guard var state = try? cacheDecoder.decode(CodexFileState.self, from: record.payload) else {
+                    invalidPaths.insert(record.path)
+                    continue
+                }
+                state.fileID = record.fileID
+                state.modificationNanoseconds = record.modificationNanoseconds
+                state.size = record.size
+                codexFileStates[record.path] = state
+            case "claude":
+                guard var state = try? cacheDecoder.decode(ClaudeFileState.self, from: record.payload) else {
+                    invalidPaths.insert(record.path)
+                    continue
+                }
+                state.fileID = record.fileID
+                state.modificationNanoseconds = record.modificationNanoseconds
+                state.size = record.size
+                claudeFileStates[record.path] = state
+            default:
+                return
+            }
+        }
+        cacheStore.commit(provider: provider, records: [], deletingPaths: invalidPaths)
+    }
+
+    private func persistCodexStates(changedPaths: Set<String>, deletedPaths: Set<String>) {
+        guard let cacheStore else { return }
+        let records = changedPaths.compactMap { path -> LocalUsageCacheStore.Record? in
+            guard let state = codexFileStates[path],
+                  let payload = try? cacheEncoder.encode(state)
+            else { return nil }
+            return LocalUsageCacheStore.Record(
+                path: path,
+                fileID: state.fileID,
+                modificationNanoseconds: state.modificationNanoseconds,
+                size: state.size,
+                payload: payload
+            )
+        }
+        cacheStore.commit(provider: "codex", records: records, deletingPaths: deletedPaths)
+    }
+
+    private func persistClaudeStates(changedPaths: Set<String>, deletedPaths: Set<String>) {
+        guard let cacheStore else { return }
+        let records = changedPaths.compactMap { path -> LocalUsageCacheStore.Record? in
+            guard let state = claudeFileStates[path],
+                  let payload = try? cacheEncoder.encode(state)
+            else { return nil }
+            return LocalUsageCacheStore.Record(
+                path: path,
+                fileID: state.fileID,
+                modificationNanoseconds: state.modificationNanoseconds,
+                size: state.size,
+                payload: payload
+            )
+        }
+        cacheStore.commit(provider: "claude", records: records, deletingPaths: deletedPaths)
+    }
+
+    private static func claudeCandidateWins(
+        _ candidate: (path: String, sample: ClaudeSample),
+        over existing: (path: String, sample: ClaudeSample)
+    ) -> Bool {
+        if candidate.sample.isSidechain != existing.sample.isSidechain {
+            return existing.sample.isSidechain
+        }
+        let candidateIsSubagent = candidate.path.contains("/subagents/")
+        let existingIsSubagent = existing.path.contains("/subagents/")
+        if candidateIsSubagent != existingIsSubagent {
+            return existingIsSubagent
+        }
+        return candidate.path < existing.path
+    }
+
+    private static func tokenValues(_ usage: LogTokenUsage?) -> Tokens? {
+        guard let usage else { return nil }
+        return Tokens(
+            input: max(0, usage.inputTokens ?? 0),
+            cacheRead: max(
+                max(0, usage.cachedInputTokens ?? 0),
+                max(0, usage.cacheReadInputTokens ?? 0)
+            ),
+            cacheWrite: max(0, usage.cacheWriteInputTokens ?? 0),
+            output: max(0, usage.outputTokens ?? 0)
+        )
+    }
+
+    private func date(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        return fractionalDateFormatter.date(from: value) ?? dateFormatter.date(from: value)
     }
 
     private static func isAtLeast(_ lhs: Tokens, _ rhs: Tokens) -> Bool {
@@ -591,17 +1028,24 @@ nonisolated enum LocalDailyUsageScanner {
     }
 
     private static func codexCost(tokens: Tokens, rates: ModelTokenRates) -> Double {
-        let cached = min(tokens.cacheRead, tokens.input)
-        let uncached = max(0, tokens.input - cached)
-        let aboveThreshold = rates.threshold.map { tokens.input > $0 } ?? false
+        let totalInput = max(0, tokens.input)
+        let cached = min(max(0, tokens.cacheRead), totalInput)
+        let remainingAfterCache = totalInput - cached
+        let cacheWrite = min(max(0, tokens.cacheWrite), remainingAfterCache)
+        let uncached = remainingAfterCache - cacheWrite
+        let aboveThreshold = rates.threshold.map { totalInput > $0 } ?? false
         let inputRate = aboveThreshold ? rates.inputAboveThreshold ?? rates.input : rates.input
         let cachedRate = (aboveThreshold ? rates.cacheReadAboveThreshold ?? rates.cacheRead : rates.cacheRead)
             ?? inputRate
+        let cacheWriteRate = (aboveThreshold
+            ? rates.cacheWriteAboveThreshold ?? rates.cacheWrite
+            : rates.cacheWrite) ?? inputRate
         let outputRate = aboveThreshold ? rates.outputAboveThreshold ?? rates.output : rates.output
         let inputCost = Double(uncached) * inputRate
         let cacheCost = Double(cached) * cachedRate
-        let outputCost = Double(tokens.output) * outputRate
-        return inputCost + cacheCost + outputCost
+        let cacheWriteCost = Double(cacheWrite) * cacheWriteRate
+        let outputCost = Double(max(0, tokens.output)) * outputRate
+        return inputCost + cacheCost + cacheWriteCost + outputCost
     }
 
     private static func claudeCost(sample: ClaudeSample, rates: ModelTokenRates) -> Double {
@@ -626,55 +1070,83 @@ nonisolated enum LocalDailyUsageScanner {
 
     private static func codexRates(
         for rawModel: String,
+        at timestamp: Date,
         catalog: ModelPricingCatalog?
     ) -> ModelTokenRates? {
-        let model = rawModel.lowercased()
-        if var rates = catalog?.rates(providerID: "openai", modelID: normalizedCodexModel(model)) {
+        let model = normalizedCodexModel(rawModel.lowercased())
+        if timestamp < Date(timeIntervalSince1970: 1_785_369_600) {
+            if model == "gpt-5.6-terra" {
+                return ModelTokenRates(
+                    input: 2.5e-6, cacheRead: 2.5e-7, cacheWrite: 3.125e-6, output: 1.5e-5,
+                    threshold: 272_000, inputAboveThreshold: 5e-6,
+                    cacheReadAboveThreshold: 5e-7, cacheWriteAboveThreshold: 6.25e-6,
+                    outputAboveThreshold: 2.25e-5
+                )
+            }
+            if model == "gpt-5.6-luna" {
+                return ModelTokenRates(
+                    input: 1e-6, cacheRead: 1e-7, cacheWrite: 1.25e-6, output: 6e-6,
+                    threshold: 272_000, inputAboveThreshold: 2e-6,
+                    cacheReadAboveThreshold: 2e-7, cacheWriteAboveThreshold: 2.5e-6,
+                    outputAboveThreshold: 9e-6
+                )
+            }
+        }
+        if var rates = codexCatalogRates(for: rawModel, catalog: catalog) {
             if ["gpt-5.4", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
-                .contains(normalizedCodexModel(model)) {
+                .contains(model) {
                 rates.threshold = 272_000
             }
             return rates
         }
         return switch model {
-        case let value where value.contains("gpt-5.6-sol"),
-             let value where value.contains("gpt-5.5"):
+        case "gpt-5.6-sol", "gpt-5.5":
             ModelTokenRates(
                 input: 5e-6, cacheRead: 5e-7, cacheWrite: 6.25e-6, output: 3e-5,
                 threshold: 272_000, inputAboveThreshold: 1e-5,
                 cacheReadAboveThreshold: 1e-6, cacheWriteAboveThreshold: 1.25e-5,
                 outputAboveThreshold: 4.5e-5
             )
-        case let value where value.contains("gpt-5.6-terra"):
+        case "gpt-5.6-terra":
             ModelTokenRates(
                 input: 2e-6, cacheRead: 2e-7, cacheWrite: 2.5e-6, output: 1.2e-5,
                 threshold: 272_000, inputAboveThreshold: 4e-6,
                 cacheReadAboveThreshold: 4e-7, cacheWriteAboveThreshold: 5e-6,
                 outputAboveThreshold: 1.8e-5
             )
-        case let value where value.contains("gpt-5.6-luna"):
+        case "gpt-5.6-luna":
             ModelTokenRates(
                 input: 2e-7, cacheRead: 2e-8, cacheWrite: 2.5e-7, output: 1.2e-6,
                 threshold: 272_000, inputAboveThreshold: 4e-7,
                 cacheReadAboveThreshold: 4e-8, cacheWriteAboveThreshold: 5e-7,
                 outputAboveThreshold: 1.8e-6
             )
-        case let value where value.contains("gpt-5.4-mini"):
+        case "gpt-5.4-mini":
             ModelTokenRates(input: 7.5e-7, cacheRead: 7.5e-8, cacheWrite: 7.5e-7, output: 4.5e-6, threshold: nil, inputAboveThreshold: nil, cacheReadAboveThreshold: nil, cacheWriteAboveThreshold: nil, outputAboveThreshold: nil)
-        case let value where value.contains("gpt-5.4"):
+        case "gpt-5.4":
             ModelTokenRates(
                 input: 2.5e-6, cacheRead: 2.5e-7, cacheWrite: 2.5e-6, output: 1.5e-5,
                 threshold: 272_000, inputAboveThreshold: 5e-6,
                 cacheReadAboveThreshold: 5e-7, cacheWriteAboveThreshold: 5e-6,
                 outputAboveThreshold: 2.25e-5
             )
-        case let value where value.contains("gpt-5.3"),
-             let value where value.contains("gpt-5.2"):
+        case "gpt-5.3-codex-spark":
+            ModelTokenRates(input: 0, cacheRead: 0, cacheWrite: 0, output: 0, threshold: nil, inputAboveThreshold: nil, cacheReadAboveThreshold: nil, cacheWriteAboveThreshold: nil, outputAboveThreshold: nil)
+        case "gpt-5.3-codex", "gpt-5.2", "gpt-5.2-codex":
             ModelTokenRates(input: 1.75e-6, cacheRead: 1.75e-7, cacheWrite: 1.75e-6, output: 1.4e-5, threshold: nil, inputAboveThreshold: nil, cacheReadAboveThreshold: nil, cacheWriteAboveThreshold: nil, outputAboveThreshold: nil)
-        case let value where value.contains("gpt-5.1-mini"),
-             let value where value.contains("gpt-5-mini"):
+        case "gpt-5.1-codex-mini", "gpt-5-mini":
             ModelTokenRates(input: 2.5e-7, cacheRead: 2.5e-8, cacheWrite: 2.5e-7, output: 2e-6, threshold: nil, inputAboveThreshold: nil, cacheReadAboveThreshold: nil, cacheWriteAboveThreshold: nil, outputAboveThreshold: nil)
-        case let value where value.contains("gpt-5"):
+        case "gpt-5-nano":
+            ModelTokenRates(input: 5e-8, cacheRead: 5e-9, cacheWrite: 5e-8, output: 4e-7, threshold: nil, inputAboveThreshold: nil, cacheReadAboveThreshold: nil, cacheWriteAboveThreshold: nil, outputAboveThreshold: nil)
+        case "gpt-5.4-nano":
+            ModelTokenRates(input: 2e-7, cacheRead: 2e-8, cacheWrite: 2e-7, output: 1.25e-6, threshold: nil, inputAboveThreshold: nil, cacheReadAboveThreshold: nil, cacheWriteAboveThreshold: nil, outputAboveThreshold: nil)
+        case "gpt-5-pro":
+            ModelTokenRates(input: 1.5e-5, cacheRead: nil, cacheWrite: 1.5e-5, output: 1.2e-4, threshold: nil, inputAboveThreshold: nil, cacheReadAboveThreshold: nil, cacheWriteAboveThreshold: nil, outputAboveThreshold: nil)
+        case "gpt-5.2-pro":
+            ModelTokenRates(input: 2.1e-5, cacheRead: nil, cacheWrite: 2.1e-5, output: 1.68e-4, threshold: nil, inputAboveThreshold: nil, cacheReadAboveThreshold: nil, cacheWriteAboveThreshold: nil, outputAboveThreshold: nil)
+        case "gpt-5.4-pro", "gpt-5.5-pro":
+            ModelTokenRates(input: 3e-5, cacheRead: nil, cacheWrite: 3e-5, output: 1.8e-4, threshold: nil, inputAboveThreshold: nil, cacheReadAboveThreshold: nil, cacheWriteAboveThreshold: nil, outputAboveThreshold: nil)
+        case "gpt-5", "gpt-5-codex", "gpt-5.1", "gpt-5.1-codex", "gpt-5.1-codex-max":
             ModelTokenRates(input: 1.25e-6, cacheRead: 1.25e-7, cacheWrite: 1.25e-6, output: 1e-5, threshold: nil, inputAboveThreshold: nil, cacheReadAboveThreshold: nil, cacheWriteAboveThreshold: nil, outputAboveThreshold: nil)
         default:
             nil
@@ -683,10 +1155,24 @@ nonisolated enum LocalDailyUsageScanner {
 
     private static func claudeRates(
         for rawModel: String,
+        at timestamp: Date,
         catalog: ModelPricingCatalog?
     ) -> ModelTokenRates? {
-        let model = rawModel.lowercased()
-        if let rates = catalog?.rates(providerID: "anthropic", modelID: model) {
+        let model = normalizedClaudeModel(rawModel.lowercased())
+        let hasHistoricalLongContextPricing = model == "claude-opus-4-6"
+            || model == "claude-sonnet-4-6"
+        if timestamp < Date(timeIntervalSince1970: 1_773_360_000),
+           hasHistoricalLongContextPricing {
+            let input = model.contains("opus") ? 5e-6 : 3e-6
+            let output = model.contains("opus") ? 2.5e-5 : 1.5e-5
+            return ModelTokenRates(
+                input: input, cacheRead: input / 10, cacheWrite: input * 1.25, output: output,
+                threshold: 200_000, inputAboveThreshold: input * 2,
+                cacheReadAboveThreshold: input / 5, cacheWriteAboveThreshold: input * 2.5,
+                outputAboveThreshold: output * 1.5
+            )
+        }
+        if let rates = claudeCatalogRates(for: rawModel, catalog: catalog) {
             return rates
         }
         if model.contains("fable") {
@@ -712,11 +1198,79 @@ nonisolated enum LocalDailyUsageScanner {
         return nil
     }
 
-    private static func normalizedCodexModel(_ model: String) -> String {
-        if model == "gpt-5.6" { return "gpt-5.6-sol" }
-        if let dated = model.range(of: #"-\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) {
-            return String(model[..<dated.lowerBound])
+    private static func codexCatalogRates(
+        for rawModel: String,
+        catalog: ModelPricingCatalog?
+    ) -> ModelTokenRates? {
+        guard let catalog else { return nil }
+        let trimmed = rawModel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let slash = trimmed.firstIndex(of: "/") {
+            let provider = String(trimmed[..<slash])
+            let model = String(trimmed[trimmed.index(after: slash)...])
+            let supportedProviders: Set<String> = [
+                "deepseek", "kimi-coding", "kimi-for-coding", "openai",
+                "opencode", "opencode-free", "opencode-go",
+            ]
+            guard supportedProviders.contains(provider) else { return nil }
+            return catalog.rates(providerID: provider, modelID: model)
+                ?? (provider == "kimi-coding"
+                    ? catalog.rates(providerID: "kimi-for-coding", modelID: model)
+                    : nil)
+                ?? (provider == "opencode-free"
+                    ? catalog.rates(providerID: "opencode", modelID: model)
+                    : nil)
         }
-        return model
+        return catalog.rates(providerID: "openai", modelID: normalizedCodexModel(trimmed))
+    }
+
+    private static func claudeCatalogRates(
+        for rawModel: String,
+        catalog: ModelPricingCatalog?
+    ) -> ModelTokenRates? {
+        guard let catalog else { return nil }
+        let trimmed = rawModel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let slash = trimmed.firstIndex(of: "/") {
+            let provider = String(trimmed[..<slash])
+            let model = String(trimmed[trimmed.index(after: slash)...])
+            let supportedProviders: Set<String> = [
+                "anthropic", "openai", "google", "moonshot", "kimi-for-coding",
+                "minimax", "deepseek",
+            ]
+            guard supportedProviders.contains(provider) else { return nil }
+            return catalog.rates(providerID: provider, modelID: model)
+        }
+        return catalog.rates(providerID: "anthropic", modelID: normalizedClaudeModel(trimmed))
+    }
+
+    private static func normalizedCodexModel(_ model: String) -> String {
+        var normalized = model
+        if let slash = normalized.firstIndex(of: "/") {
+            normalized = String(normalized[normalized.index(after: slash)...])
+        }
+        if normalized == "gpt-5.6" { return "gpt-5.6-sol" }
+        if let dated = normalized.range(of: #"-\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) {
+            return String(normalized[..<dated.lowerBound])
+        }
+        return normalized
+    }
+
+    private static func normalizedClaudeModel(_ model: String) -> String {
+        var normalized = model
+        if normalized.hasPrefix("anthropic.") {
+            normalized.removeFirst("anthropic.".count)
+        }
+        if let lastDot = normalized.lastIndex(of: "."), normalized.contains("claude-") {
+            let tail = String(normalized[normalized.index(after: lastDot)...])
+            if tail.hasPrefix("claude-") {
+                normalized = tail
+            }
+        }
+        if let version = normalized.range(of: #"-v\d+:\d+$"#, options: .regularExpression) {
+            normalized.removeSubrange(version)
+        }
+        if let date = normalized.range(of: #"-\d{8}$"#, options: .regularExpression) {
+            normalized.removeSubrange(date)
+        }
+        return normalized
     }
 }
