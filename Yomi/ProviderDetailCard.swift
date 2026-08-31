@@ -5,8 +5,8 @@ struct ProviderDetailCard: View {
     let usage: ProviderUsage
 
     private let columns = [
-        GridItem(.flexible(), spacing: 24, alignment: .leading),
-        GridItem(.flexible(), spacing: 24, alignment: .leading),
+        GridItem(.flexible(), spacing: 16, alignment: .leading),
+        GridItem(.flexible(), spacing: 16, alignment: .leading),
     ]
 
     private var tint: Color {
@@ -56,7 +56,7 @@ struct ProviderDetailCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             header
 
             if usage.windows.isEmpty {
@@ -65,7 +65,7 @@ struct ProviderDetailCard: View {
                 headline
 
                 if !summaryMetrics.isEmpty {
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
                         ForEach(summaryMetrics) { metric in
                             DetailMetricView(metric: metric)
                         }
@@ -75,7 +75,7 @@ struct ProviderDetailCard: View {
                 Divider()
                     .overlay(.white.opacity(0.14))
 
-                VStack(spacing: 15) {
+                VStack(spacing: 11) {
                     ForEach(Array(usage.windows.prefix(3))) { window in
                         UsageWindowRow(window: window, tint: tint)
                     }
@@ -84,62 +84,62 @@ struct ProviderDetailCard: View {
                 footer
             }
         }
-        .padding(20)
-        .frame(width: 420)
+        .padding(14)
+        .frame(width: 300)
         .foregroundStyle(.white)
         .preferredColorScheme(.dark)
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 7) {
             Circle()
                 .fill(tint)
-                .frame(width: 9, height: 9)
+                .frame(width: 7, height: 7)
 
             Text(descriptor.name)
-                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .font(.system(size: 15, weight: .bold, design: .rounded))
 
             Spacer()
 
             if let plan = usage.plan {
                 Text(plan)
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .font(.system(size: 10.5, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.55))
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 6)
-                    .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             }
         }
     }
 
     private var headline: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
             Text(headlineValue)
-                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .font(.system(size: 26, weight: .bold, design: .rounded))
                 .monospacedDigit()
             Text(headlineCaption)
-                .font(.system(size: 13.5, weight: .semibold))
+                .font(.system(size: 11.5, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.48))
                 .lineLimit(1)
         }
     }
 
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 5) {
             Label(
                 usage.state == .loading ? "正在读取用量" : "暂时无法显示用量",
                 systemImage: statusSymbol
             )
-            .font(.system(size: 14, weight: .semibold))
+            .font(.system(size: 12, weight: .semibold))
 
             if let message = usage.message {
                 Text(message)
-                    .font(.system(size: 12))
+                    .font(.system(size: 10.5))
                     .foregroundStyle(.white.opacity(0.46))
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 96, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
     }
 
     private var footer: some View {
@@ -158,11 +158,11 @@ struct ProviderDetailCard: View {
                 Text("\(usage.windows.count) 个额度窗口")
             }
         }
-        .font(.system(size: 12, weight: .semibold))
+        .font(.system(size: 10.5, weight: .semibold))
         .foregroundStyle(.white.opacity(0.42))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var statusSymbol: String {
@@ -188,14 +188,14 @@ struct ProviderDetailPanelView: View {
         .background {
             ProviderDetailPanelShape()
                 .fill(Color(red: 0.075, green: 0.075, blue: 0.085))
-                .shadow(color: .black.opacity(0.38), radius: 24, y: 12)
+                .shadow(color: .black.opacity(0.38), radius: 16, y: 8)
         }
-        .padding(24)
+        .padding(16)
     }
 }
 
 private struct ProviderDetailPanelShape: Shape {
-    static let arrowWidth: CGFloat = 16
+    static let arrowWidth: CGFloat = 12
 
     func path(in rect: CGRect) -> Path {
         let cardRect = CGRect(
@@ -208,12 +208,12 @@ private struct ProviderDetailPanelShape: Shape {
 
         var path = Path(
             roundedRect: cardRect,
-            cornerRadius: 24,
+            cornerRadius: 18,
             style: .continuous
         )
-        path.move(to: CGPoint(x: cardRect.maxX - 1, y: midpoint - 14))
+        path.move(to: CGPoint(x: cardRect.maxX - 1, y: midpoint - 10))
         path.addLine(to: CGPoint(x: rect.maxX, y: midpoint))
-        path.addLine(to: CGPoint(x: cardRect.maxX - 1, y: midpoint + 14))
+        path.addLine(to: CGPoint(x: cardRect.maxX - 1, y: midpoint + 10))
         path.closeSubpath()
         return path
     }
@@ -230,12 +230,12 @@ private struct DetailMetricView: View {
     let metric: DetailMetric
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 2) {
             Text(metric.label)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 10.5, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.44))
             Text(metric.value)
-                .font(.system(size: 14, weight: .bold, design: .rounded))
+                .font(.system(size: 12.5, weight: .bold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.92))
                 .monospacedDigit()
                 .lineLimit(1)
@@ -252,18 +252,18 @@ private struct UsageWindowRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(window.label)
-                    .font(.system(size: 13.5, weight: .bold))
+                    .font(.system(size: 11.5, weight: .bold))
                 Spacer()
                 Text("\(Int((remainingFraction * 100).rounded()))% left")
-                    .font(.system(size: 13.5, weight: .bold, design: .rounded))
+                    .font(.system(size: 11.5, weight: .bold, design: .rounded))
                     .foregroundStyle(tint)
                     .monospacedDigit()
                 if !resetText.isEmpty {
                     Text(resetText)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.3))
                         .monospacedDigit()
                 }
@@ -274,14 +274,14 @@ private struct UsageWindowRow: View {
                     Capsule().fill(.white.opacity(0.13))
                     Capsule()
                         .fill(tint)
-                        .frame(width: max(5, proxy.size.width * remainingFraction))
+                        .frame(width: max(4, proxy.size.width * remainingFraction))
                 }
             }
-            .frame(height: 6)
+            .frame(height: 5)
 
             if let detail = window.detail {
                 Text(detail)
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(.system(size: 9.5, weight: .medium))
                     .foregroundStyle(.white.opacity(0.34))
             }
         }
