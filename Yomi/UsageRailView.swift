@@ -31,6 +31,7 @@ enum UsageRailLayout {
 
 struct UsageRailView: View {
     @ObservedObject var store: UsageStore
+    @ObservedObject private var appPreferences = AppPreferences.shared
     let openSettings: (ProviderID?) -> Void
     let toggleProviderDetail: (ProviderDescriptor, CGFloat) -> Void
     let contentHeightChanged: (CGFloat) -> Void
@@ -40,6 +41,7 @@ struct UsageRailView: View {
     @State private var providerAnchorY: [ProviderID: CGFloat] = [:]
     @State private var providerRowHeights: [ProviderID: CGFloat] = [:]
     @AppStorage("show-provider-names") private var showProviderNames = true
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(spacing: 0) {
@@ -104,7 +106,7 @@ struct UsageRailView: View {
         .background {
             GeometryReader { proxy in
                 UsageRailShape()
-                    .fill(.black)
+                    .fill(AppTheme.railBackground(for: colorScheme))
                     .frame(
                         height: max(
                             0,
@@ -132,7 +134,7 @@ struct UsageRailView: View {
             reportContentHeight(providerRows: providerRowHeights)
         }
         .onPreferenceChange(ProviderAnchorYKey.self) { providerAnchorY = $0 }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(appPreferences.appearance.colorScheme)
     }
 
     private func reportContentHeight(providerRows: [ProviderID: CGFloat]) {
@@ -158,6 +160,7 @@ private struct SettingsHoverControl: View {
     let action: () -> Void
 
     @State private var isControlHovering = false
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Button(action: action) {
@@ -165,7 +168,7 @@ private struct SettingsHoverControl: View {
                 Circle()
                     .trim(from: 0, to: isHovering ? 0 : 0.25)
                     .stroke(
-                        .black,
+                        AppTheme.railBackground(for: colorScheme),
                         style: StrokeStyle(
                             lineWidth: UsageRailLayout.scaled(5),
                             lineCap: .round
@@ -175,7 +178,7 @@ private struct SettingsHoverControl: View {
                     .opacity(isHovering ? 0 : 1)
 
                 Circle()
-                    .fill(.black)
+                    .fill(AppTheme.railBackground(for: colorScheme))
                     .frame(
                         width: UsageRailLayout.settingsDiameter,
                         height: UsageRailLayout.settingsDiameter
@@ -185,7 +188,7 @@ private struct SettingsHoverControl: View {
 
                 Image(systemName: "gearshape")
                     .font(.system(size: UsageRailLayout.scaled(26), weight: .medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(AppTheme.primaryText(for: colorScheme))
                     .scaleEffect(isHovering ? 1 : 0.55)
                     .rotationEffect(.degrees(isHovering ? 0 : -35))
                     .opacity(isHovering ? 1 : 0)
@@ -455,6 +458,7 @@ private struct ProviderRailItem: View {
 
     @State private var animatedFraction = 0.0
     @State private var hovered = false
+    @Environment(\.colorScheme) private var colorScheme
 
     private var tint: Color {
         ProviderBrandColors.color(for: descriptor.id)
@@ -470,7 +474,7 @@ private struct ProviderRailItem: View {
             ZStack {
                 Circle()
                     .stroke(
-                        .white.opacity(0.16),
+                        AppTheme.primaryText(for: colorScheme).opacity(0.16),
                         style: StrokeStyle(
                             lineWidth: UsageRailLayout.scaled(6),
                             lineCap: .round
@@ -487,7 +491,10 @@ private struct ProviderRailItem: View {
                     )
                     .rotationEffect(.degrees(-90))
                 Circle()
-                    .stroke(.white.opacity(0.08), lineWidth: UsageRailLayout.scaled(1))
+                    .stroke(
+                        AppTheme.primaryText(for: colorScheme).opacity(0.08),
+                        lineWidth: UsageRailLayout.scaled(1)
+                    )
                     .padding(UsageRailLayout.scaled(7))
                 ProviderIconView(provider: descriptor)
                     .frame(
@@ -516,13 +523,13 @@ private struct ProviderRailItem: View {
                         )
                     )
                     .monospacedDigit()
-                    .foregroundStyle(.white)
+                    .foregroundStyle(AppTheme.primaryText(for: colorScheme))
             }
 
             if showName {
                 Text(descriptor.shortName)
                     .font(.system(size: UsageRailLayout.scaled(9), weight: .medium))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
                     .lineLimit(1)
             }
         }

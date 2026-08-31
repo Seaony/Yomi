@@ -3,6 +3,7 @@ import SwiftUI
 struct ProviderDetailCard: View {
     let descriptor: ProviderDescriptor
     let usage: ProviderUsage
+    @Environment(\.colorScheme) private var colorScheme
 
     private var tint: Color {
         ProviderBrandColors.color(for: descriptor.id)
@@ -38,8 +39,7 @@ struct ProviderDetailCard: View {
         }
         .padding(14)
         .frame(width: 300)
-        .foregroundStyle(.white)
-        .preferredColorScheme(.dark)
+        .foregroundStyle(AppTheme.primaryText(for: colorScheme))
     }
 
     private var header: some View {
@@ -56,10 +56,13 @@ struct ProviderDetailCard: View {
             if let plan = usage.plan {
                 Text(plan)
                     .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .background(
+                        AppTheme.primaryText(for: colorScheme).opacity(0.045),
+                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    )
             }
         }
     }
@@ -71,7 +74,7 @@ struct ProviderDetailCard: View {
                 .monospacedDigit()
             Text(headlineCaption)
                 .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.48))
+                .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.48))
                 .lineLimit(1)
         }
     }
@@ -87,7 +90,7 @@ struct ProviderDetailCard: View {
             if let message = usage.message {
                 Text(message)
                     .font(.system(size: 10.5))
-                    .foregroundStyle(.white.opacity(0.46))
+                    .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.46))
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -111,10 +114,13 @@ struct ProviderDetailCard: View {
             }
         }
         .font(.system(size: 10.5, weight: .semibold))
-        .foregroundStyle(.white.opacity(0.42))
+        .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.42))
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
-        .background(.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(
+            AppTheme.primaryText(for: colorScheme).opacity(0.055),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
     }
 
     private var statusSymbol: String {
@@ -129,7 +135,9 @@ struct ProviderDetailCard: View {
 
 struct ProviderDetailPanelView: View {
     @ObservedObject var store: UsageStore
+    @ObservedObject private var appPreferences = AppPreferences.shared
     let descriptor: ProviderDescriptor
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ProviderDetailCard(
@@ -139,9 +147,10 @@ struct ProviderDetailPanelView: View {
         .padding(.trailing, ProviderDetailPanelShape.arrowWidth)
         .background {
             ProviderDetailPanelShape()
-                .fill(Color(red: 0.075, green: 0.075, blue: 0.085))
+                .fill(AppTheme.detailBackground(for: colorScheme))
         }
         .padding(16)
+        .preferredColorScheme(appPreferences.appearance.colorScheme)
     }
 }
 
@@ -173,6 +182,7 @@ private struct ProviderDetailPanelShape: Shape {
 private struct UsageWindowRow: View {
     let window: UsageWindow
     let tint: Color
+    @Environment(\.colorScheme) private var colorScheme
 
     private var remainingFraction: Double {
         1 - window.clampedFraction
@@ -191,14 +201,14 @@ private struct UsageWindowRow: View {
                 if !resetText.isEmpty {
                     Text(resetText)
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.3))
+                        .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.3))
                         .monospacedDigit()
                 }
             }
 
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(.white.opacity(0.13))
+                    Capsule().fill(AppTheme.primaryText(for: colorScheme).opacity(0.13))
                     Capsule()
                         .fill(tint)
                         .frame(width: max(4, proxy.size.width * remainingFraction))
@@ -209,7 +219,7 @@ private struct UsageWindowRow: View {
             if let detail = window.detail {
                 Text(detail)
                     .font(.system(size: 9.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.34))
+                    .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.34))
             }
         }
     }

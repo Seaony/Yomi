@@ -10,6 +10,7 @@ struct SettingsView: View {
     }
 
     @ObservedObject var store: UsageStore
+    @ObservedObject private var appPreferences = AppPreferences.shared
     let initialProviderID: ProviderID?
 
     @State private var selection: Section = .general
@@ -49,11 +50,13 @@ struct SettingsView: View {
             }
         }
         .frame(minWidth: 920, minHeight: 600)
+        .preferredColorScheme(appPreferences.appearance.colorScheme)
     }
 }
 
 private struct GeneralSettingsView: View {
     @ObservedObject var store: UsageStore
+    @ObservedObject private var appPreferences = AppPreferences.shared
     @AppStorage("refresh-interval") private var refreshInterval = 300.0
     @AppStorage("show-provider-names") private var showProviderNames = true
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -61,6 +64,15 @@ private struct GeneralSettingsView: View {
 
     var body: some View {
         Form {
+            Section("外观") {
+                Picker("显示模式", selection: $appPreferences.appearance) {
+                    Text("跟随系统").tag(AppAppearance.system)
+                    Text("亮色").tag(AppAppearance.light)
+                    Text("暗色").tag(AppAppearance.dark)
+                }
+                .pickerStyle(.segmented)
+            }
+
             Section("启动") {
                 Toggle("登录后自动启动", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, enabled in updateLoginItem(enabled) }
