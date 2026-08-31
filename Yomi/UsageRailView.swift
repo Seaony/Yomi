@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum UsageRailLayout {
-    static let transitionHeight: CGFloat = 48
+    static let transitionHeight: CGFloat = 88
 }
 
 struct UsageRailView: View {
@@ -141,25 +141,25 @@ private struct UsageRailShape: Shape {
         path.move(to: CGPoint(x: width, y: 0))
         path.addLine(to: CGPoint(x: width, y: height))
         path.addCurve(
-            to: CGPoint(x: width * 0.5, y: height - transition * 0.55),
-            control1: CGPoint(x: width, y: height - transition * 0.35),
-            control2: CGPoint(x: width * 0.82, y: height - transition * 0.55)
+            to: CGPoint(x: width * 0.52, y: height - transition * 0.52),
+            control1: CGPoint(x: width, y: height - transition * 0.32),
+            control2: CGPoint(x: width * 0.86, y: height - transition * 0.5)
         )
         path.addCurve(
             to: CGPoint(x: 0, y: height - transition),
-            control1: CGPoint(x: width * 0.18, y: height - transition * 0.55),
-            control2: CGPoint(x: 0, y: height - transition * 0.7)
+            control1: CGPoint(x: width * 0.18, y: height - transition * 0.54),
+            control2: CGPoint(x: 0, y: height - transition * 0.68)
         )
         path.addLine(to: CGPoint(x: 0, y: transition))
         path.addCurve(
-            to: CGPoint(x: width * 0.5, y: transition * 0.55),
-            control1: CGPoint(x: 0, y: transition * 0.7),
-            control2: CGPoint(x: width * 0.18, y: transition * 0.55)
+            to: CGPoint(x: width * 0.52, y: transition * 0.52),
+            control1: CGPoint(x: 0, y: transition * 0.68),
+            control2: CGPoint(x: width * 0.18, y: transition * 0.54)
         )
         path.addCurve(
             to: CGPoint(x: width, y: 0),
-            control1: CGPoint(x: width * 0.82, y: transition * 0.55),
-            control2: CGPoint(x: width, y: transition * 0.35)
+            control1: CGPoint(x: width * 0.86, y: transition * 0.5),
+            control2: CGPoint(x: width, y: transition * 0.32)
         )
         path.closeSubpath()
         return path
