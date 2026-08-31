@@ -53,8 +53,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             )
             window.contentViewController = controller
             window.title = settingsWindowTitle
+            window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.titlebarSeparatorStyle = .none
+            window.isMovableByWindowBackground = true
             window.minSize = NSSize(width: 920, height: 600)
             window.isReleasedWhenClosed = false
             window.delegate = self
