@@ -4,13 +4,20 @@ enum UsageRailLayout {
     static let scale: CGFloat = 0.5
     static let panelWidth: CGFloat = scaled(104)
     static let minimumPanelHeight: CGFloat = scaled(140)
+    static let screenVerticalMargin: CGFloat = 12
+    static let screenEdgeOverlap: CGFloat = 2
     static let leftEdgeInset: CGFloat = scaled(8)
-    static let transitionHeight: CGFloat = panelWidth - leftEdgeInset
-    static let contentInset: CGFloat = scaled(88)
-    static let settingsDiameter: CGFloat = scaled(56)
-    static let settingsAreaHeight: CGFloat = scaled(68)
-    static let settingsBottomPadding: CGFloat = scaled(6)
     static let rightEdgeExtension: CGFloat = scaled(24)
+    static let transitionHeight: CGFloat = panelWidth - leftEdgeInset
+    static let edgeTransition: CGFloat = transitionHeight + rightEdgeExtension
+    static let contentInset: CGFloat = scaled(64) + rightEdgeExtension
+    static let providerSpacing: CGFloat = scaled(12)
+    static let providerSectionVerticalPadding: CGFloat = scaled(6)
+    static let providerSectionHorizontalPadding: CGFloat = scaled(9)
+    static let providerRingDiameter: CGFloat = scaled(56)
+    static let settingsDiameter: CGFloat = providerRingDiameter
+    static let settingsBottomPadding: CGFloat = scaled(6)
+    static let settingsAreaHeight: CGFloat = settingsDiameter + settingsBottomPadding * 2
     static let bottomExteriorSpace: CGFloat = scaled(4)
     static let bottomContentInset: CGFloat = contentInset
         - settingsAreaHeight
@@ -39,14 +46,14 @@ struct UsageRailView: View {
                 .frame(height: UsageRailLayout.contentInset)
 
             ScrollView(.vertical) {
-                VStack(spacing: UsageRailLayout.scaled(12)) {
+                VStack(spacing: UsageRailLayout.providerSpacing) {
                     ForEach(Array(store.enabledProviders.enumerated()), id: \.element.id) { index, descriptor in
                         Button {
                             let rowHeight = UsageRailLayout.scaled(showProviderNames ? 101 : 84)
                             let fallbackY = UsageRailLayout.contentInset
-                                + UsageRailLayout.scaled(6)
-                                + UsageRailLayout.scaled(28)
-                                + CGFloat(index) * (rowHeight + UsageRailLayout.scaled(12))
+                                + UsageRailLayout.providerSectionVerticalPadding
+                                + UsageRailLayout.providerRingDiameter / 2
+                                + CGFloat(index) * (rowHeight + UsageRailLayout.providerSpacing)
                             let anchorY = providerAnchorY[descriptor.id] ?? fallbackY
                             toggleProviderDetail(descriptor, anchorY)
                         } label: {
@@ -64,7 +71,7 @@ struct UsageRailView: View {
                                     key: ProviderAnchorYKey.self,
                                     value: [
                                         descriptor.id: proxy.frame(in: .named("usageRail")).minY
-                                            + UsageRailLayout.scaled(28)
+                                            + UsageRailLayout.providerRingDiameter / 2
                                     ]
                                 )
                                 .preference(
@@ -75,8 +82,8 @@ struct UsageRailView: View {
                         }
                     }
                 }
-                .padding(.vertical, UsageRailLayout.scaled(6))
-                .padding(.horizontal, UsageRailLayout.scaled(9))
+                .padding(.vertical, UsageRailLayout.providerSectionVerticalPadding)
+                .padding(.horizontal, UsageRailLayout.providerSectionHorizontalPadding)
             }
             .scrollIndicators(.never)
 
@@ -133,8 +140,8 @@ struct UsageRailView: View {
         let rowsHeight = providers.reduce(CGFloat.zero) { result, provider in
             result + (providerRows[provider.id] ?? 0)
         }
-        let spacing = CGFloat(max(providers.count - 1, 0)) * UsageRailLayout.scaled(12)
-        let sectionPadding = UsageRailLayout.scaled(12)
+        let spacing = CGFloat(max(providers.count - 1, 0)) * UsageRailLayout.providerSpacing
+        let sectionPadding = UsageRailLayout.providerSectionVerticalPadding * 2
         let height = rowsHeight
             + spacing
             + sectionPadding
@@ -219,107 +226,105 @@ private struct UsageRailShape: Shape {
     func path(in rect: CGRect) -> Path {
         let width = rect.width
         let height = rect.height
-        let edgeTransition = UsageRailLayout.transitionHeight
-            + UsageRailLayout.rightEdgeExtension
-        let topTransition = min(edgeTransition, height / 2)
-        let bottomTransition = min(
-            edgeTransition,
-            height - topTransition
-        )
+        let transition = min(UsageRailLayout.edgeTransition, height / 2)
+        let curve = UsageRailEdgeCurve(width: width, transition: transition)
 
         var path = Path()
         path.move(to: CGPoint(x: width, y: 0))
         path.addLine(to: CGPoint(x: width, y: height))
-        addUsageRailBottomCurve(to: &path, in: rect, transition: bottomTransition)
-        path.addLine(
-            to: CGPoint(
-                x: UsageRailLayout.leftEdgeInset,
-                y: topTransition
-            )
-        )
-        addUsageRailTopCurve(to: &path, in: rect, transition: topTransition)
+        addUsageRailEdgeCurve(to: &path, curve: curve, edge: .bottom, height: height)
+        path.addLine(to: curve.point(curve.leftEndpoint, at: .top, height: height))
+        addUsageRailEdgeCurve(to: &path, curve: curve, edge: .top, height: height)
         path.closeSubpath()
         return path
     }
 }
 
-private func addUsageRailTopCurve(
+private func addUsageRailEdgeCurve(
     to path: inout Path,
-    in rect: CGRect,
-    transition: CGFloat
+    curve: UsageRailEdgeCurve,
+    edge: UsageRailVerticalEdge,
+    height: CGFloat
 ) {
-    let width = rect.width
-    let rightHorizontalRadius = width / 2
-    let leftRadius = UsageRailLayout.transitionHeight - rightHorizontalRadius
-    let rightVerticalRadius = transition - leftRadius
-    let leftEdge = UsageRailLayout.leftEdgeInset
-    let control = 0.552_284_75
-    let midpoint = CGPoint(
-        x: width - rightHorizontalRadius,
-        y: rightVerticalRadius
-    )
-    path.addCurve(
-        to: midpoint,
-        control1: CGPoint(
-            x: leftEdge,
+    switch edge {
+    case .top:
+        path.addCurve(
+            to: curve.point(curve.midpoint, at: edge, height: height),
+            control1: curve.point(curve.leftControl, at: edge, height: height),
+            control2: curve.point(curve.midpointLeftControl, at: edge, height: height)
+        )
+        path.addCurve(
+            to: curve.point(curve.rightEndpoint, at: edge, height: height),
+            control1: curve.point(curve.midpointRightControl, at: edge, height: height),
+            control2: curve.point(curve.rightControl, at: edge, height: height)
+        )
+    case .bottom:
+        path.addCurve(
+            to: curve.point(curve.midpoint, at: edge, height: height),
+            control1: curve.point(curve.rightControl, at: edge, height: height),
+            control2: curve.point(curve.midpointRightControl, at: edge, height: height)
+        )
+        path.addCurve(
+            to: curve.point(curve.leftEndpoint, at: edge, height: height),
+            control1: curve.point(curve.midpointLeftControl, at: edge, height: height),
+            control2: curve.point(curve.leftControl, at: edge, height: height)
+        )
+    }
+}
+
+private enum UsageRailVerticalEdge {
+    case top
+    case bottom
+}
+
+private struct UsageRailEdgeCurve {
+    let leftEndpoint: CGPoint
+    let leftControl: CGPoint
+    let midpointLeftControl: CGPoint
+    let midpoint: CGPoint
+    let midpointRightControl: CGPoint
+    let rightControl: CGPoint
+    let rightEndpoint: CGPoint
+
+    init(width: CGFloat, transition: CGFloat) {
+        let rightRadius = width / 2
+        let leftRadius = UsageRailLayout.transitionHeight - rightRadius
+        let rightVerticalRadius = transition - leftRadius
+        let control = 0.552_284_75
+
+        leftEndpoint = CGPoint(x: UsageRailLayout.leftEdgeInset, y: transition)
+        midpoint = CGPoint(x: width - rightRadius, y: rightVerticalRadius)
+        rightEndpoint = CGPoint(x: width, y: 0)
+        leftControl = CGPoint(
+            x: UsageRailLayout.leftEdgeInset,
             y: transition - leftRadius * control
-        ),
-        control2: CGPoint(
+        )
+        midpointLeftControl = CGPoint(
             x: midpoint.x - leftRadius * control,
             y: midpoint.y
         )
-    )
-    path.addCurve(
-        to: CGPoint(x: width, y: 0),
-        control1: CGPoint(
-            x: midpoint.x + rightHorizontalRadius * control,
+        midpointRightControl = CGPoint(
+            x: midpoint.x + rightRadius * control,
             y: midpoint.y
-        ),
-        control2: CGPoint(
+        )
+        rightControl = CGPoint(
             x: width,
             y: rightVerticalRadius * control
         )
-    )
-}
+    }
 
-private func addUsageRailBottomCurve(
-    to path: inout Path,
-    in rect: CGRect,
-    transition: CGFloat
-) {
-    let width = rect.width
-    let height = rect.height
-    let rightHorizontalRadius = width / 2
-    let leftRadius = UsageRailLayout.transitionHeight - rightHorizontalRadius
-    let rightVerticalRadius = transition - leftRadius
-    let leftEdge = UsageRailLayout.leftEdgeInset
-    let control = 0.552_284_75
-    let midpoint = CGPoint(
-        x: width - rightHorizontalRadius,
-        y: height - rightVerticalRadius
-    )
-    path.addCurve(
-        to: midpoint,
-        control1: CGPoint(
-            x: width,
-            y: height - rightVerticalRadius * control
-        ),
-        control2: CGPoint(
-            x: midpoint.x + rightHorizontalRadius * control,
-            y: midpoint.y
-        )
-    )
-    path.addCurve(
-        to: CGPoint(x: leftEdge, y: height - transition),
-        control1: CGPoint(
-            x: midpoint.x - leftRadius * control,
-            y: midpoint.y
-        ),
-        control2: CGPoint(
-            x: leftEdge,
-            y: height - transition + leftRadius * control
-        )
-    )
+    func point(
+        _ point: CGPoint,
+        at edge: UsageRailVerticalEdge,
+        height: CGFloat
+    ) -> CGPoint {
+        switch edge {
+        case .top:
+            point
+        case .bottom:
+            CGPoint(x: point.x, y: height - point.y)
+        }
+    }
 }
 
 private struct UsageRailHitShape: Shape {
@@ -479,8 +484,8 @@ private struct ProviderRailItem: View {
                     .symbolEffect(.pulse, isActive: usage.state == .loading)
             }
             .frame(
-                width: UsageRailLayout.scaled(56),
-                height: UsageRailLayout.scaled(56)
+                width: UsageRailLayout.providerRingDiameter,
+                height: UsageRailLayout.providerRingDiameter
             )
             .shadow(
                 color: tint.opacity(hovered ? 0.35 : 0),

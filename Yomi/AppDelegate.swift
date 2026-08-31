@@ -74,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let visibleHeight = (screenUnderPointer() ?? NSScreen.main)?.visibleFrame.height ?? 900
         let measurementHeight = max(
             UsageRailLayout.minimumPanelHeight,
-            visibleHeight - 24
+            visibleHeight - UsageRailLayout.screenVerticalMargin * 2
         )
         let panel = FloatingPanel(
             contentRect: NSRect(
@@ -161,7 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let anchorY = panel.frame.maxY - localY
         let proposedY = anchorY - fittingSize.height / 2
         let origin = NSPoint(
-            x: panel.frame.minX - fittingSize.width + 26,
+            x: panel.frame.minX - fittingSize.width + UsageRailLayout.panelWidth / 2,
             y: min(max(proposedY, minimumY), maximumY)
         )
         detailPanel.setFrameOrigin(origin)
@@ -202,7 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let visibleHeight = targetScreen()?.visibleFrame.height ?? 900
         let newHeight = min(
             max(contentHeight, UsageRailLayout.minimumPanelHeight),
-            visibleHeight - 24
+            visibleHeight - UsageRailLayout.screenVerticalMargin * 2
         )
         guard abs(panel.frame.height - newHeight) > 0.5 else { return }
         var frame = panel.frame
@@ -213,12 +213,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func constrainedPanelOrigin(_ origin: NSPoint, size: NSSize) -> NSPoint {
         guard let visible = targetScreen()?.visibleFrame else { return origin }
-        let minimumY = visible.minY + 12
-        let maximumY = max(minimumY, visible.maxY - size.height - 12)
+        let minimumY = visible.minY + UsageRailLayout.screenVerticalMargin
+        let maximumY = max(
+            minimumY,
+            visible.maxY - size.height - UsageRailLayout.screenVerticalMargin
+        )
         let constrainedY = min(max(origin.y, minimumY), maximumY)
         let travel = maximumY - minimumY
         verticalPosition = travel > 0 ? (constrainedY - minimumY) / travel : 0.5
-        return NSPoint(x: visible.maxX - size.width + 2, y: constrainedY)
+        return NSPoint(
+            x: visible.maxX - size.width + UsageRailLayout.screenEdgeOverlap,
+            y: constrainedY
+        )
     }
 
     private func positionPanel(animated: Bool) {
@@ -230,11 +236,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func pinnedFrame(_ frame: NSRect) -> NSRect {
         let screen = targetScreen()
         guard let visible = screen?.visibleFrame else { return frame }
-        let height = min(frame.height, visible.height - 24)
-        let minimumY = visible.minY + 12
-        let maximumY = max(minimumY, visible.maxY - height - 12)
+        let height = min(
+            frame.height,
+            visible.height - UsageRailLayout.screenVerticalMargin * 2
+        )
+        let minimumY = visible.minY + UsageRailLayout.screenVerticalMargin
+        let maximumY = max(
+            minimumY,
+            visible.maxY - height - UsageRailLayout.screenVerticalMargin
+        )
         return NSRect(
-            x: visible.maxX - frame.width + 2,
+            x: visible.maxX - frame.width + UsageRailLayout.screenEdgeOverlap,
             y: minimumY + (maximumY - minimumY) * verticalPosition,
             width: frame.width,
             height: height
