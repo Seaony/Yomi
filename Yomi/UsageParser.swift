@@ -1,6 +1,6 @@
 import Foundation
 
-enum UsageParser {
+nonisolated enum UsageParser {
     private static let usedKeys = [
         "used", "usage", "consumed", "spent", "current_usage", "used_amount",
         "credits_used", "tokens_used", "requests_used", "current_value", "current",
@@ -176,7 +176,7 @@ enum UsageParser {
                 return Date(timeIntervalSince1970: epoch > 10_000_000_000 ? epoch / 1000 : epoch)
             }
             if let text = values[key] as? String {
-                if let date = ISO8601DateFormatter().date(from: text) { return date }
+                if let date = try? Date.ISO8601FormatStyle().parse(text) { return date }
                 if let epoch = Double(text) {
                     return Date(timeIntervalSince1970: epoch > 10_000_000_000 ? epoch / 1000 : epoch)
                 }
@@ -224,10 +224,8 @@ enum UsageParser {
     }
 
     private static func formattedNumber(_ value: Double, metric: ProviderMetricKind) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.maximumFractionDigits = value < 10 ? 2 : 0
-        let rendered = formatter.string(from: NSNumber(value: value)) ?? String(value)
+        let digits = value < 10 ? 2 : 0
+        let rendered = value.formatted(.number.precision(.fractionLength(0...digits)))
         return metric == .spend || metric == .balance ? "$\(rendered)" : rendered
     }
 }

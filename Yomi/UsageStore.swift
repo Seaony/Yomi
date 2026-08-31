@@ -21,15 +21,15 @@ final class UsageStore: ObservableObject {
     }
 
     init(
-        preferences: ProviderPreferences = .shared,
+        preferences: ProviderPreferences? = nil,
         collector: UsageCollector = UsageCollector(),
         defaults: UserDefaults = .standard
     ) {
-        self.preferences = preferences
+        self.preferences = preferences ?? .shared
         self.collector = collector
         self.defaults = defaults
         restoreCache()
-        preferenceObserver = preferences.$configurations
+        preferenceObserver = self.preferences.$configurations
             .dropFirst()
             .sink { [weak self] _ in
                 Task { await self?.refresh() }
@@ -45,7 +45,9 @@ final class UsageStore: ObservableObject {
         refreshLoop = Task { [weak self] in
             await self?.refresh()
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(300), tolerance: .seconds(20))
+                let storedInterval = self?.defaults.object(forKey: "refresh-interval") as? Double
+                let resolvedInterval = max(60, storedInterval ?? 300)
+                try? await Task.sleep(for: .seconds(resolvedInterval), tolerance: .seconds(20))
                 guard !Task.isCancelled else { break }
                 await self?.refresh()
             }
@@ -76,7 +78,11 @@ final class UsageStore: ObservableObject {
         }
 
         await withTaskGroup(of: ProviderUsage.self) { group in
-            for (descriptor, configuration, secret) in jobs {
+            let concurrencyLimit = 6
+            var nextJobIndex = 0
+
+            func submit(_ job: (ProviderDescriptor, ProviderConfiguration, String)) {
+                let (descriptor, configuration, secret) = job
                 group.addTask { [collector] in
                     do {
                         return try await collector.collect(
@@ -98,13 +104,23 @@ final class UsageStore: ObservableObject {
                 }
             }
 
-            for await usage in group {
+            while nextJobIndex < min(concurrencyLimit, jobs.count) {
+                submit(jobs[nextJobIndex])
+                nextJobIndex += 1
+            }
+
+            while let usage = await group.next() {
                 if usage.state == .failed, var cached = usageByID[usage.id], !cached.windows.isEmpty {
                     cached.state = .unavailable
                     cached.message = usage.message
                     usageByID[usage.id] = cached
                 } else {
                     usageByID[usage.id] = usage
+                }
+
+                if nextJobIndex < jobs.count {
+                    submit(jobs[nextJobIndex])
+                    nextJobIndex += 1
                 }
             }
         }

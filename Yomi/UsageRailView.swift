@@ -7,6 +7,7 @@ struct UsageRailView: View {
     @State private var selectedProvider: ProviderID?
     @State private var appeared = false
     @State private var isHovering = false
+    @AppStorage("show-provider-names") private var showProviderNames = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,7 +17,8 @@ struct UsageRailView: View {
                         ProviderRailItem(
                             descriptor: descriptor,
                             usage: store.usage(for: descriptor.id),
-                            animationDelay: Double(index) * 0.045
+                            animationDelay: Double(index) * 0.045,
+                            showName: showProviderNames
                         )
                         .onTapGesture {
                             selectedProvider = selectedProvider == descriptor.id ? nil : descriptor.id
@@ -110,6 +112,7 @@ private struct ProviderRailItem: View {
     let descriptor: ProviderDescriptor
     let usage: ProviderUsage
     let animationDelay: Double
+    let showName: Bool
 
     @State private var animatedFraction = 0.0
     @State private var hovered = false
@@ -148,10 +151,12 @@ private struct ProviderRailItem: View {
                 .monospacedDigit()
                 .foregroundStyle(.white)
 
-            Text(descriptor.shortName)
-                .font(.system(size: 9.5, weight: .medium))
-                .foregroundStyle(.white.opacity(0.55))
-                .lineLimit(1)
+            if showName {
+                Text(descriptor.shortName)
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .lineLimit(1)
+            }
         }
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())

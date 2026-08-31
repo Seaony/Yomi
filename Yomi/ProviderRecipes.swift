@@ -1,6 +1,6 @@
 import Foundation
 
-struct ProviderRecipe: Sendable {
+nonisolated struct ProviderRecipe: Sendable {
     enum Authorization: Sendable {
         case bearer
         case header(String)
@@ -25,7 +25,7 @@ struct ProviderRecipe: Sendable {
     }
 }
 
-enum ProviderRecipes {
+nonisolated enum ProviderRecipes {
     static func recipe(for id: ProviderID) -> ProviderRecipe? {
         recipes[id.rawValue]
     }

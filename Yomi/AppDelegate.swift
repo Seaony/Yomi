@@ -3,7 +3,7 @@ import Combine
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let store = UsageStore.shared
 
     private var panel: FloatingPanel?
@@ -49,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.titlebarSeparatorStyle = .none
             window.minSize = NSSize(width: 920, height: 600)
             window.isReleasedWhenClosed = false
+            window.delegate = self
             window.center()
             settingsWindow = window
         }
@@ -60,6 +61,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func closeSettingsIfNeeded() {
         guard settingsWindow?.isVisible != true else { return }
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    func windowWillClose(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
     }
 
