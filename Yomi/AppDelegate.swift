@@ -248,10 +248,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let visibleHeight = (screenUnderPointer() ?? NSScreen.main)?.visibleFrame.height ?? 900
         let storedShowNames = UserDefaults.standard.object(forKey: "show-provider-names") as? Bool
         let rowHeight = UsageRailLayout.scaled((storedShowNames ?? true) ? 101 : 84)
-        let transitionSpace = UsageRailLayout.transitionHeight * 2
-        let contentHeight = CGFloat(max(store.enabledProviders.count, 1)) * rowHeight
-            + UsageRailLayout.scaled(84)
-            + transitionSpace
+        let verticalSpace = UsageRailLayout.contentInset * 2
+        let providerCount = store.enabledProviders.count
+        let providerSpacing = CGFloat(max(providerCount - 1, 0)) * UsageRailLayout.scaled(12)
+        let sectionPadding = UsageRailLayout.scaled(12)
+        let contentHeight = CGFloat(providerCount) * rowHeight
+            + providerSpacing
+            + sectionPadding
+            + verticalSpace
         return min(max(contentHeight, UsageRailLayout.minimumPanelHeight), visibleHeight - 24)
     }
 }

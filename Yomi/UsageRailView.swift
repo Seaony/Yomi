@@ -5,6 +5,7 @@ enum UsageRailLayout {
     static let panelWidth: CGFloat = scaled(104)
     static let minimumPanelHeight: CGFloat = scaled(140)
     static let transitionHeight: CGFloat = scaled(88)
+    static let contentInset: CGFloat = scaled(64)
 
     static func scaled(_ value: CGFloat) -> CGFloat {
         value * scale
@@ -19,23 +20,21 @@ struct UsageRailView: View {
 
     @State private var appeared = false
     @State private var isHovering = false
-    @State private var providerSectionHeight: CGFloat = 0
-    @State private var footerHeight: CGFloat = 0
     @State private var providerAnchorY: [ProviderID: CGFloat] = [:]
     @AppStorage("show-provider-names") private var showProviderNames = true
 
     var body: some View {
         VStack(spacing: 0) {
             Color.clear
-                .frame(height: UsageRailLayout.transitionHeight)
+                .frame(height: UsageRailLayout.contentInset)
 
             ScrollView(.vertical) {
                 VStack(spacing: UsageRailLayout.scaled(12)) {
                     ForEach(Array(store.enabledProviders.enumerated()), id: \.element.id) { index, descriptor in
                         Button {
                             let rowHeight = UsageRailLayout.scaled(showProviderNames ? 101 : 84)
-                            let fallbackY = UsageRailLayout.transitionHeight
-                                + UsageRailLayout.scaled(20)
+                            let fallbackY = UsageRailLayout.contentInset
+                                + UsageRailLayout.scaled(6)
                                 + UsageRailLayout.scaled(28)
                                 + CGFloat(index) * (rowHeight + UsageRailLayout.scaled(12))
                             let anchorY = providerAnchorY[descriptor.id] ?? fallbackY
@@ -62,9 +61,8 @@ struct UsageRailView: View {
                         }
                     }
                 }
-                .padding(.top, UsageRailLayout.scaled(20))
+                .padding(.vertical, UsageRailLayout.scaled(6))
                 .padding(.horizontal, UsageRailLayout.scaled(9))
-                .padding(.bottom, UsageRailLayout.scaled(8))
                 .background {
                     GeometryReader { proxy in
                         Color.clear.preference(
@@ -77,18 +75,7 @@ struct UsageRailView: View {
             .scrollIndicators(.never)
 
             Color.clear
-                .frame(height: UsageRailLayout.scaled(55))
-                .background {
-                    GeometryReader { proxy in
-                        Color.clear.preference(
-                            key: FooterHeightKey.self,
-                            value: proxy.size.height
-                        )
-                    }
-                }
-
-            Color.clear
-                .frame(height: UsageRailLayout.transitionHeight)
+                .frame(height: UsageRailLayout.contentInset)
         }
         .overlay(alignment: .bottom) {
             SettingsHoverControl(isHovering: isHovering) {
@@ -131,21 +118,16 @@ struct UsageRailView: View {
             withAnimation(.easeOut(duration: 0.18)) { isHovering = hovering }
         }
         .onPreferenceChange(ProviderSectionHeightKey.self) { height in
-            providerSectionHeight = height
-            reportContentHeight(providerSection: height, footer: footerHeight)
-        }
-        .onPreferenceChange(FooterHeightKey.self) { height in
-            footerHeight = height
-            reportContentHeight(providerSection: providerSectionHeight, footer: height)
+            reportContentHeight(providerSection: height)
         }
         .onPreferenceChange(ProviderAnchorYKey.self) { providerAnchorY = $0 }
         .preferredColorScheme(.dark)
     }
 
-    private func reportContentHeight(providerSection: CGFloat, footer: CGFloat) {
-        guard providerSection > 0, footer > 0 else { return }
+    private func reportContentHeight(providerSection: CGFloat) {
+        guard providerSection > 0 else { return }
         contentHeightChanged(
-            providerSection + footer + UsageRailLayout.transitionHeight * 2
+            providerSection + UsageRailLayout.contentInset * 2
         )
     }
 }
@@ -275,14 +257,6 @@ private struct ProviderSectionHeightKey: PreferenceKey {
     }
 }
 
-private struct FooterHeightKey: PreferenceKey {
-    nonisolated static let defaultValue: CGFloat = 0
-
-    nonisolated static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
 private struct ProviderRailItem: View {
     let descriptor: ProviderDescriptor
     let usage: ProviderUsage
@@ -342,16 +316,18 @@ private struct ProviderRailItem: View {
                 radius: UsageRailLayout.scaled(12)
             )
 
-            Text(percentage)
-                .font(
-                    .system(
-                        size: UsageRailLayout.scaled(19),
-                        weight: .regular,
-                        design: .rounded
+            if !usage.windows.isEmpty {
+                Text(percentage)
+                    .font(
+                        .system(
+                            size: UsageRailLayout.scaled(19),
+                            weight: .regular,
+                            design: .rounded
+                        )
                     )
-                )
-                .monospacedDigit()
-                .foregroundStyle(.white)
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+            }
 
             if showName {
                 Text(descriptor.shortName)
