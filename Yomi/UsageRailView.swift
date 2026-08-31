@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 enum UsageRailLayout {
@@ -156,6 +157,8 @@ private struct SettingsHoverControl: View {
     let isHovering: Bool
     let action: () -> Void
 
+    @State private var isControlHovering = false
+
     var body: some View {
         Button(action: action) {
             ZStack {
@@ -196,6 +199,17 @@ private struct SettingsHoverControl: View {
         .help("设置")
         .allowsHitTesting(isHovering)
         .accessibilityHidden(!isHovering)
+        .scaleEffect(isControlHovering ? 1.08 : 1)
+        .onHover { hovering in
+            if hovering { NSCursor.pointingHand.set() }
+            else { NSCursor.arrow.set() }
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.72)) {
+                isControlHovering = hovering
+            }
+        }
+        .onDisappear {
+            if isControlHovering { NSCursor.arrow.set() }
+        }
         .animation(.spring(response: 0.34, dampingFraction: 0.78), value: isHovering)
     }
 }
@@ -516,7 +530,12 @@ private struct ProviderRailItem: View {
         .contentShape(Rectangle())
         .scaleEffect(hovered ? 1.045 : 1)
         .onHover { value in
+            if value { NSCursor.pointingHand.set() }
+            else { NSCursor.arrow.set() }
             withAnimation(.spring(response: 0.25, dampingFraction: 0.78)) { hovered = value }
+        }
+        .onDisappear {
+            if hovered { NSCursor.arrow.set() }
         }
         .onAppear { animate(to: usage.headlineFraction) }
         .onChange(of: usage.headlineFraction) { _, value in animate(to: value) }
