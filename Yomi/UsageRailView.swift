@@ -12,7 +12,7 @@ enum UsageRailLayout {
     static let transitionHeight: CGFloat = panelWidth - leftEdgeInset
     static let edgeTransition: CGFloat = transitionHeight + rightEdgeExtension
     static let contentInset: CGFloat = scaled(64) + rightEdgeExtension
-    static let providerSpacing: CGFloat = scaled(12)
+    static let providerSpacing: CGFloat = scaled(16)
     static let providerSectionVerticalPadding: CGFloat = scaled(6)
     static let providerSectionHorizontalPadding: CGFloat = scaled(9)
     static let providerRingDiameter: CGFloat = scaled(56)

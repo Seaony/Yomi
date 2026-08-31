@@ -28,10 +28,8 @@ struct ProviderDetailCard: View {
     }
 
     private var weeklyEstimateValue: String {
-        guard let estimate = usage.weeklyEstimate else { return "—" }
-        let tokens = compactTokenCount(estimate.tokens, language: language)
-        let value = estimate.valueUSD.map(compactDollarValue) ?? "$—"
-        return "≈\(tokens) · \(value)"
+        guard let value = usage.weeklyEstimate?.valueUSD else { return "—" }
+        return "≈ " + compactDollarValue(value)
     }
 
     var body: some View {
@@ -116,7 +114,7 @@ struct ProviderDetailCard: View {
 
     private var footer: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text(copy.text("30 天总 Token", "30-day tokens"))
                     .font(.system(size: 9, weight: .medium))
                 Text(last30DaysValue)
@@ -125,7 +123,7 @@ struct ProviderDetailCard: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            VStack(alignment: .trailing, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text(copy.text("周预估额度", "Est. weekly quota"))
                     .font(.system(size: 9, weight: .medium))
                 Text(weeklyEstimateValue)
