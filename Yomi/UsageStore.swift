@@ -11,7 +11,7 @@ final class UsageStore: ObservableObject {
     let preferences: ProviderPreferences
     private let collector: UsageCollector
     private let defaults: UserDefaults
-    private let cacheKey = "usage-cache.v1"
+    private let cacheKey = "usage-cache.v2"
     private var refreshLoop: Task<Void, Never>?
     private var preferenceObserver: AnyCancellable?
 
@@ -74,6 +74,8 @@ final class UsageStore: ObservableObject {
                 balance: usageByID[job.0.id]?.balance,
                 plan: usageByID[job.0.id]?.plan,
                 today: usageByID[job.0.id]?.today,
+                last30Days: usageByID[job.0.id]?.last30Days,
+                weeklyEstimate: usageByID[job.0.id]?.weeklyEstimate,
                 updatedAt: usageByID[job.0.id]?.updatedAt,
                 message: nil
             )

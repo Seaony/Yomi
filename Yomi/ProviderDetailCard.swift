@@ -22,6 +22,18 @@ struct ProviderDetailCard: View {
         return copy.text("今日 Token", "Tokens today") + " · \(value)"
     }
 
+    private var last30DaysValue: String {
+        guard let tokens = usage.last30Days?.tokens else { return "—" }
+        return compactTokenCount(tokens, language: language)
+    }
+
+    private var weeklyEstimateValue: String {
+        guard let estimate = usage.weeklyEstimate else { return "—" }
+        let tokens = compactTokenCount(estimate.tokens, language: language)
+        let value = estimate.valueUSD.map(compactDollarValue) ?? "$—"
+        return "≈\(tokens) · \(value)"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
@@ -47,9 +59,9 @@ struct ProviderDetailCard: View {
 
     private var header: some View {
         HStack(spacing: 7) {
-            Circle()
-                .fill(tint)
-                .frame(width: 7, height: 7)
+            ProviderIconView(provider: descriptor)
+                .frame(width: 16, height: 16)
+                .foregroundStyle(tint)
 
             Text(descriptor.name)
                 .font(.system(size: 15, weight: .bold, design: .rounded))
@@ -103,38 +115,27 @@ struct ProviderDetailCard: View {
     }
 
     private var footer: some View {
-        HStack {
-            if let reset = usage.windows.compactMap(\.resetsAt).min() {
-                Text(copy.text(
-                    "\(compactDuration(until: reset, language: language)) 后重置",
-                    "Resets in \(compactDuration(until: reset, language: language))"
-                ))
-            } else if let updatedAt = usage.updatedAt {
-                Text(copy.text("更新于", "Updated")
-                    + " \(updatedAt.formatted(date: .omitted, time: .shortened))")
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(copy.text("30 天总 Token", "30-day tokens"))
+                    .font(.system(size: 9, weight: .medium))
+                Text(last30DaysValue)
+                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer()
-
-            if let balance = usage.balance {
-                Text(copy.text("余额", "Balance") + " \(balance)")
-            } else {
-                Text(copy.text(
-                    "\(usage.windows.count) 个额度窗口",
-                    usage.windows.count == 1
-                        ? "1 quota window"
-                        : "\(usage.windows.count) quota windows"
-                ))
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(copy.text("周预估额度", "Est. weekly quota"))
+                    .font(.system(size: 9, weight: .medium))
+                Text(weeklyEstimateValue)
+                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .font(.system(size: 10.5, weight: .semibold))
         .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.42))
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
-        .background(
-            AppTheme.primaryText(for: colorScheme).opacity(0.055),
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-        )
+        .padding(.top, 2)
     }
 
     private var statusSymbol: String {
@@ -212,7 +213,8 @@ private struct UsageWindowRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(copy.usageLabel(window.label))
                     .font(.system(size: 11.5, weight: .bold))
-                Spacer()
+                    .lineLimit(1)
+                Spacer(minLength: 8)
                 Text(copy.text(
                     "剩余 \(Int((remainingFraction * 100).rounded()))%",
                     "\(Int((remainingFraction * 100).rounded()))% left"
@@ -220,11 +222,13 @@ private struct UsageWindowRow: View {
                     .font(.system(size: 11.5, weight: .bold, design: .rounded))
                     .foregroundStyle(tint)
                     .monospacedDigit()
+                    .fixedSize(horizontal: true, vertical: false)
                 if !resetText.isEmpty {
                     Text(resetText)
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.3))
                         .monospacedDigit()
+                        .fixedSize(horizontal: true, vertical: false)
                 }
             }
 
@@ -237,12 +241,6 @@ private struct UsageWindowRow: View {
                 }
             }
             .frame(height: 5)
-
-            if let detail = window.detail {
-                Text(detail)
-                    .font(.system(size: 9.5, weight: .medium))
-                    .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.34))
-            }
         }
     }
 
@@ -288,4 +286,13 @@ private func compactTokenCount(_ value: Int64, language: AppLanguage) -> String 
         }
     }
     return value.formatted(.number.grouping(.automatic))
+}
+
+private func compactDollarValue(_ value: Double) -> String {
+    if value >= 1_000 {
+        return "$" + value.formatted(
+            .number.grouping(.automatic).precision(.fractionLength(0))
+        )
+    }
+    return String(format: "$%.2f", value)
 }

@@ -21,26 +21,192 @@ nonisolated enum UsageParser {
     ]
 
     static func parse(_ data: Data, descriptor: ProviderDescriptor) throws -> ProviderUsage {
-        if let object = try? JSONSerialization.jsonObject(with: data),
-           let parsed = parseJSON(object, descriptor: descriptor) {
-            return parsed
-        }
-
-        if let text = String(data: data, encoding: .utf8) {
-            let objects = text.split(separator: "\n").suffix(600).compactMap { line -> Any? in
-                guard let lineData = String(line).data(using: .utf8) else { return nil }
-                return try? JSONSerialization.jsonObject(with: lineData)
-            }
-            if !objects.isEmpty, let parsed = parseJSON(objects, descriptor: descriptor) {
-                return parsed
-            }
-        }
-
-        guard let text = String(data: data, encoding: .utf8),
-              let parsed = parseText(text, descriptor: descriptor) else {
+        guard let object = try? JSONSerialization.jsonObject(with: data) else {
             throw UsageCollectionError.unreadableResponse
         }
+        let parsed = switch descriptor.id.rawValue {
+        case "codex": parseCodex(object, descriptor: descriptor)
+        case "claude": parseClaude(object, descriptor: descriptor)
+        case "gemini": parseGemini(object, descriptor: descriptor)
+        default: parseJSON(object, descriptor: descriptor)
+        }
+        guard let parsed else { throw UsageCollectionError.unreadableResponse }
         return parsed
+    }
+
+    private static func parseCodex(_ root: Any, descriptor: ProviderDescriptor) -> ProviderUsage? {
+        guard let response = root as? [String: Any] else { return nil }
+        let rateLimit = response["rate_limit"] as? [String: Any]
+        var windows: [UsageWindow] = []
+        appendCodexWindow(
+            rateLimit?["primary_window"],
+            id: "codex-primary",
+            fallbackLabel: descriptor.primaryLabel,
+            to: &windows
+        )
+        appendCodexWindow(
+            rateLimit?["secondary_window"],
+            id: "codex-secondary",
+            fallbackLabel: descriptor.secondaryLabel,
+            to: &windows
+        )
+        if let additional = response["additional_rate_limits"] as? [[String: Any]] {
+            for (index, item) in additional.enumerated() {
+                guard let additionalRateLimit = item["rate_limit"] as? [String: Any] else { continue }
+                let name = (item["limit_name"] as? String)
+                    ?? (item["metered_feature"] as? String)
+                    ?? "Additional limit"
+                appendCodexWindow(
+                    additionalRateLimit["primary_window"],
+                    id: "codex-additional-\(index)-primary",
+                    fallbackLabel: name,
+                    to: &windows
+                )
+                appendCodexWindow(
+                    additionalRateLimit["secondary_window"],
+                    id: "codex-additional-\(index)-secondary",
+                    fallbackLabel: "\(name) · Weekly",
+                    to: &windows
+                )
+            }
+        }
+        guard !windows.isEmpty else { return nil }
+        let plan = (response["plan_type"] as? String)
+            .flatMap { displayPlan($0, descriptor: descriptor) }
+        return ProviderUsage(
+            id: descriptor.id,
+            state: .ready,
+            windows: Array(windows.prefix(3)),
+            balance: nil,
+            plan: plan,
+            updatedAt: Date(),
+            message: nil
+        )
+    }
+
+    private static func appendCodexWindow(
+        _ value: Any?,
+        id: String,
+        fallbackLabel: String,
+        to windows: inout [UsageWindow]
+    ) {
+        guard let object = value as? [String: Any],
+              let usedPercent = numericValue(object["used_percent"])
+        else { return }
+        let seconds = numericValue(object["limit_window_seconds"]).map(Int.init)
+        let label: String
+        switch seconds {
+        case 18_000: label = "Session"
+        case 604_800: label = "Weekly"
+        default: label = fallbackLabel
+        }
+        windows.append(UsageWindow(
+            id: id,
+            label: label,
+            usedFraction: usedPercent / 100,
+            resetsAt: date(object["reset_at"]),
+            detail: nil
+        ))
+    }
+
+    private static func parseClaude(_ root: Any, descriptor: ProviderDescriptor) -> ProviderUsage? {
+        guard let response = root as? [String: Any] else { return nil }
+        let candidates: [(String, String)] = [
+            ("five_hour", "Session"),
+            ("seven_day", "Weekly"),
+            ("seven_day_sonnet", "Sonnet"),
+            ("seven_day_opus", "Opus"),
+            ("seven_day_oauth_apps", "OAuth apps"),
+        ]
+        var windows = candidates.compactMap { key, label -> UsageWindow? in
+            guard let object = response[key] as? [String: Any],
+                  let utilization = numericValue(object["utilization"])
+            else { return nil }
+            return UsageWindow(
+                id: "claude-\(key)",
+                label: label,
+                usedFraction: utilization / 100,
+                resetsAt: date(object["resets_at"]),
+                detail: nil
+            )
+        }
+        if let limits = response["limits"] as? [[String: Any]] {
+            for (index, limit) in limits.enumerated() {
+                guard (limit["is_active"] as? Bool) != false,
+                      let percent = numericValue(limit["percent"])
+                else { continue }
+                let scope = limit["scope"] as? [String: Any]
+                let model = scope?["model"] as? [String: Any]
+                let label = (model?["display_name"] as? String)
+                    ?? (limit["kind"] as? String)
+                    ?? "Weekly"
+                windows.append(UsageWindow(
+                    id: "claude-limit-\(index)",
+                    label: label,
+                    usedFraction: percent / 100,
+                    resetsAt: date(limit["resets_at"]),
+                    detail: nil
+                ))
+            }
+        }
+        guard !windows.isEmpty else { return nil }
+        return ProviderUsage(
+            id: descriptor.id,
+            state: .ready,
+            windows: Array(windows.prefix(3)),
+            balance: nil,
+            plan: nil,
+            updatedAt: Date(),
+            message: nil
+        )
+    }
+
+    private static func parseGemini(_ root: Any, descriptor: ProviderDescriptor) -> ProviderUsage? {
+        guard let response = root as? [String: Any],
+              let buckets = response["buckets"] as? [[String: Any]]
+        else { return nil }
+        var lowestByTier: [String: (remaining: Double, reset: Date?)] = [:]
+        for bucket in buckets {
+            guard let model = bucket["modelId"] as? String,
+                  let remaining = numericValue(bucket["remainingFraction"])
+            else { continue }
+            let normalized = model.lowercased()
+            let tier: String?
+            if normalized.contains("flash-lite") {
+                tier = "Flash Lite"
+            } else if normalized.contains("flash") {
+                tier = "Flash"
+            } else if normalized.contains("pro") {
+                tier = "Pro"
+            } else {
+                tier = nil
+            }
+            guard let tier else { continue }
+            let candidate = (remaining: remaining, reset: date(bucket["resetTime"]))
+            if let current = lowestByTier[tier], current.remaining <= remaining { continue }
+            lowestByTier[tier] = candidate
+        }
+        let order = ["Pro", "Flash", "Flash Lite"]
+        let windows = order.compactMap { tier -> UsageWindow? in
+            guard let quota = lowestByTier[tier] else { return nil }
+            return UsageWindow(
+                id: "gemini-\(tier.lowercased().replacingOccurrences(of: " ", with: "-"))",
+                label: tier,
+                usedFraction: 1 - quota.remaining,
+                resetsAt: quota.reset,
+                detail: nil
+            )
+        }
+        guard !windows.isEmpty else { return nil }
+        return ProviderUsage(
+            id: descriptor.id,
+            state: .ready,
+            windows: windows,
+            balance: nil,
+            plan: nil,
+            updatedAt: Date(),
+            message: nil
+        )
     }
 
     private static func parseJSON(_ root: Any, descriptor: ProviderDescriptor) -> ProviderUsage? {
@@ -90,41 +256,6 @@ nonisolated enum UsageParser {
             windows: windows,
             balance: balance,
             plan: rawPlan.flatMap { displayPlan($0, descriptor: descriptor) },
-            updatedAt: Date(),
-            message: nil
-        )
-    }
-
-    private static func parseText(_ text: String, descriptor: ProviderDescriptor) -> ProviderUsage? {
-        let pattern = #"(?i)([A-Za-z][A-Za-z0-9 _-]{0,28})?\s*[:=]?\s*(\d+(?:\.\d+)?)\s*%"#
-        guard let expression = try? NSRegularExpression(pattern: pattern) else { return nil }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        let matches = expression.matches(in: text, range: range).prefix(3)
-        let windows = matches.enumerated().compactMap { index, match -> UsageWindow? in
-            guard let valueRange = Range(match.range(at: 2), in: text),
-                  let value = Double(text[valueRange]) else { return nil }
-            let label: String
-            if match.range(at: 1).location != NSNotFound,
-               let labelRange = Range(match.range(at: 1), in: text) {
-                label = String(text[labelRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-            } else {
-                label = index == 0 ? descriptor.primaryLabel : descriptor.secondaryLabel
-            }
-            return UsageWindow(
-                id: "text-\(index)",
-                label: label,
-                usedFraction: value / 100,
-                resetsAt: nil,
-                detail: nil
-            )
-        }
-        guard !windows.isEmpty else { return nil }
-        return ProviderUsage(
-            id: descriptor.id,
-            state: .ready,
-            windows: windows,
-            balance: nil,
-            plan: nil,
             updatedAt: Date(),
             message: nil
         )
@@ -189,6 +320,17 @@ nonisolated enum UsageParser {
             }
         }
         return nil
+    }
+
+    private static func date(_ value: Any?) -> Date? {
+        if let epoch = numericValue(value) {
+            return Date(timeIntervalSince1970: epoch > 10_000_000_000 ? epoch / 1000 : epoch)
+        }
+        guard let value = value as? String else { return nil }
+        if let parsed = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value) {
+            return parsed
+        }
+        return try? Date.ISO8601FormatStyle().parse(value)
     }
 
     private static func firstNumber(named keys: [String], in objects: [[String: Any]]) -> Double? {

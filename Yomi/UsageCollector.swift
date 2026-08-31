@@ -1,4 +1,6 @@
 import Foundation
+import LocalAuthentication
+import Security
 
 enum UsageCollectionError: LocalizedError {
     case missingCredential
@@ -6,7 +8,6 @@ enum UsageCollectionError: LocalizedError {
     case unreadableResponse
     case requestFailed(Int)
     case commandFailed(String)
-    case localDataNotFound
 
     var errorDescription: String? {
         switch self {
@@ -20,8 +21,6 @@ enum UsageCollectionError: LocalizedError {
             AppLocalization.text("请求失败（HTTP \(status)）", "Request failed (HTTP \(status))")
         case let .commandFailed(message):
             AppLocalization.text("命令执行失败：\(message)", "Command failed: \(message)")
-        case .localDataNotFound:
-            AppLocalization.text("未找到本机用量记录", "No local usage records found")
         }
     }
 }
@@ -72,12 +71,6 @@ actor UsageCollector {
             )
         }
 
-        if configuration.source == .account || configuration.source == .automatic {
-            if let result = try? localUsage(descriptor: descriptor) {
-                return result
-            }
-        }
-
         let environmentValue = environmentSecret(for: descriptor)
         let localValue = localCredential(for: descriptor.id)
         let resolvedSecret = [secret, environmentValue, localValue].first(where: { !$0.isEmpty }) ?? ""
@@ -116,8 +109,12 @@ actor UsageCollector {
             }
         }
 
-        if descriptor.id.rawValue == "claude" {
+        if descriptor.id.rawValue == "codex", let accountID = codexAccountID() {
+            request.setValue(accountID, forHTTPHeaderField: "ChatGPT-Account-Id")
+        } else if descriptor.id.rawValue == "claude" {
             request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("claude-code/2.1.0", forHTTPHeaderField: "User-Agent")
         }
         if let body = recipe.body {
             request.httpBody = Data(body.utf8)
@@ -130,37 +127,6 @@ actor UsageCollector {
             throw UsageCollectionError.requestFailed(http.statusCode)
         }
         return try UsageParser.parse(data, descriptor: descriptor)
-    }
-
-    private func localUsage(descriptor: ProviderDescriptor) throws -> ProviderUsage {
-        let manager = FileManager.default
-        for url in localCandidates(for: descriptor.id) where manager.fileExists(atPath: url.path) {
-            if let data = try? boundedData(from: url),
-               let usage = try? UsageParser.parse(data, descriptor: descriptor) {
-                return usage
-            }
-        }
-
-        for directory in localDirectories(for: descriptor.id) {
-            guard let enumerator = manager.enumerator(
-                at: directory,
-                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
-                options: [.skipsHiddenFiles, .skipsPackageDescendants]
-            ) else { continue }
-
-            let files = enumerator.compactMap { $0 as? URL }
-                .filter { ["json", "jsonl", "log"].contains($0.pathExtension.lowercased()) }
-                .prefix(120)
-                .sorted { modificationDate($0) > modificationDate($1) }
-
-            for file in files.prefix(12) {
-                if let data = try? boundedData(from: file),
-                   let usage = try? UsageParser.parse(data, descriptor: descriptor) {
-                    return usage
-                }
-            }
-        }
-        throw UsageCollectionError.localDataNotFound
     }
 
     private func commandUsage(descriptor: ProviderDescriptor, command: String) async throws -> ProviderUsage {
@@ -218,7 +184,40 @@ actor UsageCollector {
                   let value = findString(in: object, keys: Set(keys)) else { continue }
             return value
         }
+        if id.rawValue == "claude", let data = claudeKeychainCredentialData(),
+           let object = try? JSONSerialization.jsonObject(with: data),
+           let value = findString(
+               in: object,
+               keys: ["access_token", "accessToken", "oauth_token", "token"]
+           ) {
+            return value
+        }
         return ""
+    }
+
+    private func claudeKeychainCredentialData() -> Data? {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "Claude Code-credentials",
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnData as String: true,
+            kSecUseAuthenticationContext as String: context,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else {
+            return nil
+        }
+        return item as? Data
+    }
+
+    private func codexAccountID() -> String? {
+        let url = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".codex/auth.json")
+        guard let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data)
+        else { return nil }
+        return findString(in: object, keys: ["account_id", "accountId"])
     }
 
     private func addingLocalMetadata(
@@ -230,11 +229,55 @@ actor UsageCollector {
         if enriched.plan == nil {
             enriched.plan = localPlan(for: descriptor)
         }
-        enriched.today = LocalDailyUsageScanner.scan(
+        let weeklyWindow = weeklyWindow(in: enriched, descriptor: descriptor)
+        let now = Date()
+        let weeklyReset = weeklyWindow?.resetsAt.flatMap { $0 > now ? $0 : nil }
+        let weekStart = weeklyReset
+            .flatMap { Calendar.current.date(byAdding: .day, value: -7, to: $0) }
+            ?? now.addingTimeInterval(-7 * 24 * 60 * 60)
+        let localUsage = LocalDailyUsageScanner.scan(
             providerID: descriptor.id,
+            currentWeekStart: weekStart,
+            now: now,
             pricingCatalog: pricingCatalog
         )
+        enriched.today = localUsage?.today
+        enriched.last30Days = localUsage?.last30Days
+        enriched.weeklyEstimate = weeklyEstimate(
+            localUsage: localUsage?.currentWeek,
+            usedFraction: weeklyReset == nil ? nil : weeklyWindow?.clampedFraction
+        )
         return enriched
+    }
+
+    private func weeklyWindow(
+        in usage: ProviderUsage,
+        descriptor: ProviderDescriptor
+    ) -> UsageWindow? {
+        let secondary = descriptor.secondaryLabel.lowercased()
+        return usage.windows.first { $0.label.lowercased() == secondary }
+            ?? usage.windows.first {
+                let label = $0.label.lowercased()
+                return label.contains("week")
+                    || label.contains("7 day")
+                    || label.contains("7-day")
+                    || label.contains("seven_day")
+            }
+    }
+
+    private func weeklyEstimate(
+        localUsage: DailyTokenUsage?,
+        usedFraction: Double?
+    ) -> DailyTokenUsage? {
+        guard let localUsage,
+              let usedFraction,
+              usedFraction >= 0.01,
+              usedFraction <= 1
+        else { return nil }
+        return DailyTokenUsage(
+            tokens: Int64((Double(localUsage.tokens) / usedFraction).rounded()),
+            valueUSD: localUsage.valueUSD.map { $0 / usedFraction }
+        )
     }
 
     private func resolvedPricingCatalog() async -> ModelPricingCatalog? {
@@ -298,32 +341,4 @@ actor UsageCollector {
         }
     }
 
-    private func localDirectories(for id: ProviderID) -> [URL] {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let library = home.appending(path: "Library/Application Support")
-        switch id.rawValue {
-        case "codex": return [home.appending(path: ".codex/sessions")]
-        case "claude": return [home.appending(path: ".claude/projects")]
-        case "gemini": return [home.appending(path: ".gemini/tmp")]
-        case "cursor": return [library.appending(path: "Cursor/User/globalStorage")]
-        case "windsurf": return [library.appending(path: "Windsurf/User/globalStorage")]
-        case "zed": return [home.appending(path: ".config/zed")]
-        case "kiro": return [home.appending(path: ".kiro")]
-        case "opencode", "opencodego": return [home.appending(path: ".local/share/opencode")]
-        default: return [home.appending(path: ".config/\(id.rawValue)")]
-        }
-    }
-
-    private func boundedData(from url: URL) throws -> Data {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        let size = try handle.seekToEnd()
-        let limit: UInt64 = 2_000_000
-        if size > limit { try handle.seek(toOffset: size - limit) } else { try handle.seek(toOffset: 0) }
-        return try handle.readToEnd() ?? Data()
-    }
-
-    private func modificationDate(_ url: URL) -> Date {
-        (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-    }
 }

@@ -80,7 +80,7 @@ struct UsageWindow: Codable, Hashable, Sendable, Identifiable {
     var resetsAt: Date?
     var detail: String?
 
-    var clampedFraction: Double {
+    nonisolated var clampedFraction: Double {
         min(max(usedFraction, 0), 1)
     }
 }
@@ -88,6 +88,12 @@ struct UsageWindow: Codable, Hashable, Sendable, Identifiable {
 struct DailyTokenUsage: Codable, Hashable, Sendable {
     var tokens: Int64
     var valueUSD: Double?
+}
+
+struct LocalTokenUsageSummary: Sendable {
+    var today: DailyTokenUsage?
+    var last30Days: DailyTokenUsage?
+    var currentWeek: DailyTokenUsage?
 }
 
 struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
@@ -104,6 +110,8 @@ struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
     var balance: String?
     var plan: String?
     var today: DailyTokenUsage? = nil
+    var last30Days: DailyTokenUsage? = nil
+    var weeklyEstimate: DailyTokenUsage? = nil
     var updatedAt: Date?
     var message: String?
 

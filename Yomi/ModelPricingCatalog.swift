@@ -1,6 +1,6 @@
 import Foundation
 
-struct ModelTokenRates: Codable, Sendable {
+nonisolated struct ModelTokenRates: Codable, Sendable {
     var input: Double
     var cacheRead: Double?
     var cacheWrite: Double?
@@ -12,17 +12,17 @@ struct ModelTokenRates: Codable, Sendable {
     var outputAboveThreshold: Double?
 }
 
-struct ModelPricingCatalog: Codable, Sendable {
-    private struct Provider: Codable, Sendable {
+nonisolated struct ModelPricingCatalog: Codable, Sendable {
+    private nonisolated struct Provider: Codable, Sendable {
         var models: [String: Model]
     }
 
-    private struct Model: Codable, Sendable {
+    private nonisolated struct Model: Codable, Sendable {
         var id: String
         var cost: Cost?
     }
 
-    private struct Cost: Codable, Sendable {
+    private nonisolated struct Cost: Codable, Sendable {
         var input: Double?
         var output: Double?
         var cacheRead: Double?
@@ -38,7 +38,7 @@ struct ModelPricingCatalog: Codable, Sendable {
         }
     }
 
-    private struct ContextCost: Codable, Sendable {
+    private nonisolated struct ContextCost: Codable, Sendable {
         var input: Double?
         var output: Double?
         var cacheRead: Double?
@@ -52,7 +52,7 @@ struct ModelPricingCatalog: Codable, Sendable {
         }
     }
 
-    private struct CacheArtifact: Codable {
+    private nonisolated struct CacheArtifact: Codable {
         var version: Int
         var fetchedAt: Date
         var catalog: ModelPricingCatalog

@@ -1,6 +1,6 @@
 import Foundation
 
-enum LocalDailyUsageScanner {
+nonisolated enum LocalDailyUsageScanner {
     private struct Tokens: Equatable {
         var input = 0
         var cacheRead = 0
@@ -12,9 +12,69 @@ enum LocalDailyUsageScanner {
     }
 
     private struct ClaudeSample {
+        let timestamp: Date
         let model: String
         let tokens: Tokens
         let cacheWrite1h: Int
+    }
+
+    private struct PeriodAccumulator {
+        var tokens: Int64 = 0
+        var valueUSD = 0.0
+        var hasUnpricedTokens = false
+
+        mutating func add(tokens: Int, valueUSD: Double?) {
+            guard tokens > 0 else { return }
+            self.tokens += Int64(tokens)
+            if let valueUSD {
+                self.valueUSD += valueUSD
+            } else {
+                hasUnpricedTokens = true
+            }
+        }
+
+        var usage: DailyTokenUsage? {
+            guard tokens > 0 else { return nil }
+            return DailyTokenUsage(
+                tokens: tokens,
+                valueUSD: hasUnpricedTokens ? nil : valueUSD
+            )
+        }
+    }
+
+    private struct PeriodAccumulators {
+        let todayStart: Date
+        let last30DaysStart: Date
+        let currentWeekStart: Date
+        let end: Date
+        var today = PeriodAccumulator()
+        var last30Days = PeriodAccumulator()
+        var currentWeek = PeriodAccumulator()
+
+        mutating func add(timestamp: Date, tokens: Int, valueUSD: Double?) {
+            guard timestamp < end else { return }
+            if timestamp >= todayStart {
+                today.add(tokens: tokens, valueUSD: valueUSD)
+            }
+            if timestamp >= last30DaysStart {
+                last30Days.add(tokens: tokens, valueUSD: valueUSD)
+            }
+            if timestamp >= currentWeekStart {
+                currentWeek.add(tokens: tokens, valueUSD: valueUSD)
+            }
+        }
+
+        var summary: LocalTokenUsageSummary? {
+            let result = LocalTokenUsageSummary(
+                today: today.usage,
+                last30Days: last30Days.usage,
+                currentWeek: currentWeek.usage
+            )
+            guard result.today != nil || result.last30Days != nil || result.currentWeek != nil else {
+                return nil
+            }
+            return result
+        }
     }
 
     private struct CodexTotalsTracker {
@@ -142,35 +202,45 @@ enum LocalDailyUsageScanner {
 
     static func scan(
         providerID: ProviderID,
+        currentWeekStart: Date,
         now: Date = Date(),
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         pricingCatalog: ModelPricingCatalog? = nil
-    ) -> DailyTokenUsage? {
-        switch providerID.rawValue {
-        case "codex": scanCodex(now: now, homeDirectory: homeDirectory, pricingCatalog: pricingCatalog)
-        case "claude": scanClaude(now: now, homeDirectory: homeDirectory, pricingCatalog: pricingCatalog)
+    ) -> LocalTokenUsageSummary? {
+        let calendar = Calendar.current
+        let todayStart = calendar.startOfDay(for: now)
+        guard let end = calendar.date(byAdding: .day, value: 1, to: todayStart),
+              let last30DaysStart = calendar.date(byAdding: .day, value: -29, to: todayStart)
+        else { return nil }
+        let periods = PeriodAccumulators(
+            todayStart: todayStart,
+            last30DaysStart: last30DaysStart,
+            currentWeekStart: currentWeekStart,
+            end: end
+        )
+        return switch providerID.rawValue {
+        case "codex": scanCodex(
+            periods: periods,
+            homeDirectory: homeDirectory,
+            pricingCatalog: pricingCatalog
+        )
+        case "claude": scanClaude(
+            periods: periods,
+            homeDirectory: homeDirectory,
+            pricingCatalog: pricingCatalog
+        )
         default: nil
         }
     }
 
     private static func scanCodex(
-        now: Date,
+        periods: PeriodAccumulators,
         homeDirectory: URL,
         pricingCatalog: ModelPricingCatalog?
-    ) -> DailyTokenUsage? {
-        let calendar = Calendar.current
-        let start = calendar.startOfDay(for: now)
-        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return nil }
-        let components = calendar.dateComponents([.year, .month, .day], from: start)
-        guard let year = components.year, let month = components.month, let day = components.day else { return nil }
-        let root = homeDirectory.appending(
-            path: String(format: ".codex/sessions/%04d/%02d/%02d", year, month, day)
-        )
-        let files = filesModified(since: start, below: root)
-
-        var totalTokens: Int64 = 0
-        var totalCost = 0.0
-        var hasUnpricedTokens = false
+    ) -> LocalTokenUsageSummary? {
+        let root = homeDirectory.appending(path: ".codex/sessions")
+        let files = filesModified(since: periods.last30DaysStart, below: root)
+        var accumulated = periods
 
         for file in files {
             var currentModel: String?
@@ -200,30 +270,27 @@ enum LocalDailyUsageScanner {
 
                 let delta = accumulator.apply(last: last, total: cumulative)
 
-                guard timestamp >= start, timestamp < end, let delta, delta.codexTotal > 0 else { return }
-                totalTokens += Int64(delta.codexTotal)
-                if let model, let rates = codexRates(for: model, catalog: pricingCatalog) {
-                    totalCost += codexCost(tokens: delta, rates: rates)
-                } else {
-                    hasUnpricedTokens = true
-                }
+                guard let delta, delta.codexTotal > 0 else { return }
+                let valueUSD = model
+                    .flatMap { codexRates(for: $0, catalog: pricingCatalog) }
+                    .map { codexCost(tokens: delta, rates: $0) }
+                accumulated.add(
+                    timestamp: timestamp,
+                    tokens: delta.codexTotal,
+                    valueUSD: valueUSD
+                )
             }
         }
-
-        guard totalTokens > 0 else { return nil }
-        return DailyTokenUsage(tokens: totalTokens, valueUSD: hasUnpricedTokens ? nil : totalCost)
+        return accumulated.summary
     }
 
     private static func scanClaude(
-        now: Date,
+        periods: PeriodAccumulators,
         homeDirectory: URL,
         pricingCatalog: ModelPricingCatalog?
-    ) -> DailyTokenUsage? {
-        let calendar = Calendar.current
-        let start = calendar.startOfDay(for: now)
-        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return nil }
+    ) -> LocalTokenUsageSummary? {
         let root = homeDirectory.appending(path: ".claude/projects")
-        let files = filesModified(since: start, below: root)
+        let files = filesModified(since: periods.last30DaysStart, below: root)
 
         var keyedSamples: [String: ClaudeSample] = [:]
         var unkeyedSamples: [ClaudeSample] = []
@@ -234,7 +301,8 @@ enum LocalDailyUsageScanner {
             ) { object in
                 guard object["type"] as? String == "assistant",
                       let timestamp = date(object["timestamp"]),
-                      timestamp >= start, timestamp < end,
+                      timestamp >= periods.last30DaysStart,
+                      timestamp < periods.end,
                       let message = object["message"] as? [String: Any],
                       let model = message["model"] as? String,
                       let usage = message["usage"] as? [String: Any]
@@ -250,6 +318,7 @@ enum LocalDailyUsageScanner {
 
                 let cacheCreation = usage["cache_creation"] as? [String: Any]
                 let sample = ClaudeSample(
+                    timestamp: timestamp,
                     model: model,
                     tokens: tokens,
                     cacheWrite1h: min(
@@ -268,18 +337,17 @@ enum LocalDailyUsageScanner {
 
         let samples = Array(keyedSamples.values) + unkeyedSamples
         guard !samples.isEmpty else { return nil }
-        var totalTokens: Int64 = 0
-        var totalCost = 0.0
-        var hasUnpricedTokens = false
+        var accumulated = periods
         for sample in samples {
-            totalTokens += Int64(sample.tokens.claudeTotal)
-            if let rates = claudeRates(for: sample.model, catalog: pricingCatalog) {
-                totalCost += claudeCost(sample: sample, rates: rates)
-            } else {
-                hasUnpricedTokens = true
-            }
+            let valueUSD = claudeRates(for: sample.model, catalog: pricingCatalog)
+                .map { claudeCost(sample: sample, rates: $0) }
+            accumulated.add(
+                timestamp: sample.timestamp,
+                tokens: sample.tokens.claudeTotal,
+                valueUSD: valueUSD
+            )
         }
-        return DailyTokenUsage(tokens: totalTokens, valueUSD: hasUnpricedTokens ? nil : totalCost)
+        return accumulated.summary
     }
 
     private static func filesModified(since start: Date, below root: URL) -> [URL] {
