@@ -12,6 +12,7 @@ enum UsageRailLayout {
     static let settingsBottomPadding: CGFloat = scaled(6)
     static let settingsArcSize: CGFloat = scaled(64)
     static let settingsArcBottomPadding: CGFloat = scaled(4)
+    static let bottomExteriorSpace: CGFloat = scaled(20)
 
     static func scaled(_ value: CGFloat) -> CGFloat {
         value * scale
@@ -106,7 +107,6 @@ struct UsageRailView: View {
                     width: UsageRailLayout.settingsArcSize,
                     height: UsageRailLayout.settingsArcSize
                 )
-                .offset(x: -UsageRailLayout.scaled(16))
                 .padding(.bottom, UsageRailLayout.settingsArcBottomPadding)
                 .opacity(isHovering ? 0 : 1)
                 .animation(
@@ -116,8 +116,17 @@ struct UsageRailView: View {
         }
         .coordinateSpace(name: "usageRail")
         .background {
-            UsageRailShape()
-                .fill(.black)
+            GeometryReader { proxy in
+                UsageRailShape()
+                    .fill(.black)
+                    .frame(
+                        height: max(
+                            0,
+                            proxy.size.height - UsageRailLayout.bottomExteriorSpace
+                        ),
+                        alignment: .top
+                    )
+            }
         }
         .contentShape(UsageRailHitShape())
         .scaleEffect(appeared ? 1 : 0.96, anchor: .trailing)
@@ -304,7 +313,13 @@ private func addUsageRailBottomCurve(
 
 private struct UsageRailHitShape: Shape {
     func path(in rect: CGRect) -> Path {
-        var path = UsageRailShape().path(in: rect)
+        let railRect = CGRect(
+            x: rect.minX,
+            y: rect.minY,
+            width: rect.width,
+            height: max(0, rect.height - UsageRailLayout.bottomExteriorSpace)
+        )
+        var path = UsageRailShape().path(in: railRect)
         path.addEllipse(
             in: CGRect(
                 x: rect.midX - UsageRailLayout.settingsDiameter / 2,
