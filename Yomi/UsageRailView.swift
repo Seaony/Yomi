@@ -117,7 +117,7 @@ struct UsageRailView: View {
         .coordinateSpace(name: "usageRail")
         .background {
             UsageRailShape()
-                .fill(.black.opacity(isHovering ? 0.96 : 0.92))
+                .fill(.black)
         }
         .contentShape(UsageRailHitShape())
         .scaleEffect(appeared ? 1 : 0.96, anchor: .trailing)
