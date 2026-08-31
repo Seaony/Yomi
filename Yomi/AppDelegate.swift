@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import SwiftUI
 
 @MainActor
@@ -8,18 +7,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private var panel: FloatingPanel?
     private var settingsWindow: NSWindow?
-    private var preferencesObserver: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         createPanel()
         store.start()
-
-        preferencesObserver = store.preferences.$configurations
-            .receive(on: RunLoop.main)
-            .sink { [weak self] configurations in
-                self?.resizePanel(enabledCount: configurations.filter(\.isEnabled).count, animated: true)
-            }
 
         NotificationCenter.default.addObserver(
             self,
@@ -73,9 +65,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func createPanel() {
-        let height = panelHeight(enabledCount: store.enabledProviders.count)
+        let height = initialPanelHeight()
         let panel = FloatingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 126, height: height),
+            contentRect: NSRect(x: 0, y: 0, width: 104, height: height),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -90,7 +82,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.isReleasedWhenClosed = false
         panel.contentView = NSHostingView(rootView: UsageRailView(
             store: store,
-            openSettings: { [weak self] providerID in self?.openSettings(providerID: providerID) }
+            openSettings: { [weak self] providerID in self?.openSettings(providerID: providerID) },
+            contentHeightChanged: { [weak self] height in
+                self?.resizePanel(to: height, animated: true)
+            }
         ))
         self.panel = panel
         positionPanel(animated: false)
@@ -104,9 +99,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    private func resizePanel(enabledCount: Int, animated: Bool) {
+    private func resizePanel(to contentHeight: CGFloat, animated: Bool) {
         guard let panel else { return }
-        let newHeight = panelHeight(enabledCount: enabledCount)
+        let visibleHeight = (screenUnderPointer() ?? NSScreen.main)?.visibleFrame.height ?? 900
+        let newHeight = min(max(contentHeight, 140), visibleHeight - 24)
         guard abs(panel.frame.height - newHeight) > 0.5 else { return }
         var frame = panel.frame
         let midpoint = frame.midY
@@ -138,10 +134,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return NSScreen.screens.first { $0.frame.contains(point) }
     }
 
-    private func panelHeight(enabledCount: Int) -> CGFloat {
+    private func initialPanelHeight() -> CGFloat {
         let visibleHeight = (screenUnderPointer() ?? NSScreen.main)?.visibleFrame.height ?? 900
-        let rowsHeight = CGFloat(max(enabledCount, 1)) * 112
-        return min(max(rowsHeight + 126, 420), visibleHeight - 24)
+        let storedShowNames = UserDefaults.standard.object(forKey: "show-provider-names") as? Bool
+        let rowHeight: CGFloat = (storedShowNames ?? true) ? 101 : 84
+        let contentHeight = CGFloat(max(store.enabledProviders.count, 1)) * rowHeight + 84
+        return min(max(contentHeight, 140), visibleHeight - 24)
     }
 }
 

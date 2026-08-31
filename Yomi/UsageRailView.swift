@@ -3,16 +3,19 @@ import SwiftUI
 struct UsageRailView: View {
     @ObservedObject var store: UsageStore
     let openSettings: (ProviderID?) -> Void
+    let contentHeightChanged: (CGFloat) -> Void
 
     @State private var selectedProvider: ProviderID?
     @State private var appeared = false
     @State private var isHovering = false
+    @State private var providerSectionHeight: CGFloat = 0
+    @State private var footerHeight: CGFloat = 0
     @AppStorage("show-provider-names") private var showProviderNames = true
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollView(.vertical) {
-                LazyVStack(spacing: 15) {
+                VStack(spacing: 12) {
                     ForEach(Array(store.enabledProviders.enumerated()), id: \.element.id) { index, descriptor in
                         ProviderRailItem(
                             descriptor: descriptor,
@@ -41,47 +44,65 @@ struct UsageRailView: View {
                         }
                     }
                 }
-                .padding(.top, 25)
-                .padding(.horizontal, 13)
-                .padding(.bottom, 10)
+                .padding(.top, 20)
+                .padding(.horizontal, 9)
+                .padding(.bottom, 8)
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: ProviderSectionHeightKey.self,
+                            value: proxy.size.height
+                        )
+                    }
+                }
             }
             .scrollIndicators(.never)
 
-            Divider()
-                .overlay(.white.opacity(0.08))
-                .padding(.horizontal, 22)
+            VStack(spacing: 0) {
+                Divider()
+                    .overlay(.white.opacity(0.08))
+                    .padding(.horizontal, 16)
 
-            HStack(spacing: 10) {
-                Button {
-                    Task { await store.refresh() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(width: 34, height: 34)
-                        .background(.white.opacity(0.08), in: Circle())
-                        .symbolEffect(.rotate, isActive: store.isRefreshing)
-                }
-                .buttonStyle(.plain)
-                .help("刷新用量")
+                HStack(spacing: 8) {
+                    Button {
+                        Task { await store.refresh() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(width: 32, height: 32)
+                            .background(.white.opacity(0.08), in: Circle())
+                            .symbolEffect(.rotate, isActive: store.isRefreshing)
+                    }
+                    .buttonStyle(.plain)
+                    .help("刷新用量")
 
-                Button {
-                    openSettings(nil)
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 17, weight: .medium))
-                        .frame(width: 38, height: 38)
-                        .background(.white.opacity(0.10), in: Circle())
+                    Button {
+                        openSettings(nil)
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 16, weight: .medium))
+                            .frame(width: 34, height: 34)
+                            .background(.white.opacity(0.10), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("设置")
                 }
-                .buttonStyle(.plain)
-                .help("设置")
+                .foregroundStyle(.white)
+                .padding(.vertical, 10)
             }
-            .foregroundStyle(.white)
-            .padding(.vertical, 13)
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: FooterHeightKey.self,
+                        value: proxy.size.height
+                    )
+                }
+            }
         }
         .background {
             UnevenRoundedRectangle(
-                topLeadingRadius: 42,
-                bottomLeadingRadius: 42,
+                topLeadingRadius: 36,
+                bottomLeadingRadius: 36,
                 bottomTrailingRadius: 0,
                 topTrailingRadius: 0,
                 style: .continuous
@@ -104,7 +125,36 @@ struct UsageRailView: View {
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.18)) { isHovering = hovering }
         }
+        .onPreferenceChange(ProviderSectionHeightKey.self) { height in
+            providerSectionHeight = height
+            reportContentHeight(providerSection: height, footer: footerHeight)
+        }
+        .onPreferenceChange(FooterHeightKey.self) { height in
+            footerHeight = height
+            reportContentHeight(providerSection: providerSectionHeight, footer: height)
+        }
         .preferredColorScheme(.dark)
+    }
+
+    private func reportContentHeight(providerSection: CGFloat, footer: CGFloat) {
+        guard providerSection > 0, footer > 0 else { return }
+        contentHeightChanged(providerSection + footer)
+    }
+}
+
+private struct ProviderSectionHeightKey: PreferenceKey {
+    nonisolated static let defaultValue: CGFloat = 0
+
+    nonisolated static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct FooterHeightKey: PreferenceKey {
+    nonisolated static let defaultValue: CGFloat = 0
+
+    nonisolated static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
@@ -127,33 +177,33 @@ private struct ProviderRailItem: View {
     }
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 5) {
             ZStack {
                 Circle()
-                    .stroke(.white.opacity(0.16), style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                    .stroke(.white.opacity(0.16), style: StrokeStyle(lineWidth: 6, lineCap: .round))
                 Circle()
                     .trim(from: 0, to: animatedFraction)
-                    .stroke(tint, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                    .stroke(tint, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                 Circle()
                     .stroke(.white.opacity(0.08), lineWidth: 1)
-                    .padding(8)
+                    .padding(7)
                 Image(systemName: descriptor.symbol)
-                    .font(.system(size: 23, weight: .medium))
+                    .font(.system(size: 20, weight: .medium))
                     .foregroundStyle(.white)
                     .symbolEffect(.pulse, isActive: usage.state == .loading)
             }
-            .frame(width: 62, height: 62)
+            .frame(width: 56, height: 56)
             .shadow(color: tint.opacity(hovered ? 0.35 : 0), radius: 12)
 
             Text(percentage)
-                .font(.system(size: 21, weight: .regular, design: .rounded))
+                .font(.system(size: 19, weight: .regular, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.white)
 
             if showName {
                 Text(descriptor.shortName)
-                    .font(.system(size: 9.5, weight: .medium))
+                    .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
                     .lineLimit(1)
             }
