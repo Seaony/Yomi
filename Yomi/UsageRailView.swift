@@ -10,8 +10,6 @@ enum UsageRailLayout {
     static let settingsDiameter: CGFloat = scaled(56)
     static let settingsAreaHeight: CGFloat = scaled(68)
     static let settingsBottomPadding: CGFloat = scaled(6)
-    static let settingsArcSize: CGFloat = panelWidth / 2
-    static let settingsArcBottomPadding: CGFloat = scaled(4)
     static let bottomExteriorSpace: CGFloat = scaled(20)
 
     static func scaled(_ value: CGFloat) -> CGFloat {
@@ -90,34 +88,6 @@ struct UsageRailView: View {
             }
             .padding(.bottom, UsageRailLayout.settingsBottomPadding)
         }
-        .overlay(alignment: .bottom) {
-            SettingsQuarterArcShape()
-                .trim(
-                    from: isHovering ? 0.5 : 0.25,
-                    to: isHovering ? 0.5 : 0.75
-                )
-                .stroke(
-                    .black,
-                    style: StrokeStyle(
-                        lineWidth: UsageRailLayout.scaled(5),
-                        lineCap: .round
-                    )
-                )
-                .frame(
-                    width: UsageRailLayout.settingsArcSize,
-                    height: UsageRailLayout.settingsArcSize
-                )
-                .offset(
-                    x: -UsageRailLayout.scaled(8),
-                    y: UsageRailLayout.scaled(12)
-                )
-                .padding(.bottom, UsageRailLayout.settingsArcBottomPadding)
-                .opacity(isHovering ? 0 : 1)
-                .animation(
-                    .spring(response: 0.34, dampingFraction: 0.78),
-                    value: isHovering
-                )
-        }
         .coordinateSpace(name: "usageRail")
         .background {
             GeometryReader { proxy in
@@ -178,6 +148,18 @@ private struct SettingsHoverControl: View {
     var body: some View {
         Button(action: action) {
             ZStack {
+                Circle()
+                    .trim(from: 0, to: isHovering ? 0 : 0.25)
+                    .stroke(
+                        .black,
+                        style: StrokeStyle(
+                            lineWidth: UsageRailLayout.scaled(5),
+                            lineCap: .round
+                        )
+                    )
+                    .rotationEffect(.degrees(-90))
+                    .opacity(isHovering ? 0 : 1)
+
                 Circle()
                     .fill(.black)
                     .frame(
@@ -255,24 +237,6 @@ private struct UsageRailShape: Shape {
             control2: CGPoint(x: width, y: topTransition * 0.32)
         )
         path.closeSubpath()
-        return path
-    }
-}
-
-private struct SettingsQuarterArcShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        let radius = min(rect.width, rect.height)
-        let control = radius * 0.552_284_75
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addCurve(
-            to: CGPoint(x: rect.minX + radius, y: rect.minY + radius),
-            control1: CGPoint(x: rect.minX + control, y: rect.minY),
-            control2: CGPoint(
-                x: rect.minX + radius,
-                y: rect.minY + radius - control
-            )
-        )
         return path
     }
 }
