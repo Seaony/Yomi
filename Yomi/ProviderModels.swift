@@ -84,6 +84,11 @@ struct UsageWindow: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+struct DailyTokenUsage: Codable, Hashable, Sendable {
+    var tokens: Int64
+    var valueUSD: Double?
+}
+
 struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
     enum State: String, Codable, Sendable {
         case ready
@@ -97,6 +102,7 @@ struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
     var windows: [UsageWindow]
     var balance: String?
     var plan: String?
+    var today: DailyTokenUsage? = nil
     var updatedAt: Date?
     var message: String?
 

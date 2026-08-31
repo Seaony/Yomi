@@ -73,6 +73,7 @@ final class UsageStore: ObservableObject {
                 windows: usageByID[job.0.id]?.windows ?? [],
                 balance: usageByID[job.0.id]?.balance,
                 plan: usageByID[job.0.id]?.plan,
+                today: usageByID[job.0.id]?.today,
                 updatedAt: usageByID[job.0.id]?.updatedAt,
                 message: nil
             )

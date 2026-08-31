@@ -22,6 +22,8 @@ enum UsageCollectionError: LocalizedError {
 
 actor UsageCollector {
     private let session: URLSession
+    private var pricingCatalog: ModelPricingCatalog?
+    private var pricingCatalogReloadAt = Date.distantPast
 
     init() {
         let configuration = URLSessionConfiguration.ephemeral
@@ -33,6 +35,20 @@ actor UsageCollector {
     }
 
     func collect(
+        descriptor: ProviderDescriptor,
+        configuration: ProviderConfiguration,
+        secret: String
+    ) async throws -> ProviderUsage {
+        let usage = try await collectRaw(
+            descriptor: descriptor,
+            configuration: configuration,
+            secret: secret
+        )
+        let catalog = await resolvedPricingCatalog()
+        return addingLocalMetadata(to: usage, descriptor: descriptor, pricingCatalog: catalog)
+    }
+
+    private func collectRaw(
         descriptor: ProviderDescriptor,
         configuration: ProviderConfiguration,
         secret: String
@@ -107,8 +123,7 @@ actor UsageCollector {
         guard (200..<300).contains(http.statusCode) else {
             throw UsageCollectionError.requestFailed(http.statusCode)
         }
-        let usage = try UsageParser.parse(data, descriptor: descriptor)
-        return addingLocalPlanIfNeeded(to: usage, descriptor: descriptor)
+        return try UsageParser.parse(data, descriptor: descriptor)
     }
 
     private func localUsage(descriptor: ProviderDescriptor) throws -> ProviderUsage {
@@ -116,7 +131,7 @@ actor UsageCollector {
         for url in localCandidates(for: descriptor.id) where manager.fileExists(atPath: url.path) {
             if let data = try? boundedData(from: url),
                let usage = try? UsageParser.parse(data, descriptor: descriptor) {
-                return addingLocalPlanIfNeeded(to: usage, descriptor: descriptor)
+                return usage
             }
         }
 
@@ -135,7 +150,7 @@ actor UsageCollector {
             for file in files.prefix(12) {
                 if let data = try? boundedData(from: file),
                    let usage = try? UsageParser.parse(data, descriptor: descriptor) {
-                    return addingLocalPlanIfNeeded(to: usage, descriptor: descriptor)
+                    return usage
                 }
             }
         }
@@ -171,7 +186,7 @@ actor UsageCollector {
                 }
             }
         }
-        return addingLocalPlanIfNeeded(to: usage, descriptor: descriptor)
+        return usage
     }
 
     private func environmentSecret(for descriptor: ProviderDescriptor) -> String {
@@ -193,14 +208,28 @@ actor UsageCollector {
         return ""
     }
 
-    private func addingLocalPlanIfNeeded(
+    private func addingLocalMetadata(
         to usage: ProviderUsage,
-        descriptor: ProviderDescriptor
+        descriptor: ProviderDescriptor,
+        pricingCatalog: ModelPricingCatalog?
     ) -> ProviderUsage {
-        guard usage.plan == nil, let plan = localPlan(for: descriptor) else { return usage }
         var enriched = usage
-        enriched.plan = plan
+        if enriched.plan == nil {
+            enriched.plan = localPlan(for: descriptor)
+        }
+        enriched.today = LocalDailyUsageScanner.scan(
+            providerID: descriptor.id,
+            pricingCatalog: pricingCatalog
+        )
         return enriched
+    }
+
+    private func resolvedPricingCatalog() async -> ModelPricingCatalog? {
+        let now = Date()
+        if now < pricingCatalogReloadAt { return pricingCatalog }
+        pricingCatalog = await ModelPricingCatalog.load(session: session)
+        pricingCatalogReloadAt = now.addingTimeInterval(24 * 60 * 60)
+        return pricingCatalog
     }
 
     private func localPlan(for descriptor: ProviderDescriptor) -> String? {

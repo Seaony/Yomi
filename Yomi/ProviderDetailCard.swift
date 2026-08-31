@@ -9,16 +9,13 @@ struct ProviderDetailCard: View {
     }
 
     private var headlineValue: String {
-        if [.balance, .credits, .spend].contains(descriptor.metricKind),
-           let balance = usage.balance {
-            return balance
-        }
-        return "\(Int((usage.headlineFraction * 100).rounded()))%"
+        guard let tokens = usage.today?.tokens else { return "—" }
+        return compactTokenCount(tokens)
     }
 
     private var headlineCaption: String {
-        guard let window = usage.windows.first else { return "当前用量" }
-        return "\(window.label) · 已用"
+        let value = usage.today?.valueUSD.map { String(format: "$%.2f", $0) } ?? "$—"
+        return "今日 Token · \(value)"
     }
 
     var body: some View {
@@ -232,4 +229,14 @@ private func compactDuration(until date: Date) -> String {
     if days > 0 { return "\(days)d \(hours)h" }
     if hours > 0 { return "\(hours)h \(minutes)m" }
     return "\(minutes)m"
+}
+
+private func compactTokenCount(_ value: Int64) -> String {
+    if value >= 100_000_000 {
+        return String(format: "%.1f亿", Double(value) / 100_000_000)
+    }
+    if value >= 10_000 {
+        return String(format: "%.1f万", Double(value) / 10_000)
+    }
+    return value.formatted(.number.grouping(.automatic))
 }
