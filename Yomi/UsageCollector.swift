@@ -10,12 +10,18 @@ enum UsageCollectionError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .missingCredential: "未找到可用的认证信息"
-        case .missingEndpoint: "尚未配置用量接口"
-        case .unreadableResponse: "无法识别返回的用量数据"
-        case let .requestFailed(status): "请求失败（HTTP \(status)）"
-        case let .commandFailed(message): "命令执行失败：\(message)"
-        case .localDataNotFound: "未找到本机用量记录"
+        case .missingCredential:
+            AppLocalization.text("未找到可用的认证信息", "No available credentials found")
+        case .missingEndpoint:
+            AppLocalization.text("尚未配置用量接口", "Usage endpoint is not configured")
+        case .unreadableResponse:
+            AppLocalization.text("无法识别返回的用量数据", "The returned usage data could not be read")
+        case let .requestFailed(status):
+            AppLocalization.text("请求失败（HTTP \(status)）", "Request failed (HTTP \(status))")
+        case let .commandFailed(message):
+            AppLocalization.text("命令执行失败：\(message)", "Command failed: \(message)")
+        case .localDataNotFound:
+            AppLocalization.text("未找到本机用量记录", "No local usage records found")
         }
     }
 }
@@ -159,7 +165,11 @@ actor UsageCollector {
 
     private func commandUsage(descriptor: ProviderDescriptor, command: String) async throws -> ProviderUsage {
         let cleaned = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { throw UsageCollectionError.commandFailed("未配置命令") }
+        guard !cleaned.isEmpty else {
+            throw UsageCollectionError.commandFailed(
+                AppLocalization.text("未配置命令", "Command is not configured")
+            )
+        }
 
         let usage = try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
@@ -176,7 +186,10 @@ actor UsageCollector {
                     process.waitUntilExit()
                     guard process.terminationStatus == 0 else {
                         let data = errors.fileHandleForReading.readDataToEndOfFile()
-                        let message = String(data: data, encoding: .utf8) ?? "退出码 \(process.terminationStatus)"
+                        let message = String(data: data, encoding: .utf8) ?? AppLocalization.text(
+                            "退出码 \(process.terminationStatus)",
+                            "Exit code \(process.terminationStatus)"
+                        )
                         throw UsageCollectionError.commandFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
                     }
                     let data = output.fileHandleForReading.readDataToEndOfFile()

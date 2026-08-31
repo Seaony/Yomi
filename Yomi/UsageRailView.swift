@@ -134,6 +134,8 @@ struct UsageRailView: View {
             reportContentHeight(providerRows: providerRowHeights)
         }
         .onPreferenceChange(ProviderAnchorYKey.self) { providerAnchorY = $0 }
+        .environment(\.appLanguage, appPreferences.language)
+        .environment(\.locale, appPreferences.language.locale)
         .preferredColorScheme(appPreferences.appearance.colorScheme)
     }
 
@@ -161,6 +163,9 @@ private struct SettingsHoverControl: View {
 
     @State private var isControlHovering = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.appLanguage) private var language
+
+    private var copy: AppCopy { AppCopy(language: language) }
 
     var body: some View {
         Button(action: action) {
@@ -199,7 +204,7 @@ private struct SettingsHoverControl: View {
             )
         }
         .buttonStyle(.plain)
-        .help("设置")
+        .help(copy.text("设置", "Settings"))
         .allowsHitTesting(isHovering)
         .accessibilityHidden(!isHovering)
         .scaleEffect(isControlHovering ? 1.08 : 1)

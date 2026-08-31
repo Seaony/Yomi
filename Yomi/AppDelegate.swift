@@ -23,6 +23,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(languageChanged),
+            name: .appLanguageDidChange,
+            object: nil
+        )
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -42,7 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 defer: false
             )
             window.contentViewController = controller
-            window.title = "Yomi 设置"
+            window.title = settingsWindowTitle
             window.titlebarAppearsTransparent = true
             window.titlebarSeparatorStyle = .none
             window.minSize = NSSize(width: 920, height: 600)
@@ -68,6 +74,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func screenLayoutChanged() {
         positionPanel(animated: false)
+    }
+
+    @objc private func languageChanged() {
+        settingsWindow?.title = settingsWindowTitle
+    }
+
+    private var settingsWindowTitle: String {
+        AppLocalization.text("Yomi 设置", "Yomi Settings")
     }
 
     private func createPanel() {

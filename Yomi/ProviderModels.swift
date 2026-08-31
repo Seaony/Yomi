@@ -18,14 +18,15 @@ enum ProviderSource: String, Codable, CaseIterable, Sendable {
     case command
     case endpoint
 
-    var title: String {
-        switch self {
-        case .automatic: "自动检测"
-        case .account: "本机账号"
-        case .token: "访问令牌"
-        case .cookie: "浏览器会话"
-        case .command: "命令行工具"
-        case .endpoint: "自定义接口"
+    func title(language: AppLanguage) -> String {
+        let copy = AppCopy(language: language)
+        return switch self {
+        case .automatic: copy.text("自动检测", "Automatic")
+        case .account: copy.text("本机账号", "Local account")
+        case .token: copy.text("访问令牌", "Access token")
+        case .cookie: copy.text("浏览器会话", "Browser session")
+        case .command: copy.text("命令行工具", "Command line")
+        case .endpoint: copy.text("自定义接口", "Custom endpoint")
         }
     }
 }

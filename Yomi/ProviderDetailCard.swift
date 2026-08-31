@@ -4,6 +4,9 @@ struct ProviderDetailCard: View {
     let descriptor: ProviderDescriptor
     let usage: ProviderUsage
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.appLanguage) private var language
+
+    private var copy: AppCopy { AppCopy(language: language) }
 
     private var tint: Color {
         ProviderBrandColors.color(for: descriptor.id)
@@ -11,12 +14,12 @@ struct ProviderDetailCard: View {
 
     private var headlineValue: String {
         guard let tokens = usage.today?.tokens else { return "—" }
-        return compactTokenCount(tokens)
+        return compactTokenCount(tokens, language: language)
     }
 
     private var headlineCaption: String {
         let value = usage.today?.valueUSD.map { String(format: "$%.2f", $0) } ?? "$—"
-        return "今日 Token · \(value)"
+        return copy.text("今日 Token", "Tokens today") + " · \(value)"
     }
 
     var body: some View {
@@ -82,13 +85,15 @@ struct ProviderDetailCard: View {
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 5) {
             Label(
-                usage.state == .loading ? "正在读取用量" : "暂时无法显示用量",
+                usage.state == .loading
+                    ? copy.text("正在读取用量", "Loading usage")
+                    : copy.text("暂时无法显示用量", "Usage is currently unavailable"),
                 systemImage: statusSymbol
             )
             .font(.system(size: 12, weight: .semibold))
 
             if let message = usage.message {
-                Text(message)
+                Text(copy.usageMessage(message))
                     .font(.system(size: 10.5))
                     .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.46))
                     .fixedSize(horizontal: false, vertical: true)
@@ -100,17 +105,26 @@ struct ProviderDetailCard: View {
     private var footer: some View {
         HStack {
             if let reset = usage.windows.compactMap(\.resetsAt).min() {
-                Text("\(compactDuration(until: reset)) 后重置")
+                Text(copy.text(
+                    "\(compactDuration(until: reset, language: language)) 后重置",
+                    "Resets in \(compactDuration(until: reset, language: language))"
+                ))
             } else if let updatedAt = usage.updatedAt {
-                Text("更新于 \(updatedAt.formatted(date: .omitted, time: .shortened))")
+                Text(copy.text("更新于", "Updated")
+                    + " \(updatedAt.formatted(date: .omitted, time: .shortened))")
             }
 
             Spacer()
 
             if let balance = usage.balance {
-                Text("余额 \(balance)")
+                Text(copy.text("余额", "Balance") + " \(balance)")
             } else {
-                Text("\(usage.windows.count) 个额度窗口")
+                Text(copy.text(
+                    "\(usage.windows.count) 个额度窗口",
+                    usage.windows.count == 1
+                        ? "1 quota window"
+                        : "\(usage.windows.count) quota windows"
+                ))
             }
         }
         .font(.system(size: 10.5, weight: .semibold))
@@ -150,6 +164,8 @@ struct ProviderDetailPanelView: View {
                 .fill(AppTheme.detailBackground(for: colorScheme))
         }
         .padding(16)
+        .environment(\.appLanguage, appPreferences.language)
+        .environment(\.locale, appPreferences.language.locale)
         .preferredColorScheme(appPreferences.appearance.colorScheme)
     }
 }
@@ -183,6 +199,9 @@ private struct UsageWindowRow: View {
     let window: UsageWindow
     let tint: Color
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.appLanguage) private var language
+
+    private var copy: AppCopy { AppCopy(language: language) }
 
     private var remainingFraction: Double {
         1 - window.clampedFraction
@@ -191,10 +210,13 @@ private struct UsageWindowRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(window.label)
+                Text(copy.usageLabel(window.label))
                     .font(.system(size: 11.5, weight: .bold))
                 Spacer()
-                Text("\(Int((remainingFraction * 100).rounded()))% left")
+                Text(copy.text(
+                    "剩余 \(Int((remainingFraction * 100).rounded()))%",
+                    "\(Int((remainingFraction * 100).rounded()))% left"
+                ))
                     .font(.system(size: 11.5, weight: .bold, design: .rounded))
                     .foregroundStyle(tint)
                     .monospacedDigit()
@@ -226,27 +248,44 @@ private struct UsageWindowRow: View {
 
     private var resetText: String {
         guard let date = window.resetsAt else { return "" }
-        return compactDuration(until: date)
+        return compactDuration(until: date, language: language)
     }
 }
 
-private func compactDuration(until date: Date) -> String {
+private func compactDuration(until date: Date, language: AppLanguage) -> String {
     let seconds = max(0, Int(date.timeIntervalSinceNow))
     let days = seconds / 86_400
     let hours = (seconds % 86_400) / 3_600
     let minutes = (seconds % 3_600) / 60
 
+    if language == .simplifiedChinese {
+        if days > 0 { return "\(days) 天 \(hours) 小时" }
+        if hours > 0 { return "\(hours) 小时 \(minutes) 分钟" }
+        return "\(minutes) 分钟"
+    }
     if days > 0 { return "\(days)d \(hours)h" }
     if hours > 0 { return "\(hours)h \(minutes)m" }
     return "\(minutes)m"
 }
 
-private func compactTokenCount(_ value: Int64) -> String {
-    if value >= 100_000_000 {
-        return String(format: "%.1f亿", Double(value) / 100_000_000)
-    }
-    if value >= 10_000 {
-        return String(format: "%.1f万", Double(value) / 10_000)
+private func compactTokenCount(_ value: Int64, language: AppLanguage) -> String {
+    if language == .simplifiedChinese {
+        if value >= 100_000_000 {
+            return String(format: "%.1f亿", Double(value) / 100_000_000)
+        }
+        if value >= 10_000 {
+            return String(format: "%.1f万", Double(value) / 10_000)
+        }
+    } else {
+        if value >= 1_000_000_000 {
+            return String(format: "%.1fB", Double(value) / 1_000_000_000)
+        }
+        if value >= 1_000_000 {
+            return String(format: "%.1fM", Double(value) / 1_000_000)
+        }
+        if value >= 1_000 {
+            return String(format: "%.1fK", Double(value) / 1_000)
+        }
     }
     return value.formatted(.number.grouping(.automatic))
 }

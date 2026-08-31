@@ -137,7 +137,7 @@ final class UsageStore: ObservableObject {
             balance: nil,
             plan: nil,
             updatedAt: nil,
-            message: "等待首次刷新"
+            message: AppLocalization.text("等待首次刷新", "Waiting for the first refresh")
         )
     }
 
