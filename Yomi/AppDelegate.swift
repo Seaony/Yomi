@@ -249,6 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let storedShowNames = UserDefaults.standard.object(forKey: "show-provider-names") as? Bool
         let rowHeight = UsageRailLayout.scaled((storedShowNames ?? true) ? 101 : 84)
         let verticalSpace = UsageRailLayout.contentInset * 2
+            + UsageRailLayout.settingsAreaHeight
         let providerCount = store.enabledProviders.count
         let providerSpacing = CGFloat(max(providerCount - 1, 0)) * UsageRailLayout.scaled(12)
         let sectionPadding = UsageRailLayout.scaled(12)

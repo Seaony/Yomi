@@ -6,6 +6,9 @@ enum UsageRailLayout {
     static let minimumPanelHeight: CGFloat = scaled(140)
     static let transitionHeight: CGFloat = scaled(88)
     static let contentInset: CGFloat = scaled(64)
+    static let settingsDiameter: CGFloat = scaled(56)
+    static let settingsAreaHeight: CGFloat = scaled(68)
+    static let settingsBottomPadding: CGFloat = scaled(6)
 
     static func scaled(_ value: CGFloat) -> CGFloat {
         value * scale
@@ -75,13 +78,16 @@ struct UsageRailView: View {
             .scrollIndicators(.never)
 
             Color.clear
-                .frame(height: UsageRailLayout.contentInset)
+                .frame(
+                    height: UsageRailLayout.contentInset
+                        + UsageRailLayout.settingsAreaHeight
+                )
         }
         .overlay(alignment: .bottom) {
             SettingsHoverControl(isHovering: isHovering) {
                 openSettings(nil)
             }
-            .padding(.bottom, UsageRailLayout.scaled(18))
+            .padding(.bottom, UsageRailLayout.settingsBottomPadding)
         }
         .overlay {
             UsageRailBottomArcShape()
@@ -127,7 +133,9 @@ struct UsageRailView: View {
     private func reportContentHeight(providerSection: CGFloat) {
         guard providerSection > 0 else { return }
         contentHeightChanged(
-            providerSection + UsageRailLayout.contentInset * 2
+            providerSection
+                + UsageRailLayout.contentInset * 2
+                + UsageRailLayout.settingsAreaHeight
         )
     }
 }
@@ -142,22 +150,22 @@ private struct SettingsHoverControl: View {
                 Circle()
                     .fill(.black)
                     .frame(
-                        width: UsageRailLayout.scaled(52),
-                        height: UsageRailLayout.scaled(52)
+                        width: UsageRailLayout.settingsDiameter,
+                        height: UsageRailLayout.settingsDiameter
                     )
                     .scaleEffect(isHovering ? 1 : 0.55)
                     .opacity(isHovering ? 1 : 0)
 
                 Image(systemName: "gearshape")
-                    .font(.system(size: UsageRailLayout.scaled(21), weight: .medium))
+                    .font(.system(size: UsageRailLayout.scaled(26), weight: .medium))
                     .foregroundStyle(.white)
                     .scaleEffect(isHovering ? 1 : 0.55)
                     .rotationEffect(.degrees(isHovering ? 0 : -35))
                     .opacity(isHovering ? 1 : 0)
             }
             .frame(
-                width: UsageRailLayout.scaled(52),
-                height: UsageRailLayout.scaled(52)
+                width: UsageRailLayout.settingsDiameter,
+                height: UsageRailLayout.settingsDiameter
             )
         }
         .buttonStyle(.plain)
@@ -183,22 +191,26 @@ private struct UsageRailShape: Shape {
     func path(in rect: CGRect) -> Path {
         let width = rect.width
         let height = rect.height
-        let transition = min(UsageRailLayout.transitionHeight, height / 3)
+        let topTransition = min(UsageRailLayout.transitionHeight, height / 2)
+        let bottomTransition = min(
+            UsageRailLayout.transitionHeight + UsageRailLayout.settingsAreaHeight,
+            height - topTransition
+        )
 
         var path = Path()
         path.move(to: CGPoint(x: width, y: 0))
         path.addLine(to: CGPoint(x: width, y: height))
-        addUsageRailBottomCurve(to: &path, in: rect, transition: transition)
-        path.addLine(to: CGPoint(x: 0, y: transition))
+        addUsageRailBottomCurve(to: &path, in: rect, transition: bottomTransition)
+        path.addLine(to: CGPoint(x: 0, y: topTransition))
         path.addCurve(
-            to: CGPoint(x: width * 0.52, y: transition * 0.52),
-            control1: CGPoint(x: 0, y: transition * 0.68),
-            control2: CGPoint(x: width * 0.18, y: transition * 0.54)
+            to: CGPoint(x: width * 0.52, y: topTransition * 0.52),
+            control1: CGPoint(x: 0, y: topTransition * 0.68),
+            control2: CGPoint(x: width * 0.18, y: topTransition * 0.54)
         )
         path.addCurve(
             to: CGPoint(x: width, y: 0),
-            control1: CGPoint(x: width * 0.86, y: transition * 0.5),
-            control2: CGPoint(x: width, y: transition * 0.32)
+            control1: CGPoint(x: width * 0.86, y: topTransition * 0.5),
+            control2: CGPoint(x: width, y: topTransition * 0.32)
         )
         path.closeSubpath()
         return path
@@ -207,10 +219,14 @@ private struct UsageRailShape: Shape {
 
 private struct UsageRailBottomArcShape: Shape {
     func path(in rect: CGRect) -> Path {
-        let transition = min(UsageRailLayout.transitionHeight, rect.height / 3)
+        let topTransition = min(UsageRailLayout.transitionHeight, rect.height / 2)
+        let bottomTransition = min(
+            UsageRailLayout.transitionHeight + UsageRailLayout.settingsAreaHeight,
+            rect.height - topTransition
+        )
         var path = Path()
         path.move(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        addUsageRailBottomCurve(to: &path, in: rect, transition: transition)
+        addUsageRailBottomCurve(to: &path, in: rect, transition: bottomTransition)
         return path
     }
 }
@@ -239,10 +255,12 @@ private struct UsageRailHitShape: Shape {
         var path = UsageRailShape().path(in: rect)
         path.addEllipse(
             in: CGRect(
-                x: rect.midX - UsageRailLayout.scaled(26),
-                y: rect.maxY - UsageRailLayout.scaled(70),
-                width: UsageRailLayout.scaled(52),
-                height: UsageRailLayout.scaled(52)
+                x: rect.midX - UsageRailLayout.settingsDiameter / 2,
+                y: rect.maxY
+                    - UsageRailLayout.settingsBottomPadding
+                    - UsageRailLayout.settingsDiameter,
+                width: UsageRailLayout.settingsDiameter,
+                height: UsageRailLayout.settingsDiameter
             )
         )
         return path
