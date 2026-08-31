@@ -212,8 +212,8 @@ private struct ProviderRailItem: View {
                 Circle()
                     .stroke(.white.opacity(0.08), lineWidth: 1)
                     .padding(7)
-                Image(systemName: descriptor.symbol)
-                    .font(.system(size: 20, weight: .medium))
+                ProviderIconView(provider: descriptor)
+                    .frame(width: 22, height: 22)
                     .foregroundStyle(.white)
                     .symbolEffect(.pulse, isActive: usage.state == .loading)
             }
