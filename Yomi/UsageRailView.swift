@@ -93,8 +93,8 @@ struct UsageRailView: View {
         .overlay(alignment: .bottom) {
             SettingsQuarterArcShape()
                 .trim(
-                    from: isHovering ? 0.5 : 0,
-                    to: isHovering ? 0.5 : 1
+                    from: isHovering ? 0.5 : 0.25,
+                    to: isHovering ? 0.5 : 0.75
                 )
                 .stroke(
                     .black,
@@ -106,6 +106,10 @@ struct UsageRailView: View {
                 .frame(
                     width: UsageRailLayout.settingsArcSize,
                     height: UsageRailLayout.settingsArcSize
+                )
+                .offset(
+                    x: -UsageRailLayout.scaled(8),
+                    y: UsageRailLayout.scaled(12)
                 )
                 .padding(.bottom, UsageRailLayout.settingsArcBottomPadding)
                 .opacity(isHovering ? 0 : 1)
