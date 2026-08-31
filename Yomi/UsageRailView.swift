@@ -11,8 +11,8 @@ enum UsageRailLayout {
     static let settingsDiameter: CGFloat = scaled(56)
     static let settingsAreaHeight: CGFloat = scaled(68)
     static let settingsBottomPadding: CGFloat = scaled(6)
-    static let bottomRightExtension: CGFloat = scaled(8)
-    static let bottomExteriorSpace: CGFloat = scaled(12)
+    static let rightEdgeExtension: CGFloat = scaled(16)
+    static let bottomExteriorSpace: CGFloat = scaled(4)
 
     static func scaled(_ value: CGFloat) -> CGFloat {
         value * scale
@@ -217,9 +217,11 @@ private struct UsageRailShape: Shape {
     func path(in rect: CGRect) -> Path {
         let width = rect.width
         let height = rect.height
-        let topTransition = min(UsageRailLayout.transitionHeight, height / 2)
+        let edgeTransition = UsageRailLayout.transitionHeight
+            + UsageRailLayout.rightEdgeExtension
+        let topTransition = min(edgeTransition, height / 2)
         let bottomTransition = min(
-            UsageRailLayout.transitionHeight + UsageRailLayout.bottomRightExtension,
+            edgeTransition,
             height - topTransition
         )
 
@@ -240,11 +242,15 @@ private func addUsageRailTopCurve(
     transition: CGFloat
 ) {
     let width = rect.width
-    let rightRadius = width / 2
-    let leftRadius = transition - rightRadius
-    let leftEdge = width - transition
+    let rightHorizontalRadius = width / 2
+    let leftRadius = UsageRailLayout.transitionHeight - rightHorizontalRadius
+    let rightVerticalRadius = transition - leftRadius
+    let leftEdge = UsageRailLayout.leftEdgeInset
     let control = 0.552_284_75
-    let midpoint = CGPoint(x: width - rightRadius, y: rightRadius)
+    let midpoint = CGPoint(
+        x: width - rightHorizontalRadius,
+        y: rightVerticalRadius
+    )
     path.addCurve(
         to: midpoint,
         control1: CGPoint(
@@ -259,12 +265,12 @@ private func addUsageRailTopCurve(
     path.addCurve(
         to: CGPoint(x: width, y: 0),
         control1: CGPoint(
-            x: midpoint.x + rightRadius * control,
+            x: midpoint.x + rightHorizontalRadius * control,
             y: midpoint.y
         ),
         control2: CGPoint(
             x: width,
-            y: rightRadius * control
+            y: rightVerticalRadius * control
         )
     )
 }
