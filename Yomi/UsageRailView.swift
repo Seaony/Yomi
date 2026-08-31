@@ -11,7 +11,8 @@ enum UsageRailLayout {
     static let settingsDiameter: CGFloat = scaled(56)
     static let settingsAreaHeight: CGFloat = scaled(68)
     static let settingsBottomPadding: CGFloat = scaled(6)
-    static let bottomExteriorSpace: CGFloat = scaled(20)
+    static let bottomRightExtension: CGFloat = scaled(8)
+    static let bottomExteriorSpace: CGFloat = scaled(12)
 
     static func scaled(_ value: CGFloat) -> CGFloat {
         value * scale
@@ -218,7 +219,7 @@ private struct UsageRailShape: Shape {
         let height = rect.height
         let topTransition = min(UsageRailLayout.transitionHeight, height / 2)
         let bottomTransition = min(
-            UsageRailLayout.transitionHeight,
+            UsageRailLayout.transitionHeight + UsageRailLayout.bottomRightExtension,
             height - topTransition
         )
 
@@ -275,22 +276,23 @@ private func addUsageRailBottomCurve(
 ) {
     let width = rect.width
     let height = rect.height
-    let rightRadius = width / 2
-    let leftRadius = transition - rightRadius
-    let leftEdge = width - transition
+    let rightHorizontalRadius = width / 2
+    let leftRadius = UsageRailLayout.transitionHeight - rightHorizontalRadius
+    let rightVerticalRadius = transition - leftRadius
+    let leftEdge = UsageRailLayout.leftEdgeInset
     let control = 0.552_284_75
     let midpoint = CGPoint(
-        x: width - rightRadius,
-        y: height - rightRadius
+        x: width - rightHorizontalRadius,
+        y: height - rightVerticalRadius
     )
     path.addCurve(
         to: midpoint,
         control1: CGPoint(
             x: width,
-            y: height - rightRadius * control
+            y: height - rightVerticalRadius * control
         ),
         control2: CGPoint(
-            x: midpoint.x + rightRadius * control,
+            x: midpoint.x + rightHorizontalRadius * control,
             y: midpoint.y
         )
     )
