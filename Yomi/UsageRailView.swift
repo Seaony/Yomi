@@ -537,8 +537,8 @@ private struct ProviderRailItem: View {
                     .padding(UsageRailLayout.scaled(7))
                 ProviderIconView(provider: descriptor)
                     .frame(
-                        width: UsageRailLayout.scaled(26),
-                        height: UsageRailLayout.scaled(26)
+                        width: UsageRailLayout.scaled(32),
+                        height: UsageRailLayout.scaled(32)
                     )
                     .foregroundStyle(tint)
                     .symbolEffect(.pulse, isActive: usage.state == .loading)

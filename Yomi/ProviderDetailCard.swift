@@ -122,23 +122,17 @@ struct ProviderDetailCard: View {
 
     private var footer: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(copy.text("30 天总 Token", "30-day tokens"))
-                    .font(.system(size: 9, weight: .medium))
-                Text(last30DaysValue)
-                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Text("\(copy.text("30 天", "30-day")) \(last30DaysValue)")
+                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(copy.text("周预估额度", "Est. weekly quota"))
-                    .font(.system(size: 9, weight: .medium))
-                Text(weeklyEstimateValue)
-                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-            }
-            .frame(maxWidth: .infinity, alignment: .trailing)
+            Text("\(weeklyEstimateValue) Weekly")
+                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.42))
         .padding(.top, 2)
