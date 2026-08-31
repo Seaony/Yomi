@@ -96,14 +96,30 @@ struct UsageRailView: View {
             }
             .padding(.bottom, UsageRailLayout.scaled(18))
         }
+        .overlay {
+            UsageRailBottomArcShape()
+                .trim(
+                    from: isHovering ? 0.5 : 0.34,
+                    to: isHovering ? 0.5 : 0.68
+                )
+                .stroke(
+                    .black,
+                    style: StrokeStyle(
+                        lineWidth: UsageRailLayout.scaled(5),
+                        lineCap: .round
+                    )
+                )
+                .offset(y: UsageRailLayout.scaled(12))
+                .opacity(isHovering ? 0 : 1)
+                .animation(
+                    .spring(response: 0.34, dampingFraction: 0.78),
+                    value: isHovering
+                )
+        }
         .coordinateSpace(name: "usageRail")
         .background {
             UsageRailShape()
                 .fill(.black.opacity(isHovering ? 0.96 : 0.92))
-                .overlay {
-                    UsageRailShape()
-                        .stroke(.white.opacity(0.06), lineWidth: UsageRailLayout.scaled(1))
-                }
         }
         .contentShape(UsageRailHitShape())
         .scaleEffect(appeared ? 1 : 0.96, anchor: .trailing)
@@ -141,21 +157,6 @@ private struct SettingsHoverControl: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                SettingsArcShape()
-                    .trim(from: 0, to: isHovering ? 0 : 1)
-                    .stroke(
-                        .black,
-                        style: StrokeStyle(
-                            lineWidth: UsageRailLayout.scaled(5),
-                            lineCap: .round
-                        )
-                    )
-                    .frame(
-                        width: UsageRailLayout.scaled(42),
-                        height: UsageRailLayout.scaled(42)
-                    )
-                    .opacity(isHovering ? 0 : 1)
-
                 Circle()
                     .fill(.black)
                     .frame(
@@ -185,33 +186,6 @@ private struct SettingsHoverControl: View {
     }
 }
 
-private struct SettingsArcShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(
-            to: CGPoint(
-                x: rect.minX + UsageRailLayout.scaled(7),
-                y: rect.minY + UsageRailLayout.scaled(8)
-            )
-        )
-        path.addCurve(
-            to: CGPoint(
-                x: rect.maxX - UsageRailLayout.scaled(7),
-                y: rect.maxY - UsageRailLayout.scaled(6)
-            ),
-            control1: CGPoint(
-                x: rect.midX + UsageRailLayout.scaled(5),
-                y: rect.minY + UsageRailLayout.scaled(11)
-            ),
-            control2: CGPoint(
-                x: rect.maxX - UsageRailLayout.scaled(5),
-                y: rect.midY + UsageRailLayout.scaled(2)
-            )
-        )
-        return path
-    }
-}
-
 private struct ProviderAnchorYKey: PreferenceKey {
     nonisolated static let defaultValue: [ProviderID: CGFloat] = [:]
 
@@ -232,16 +206,7 @@ private struct UsageRailShape: Shape {
         var path = Path()
         path.move(to: CGPoint(x: width, y: 0))
         path.addLine(to: CGPoint(x: width, y: height))
-        path.addCurve(
-            to: CGPoint(x: width * 0.52, y: height - transition * 0.52),
-            control1: CGPoint(x: width, y: height - transition * 0.32),
-            control2: CGPoint(x: width * 0.86, y: height - transition * 0.5)
-        )
-        path.addCurve(
-            to: CGPoint(x: 0, y: height - transition),
-            control1: CGPoint(x: width * 0.18, y: height - transition * 0.54),
-            control2: CGPoint(x: 0, y: height - transition * 0.68)
-        )
+        addUsageRailBottomCurve(to: &path, in: rect, transition: transition)
         path.addLine(to: CGPoint(x: 0, y: transition))
         path.addCurve(
             to: CGPoint(x: width * 0.52, y: transition * 0.52),
@@ -256,6 +221,35 @@ private struct UsageRailShape: Shape {
         path.closeSubpath()
         return path
     }
+}
+
+private struct UsageRailBottomArcShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let transition = min(UsageRailLayout.transitionHeight, rect.height / 3)
+        var path = Path()
+        path.move(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        addUsageRailBottomCurve(to: &path, in: rect, transition: transition)
+        return path
+    }
+}
+
+private func addUsageRailBottomCurve(
+    to path: inout Path,
+    in rect: CGRect,
+    transition: CGFloat
+) {
+    let width = rect.width
+    let height = rect.height
+    path.addCurve(
+        to: CGPoint(x: width * 0.52, y: height - transition * 0.52),
+        control1: CGPoint(x: width, y: height - transition * 0.32),
+        control2: CGPoint(x: width * 0.86, y: height - transition * 0.5)
+    )
+    path.addCurve(
+        to: CGPoint(x: 0, y: height - transition),
+        control1: CGPoint(x: width * 0.18, y: height - transition * 0.54),
+        control2: CGPoint(x: 0, y: height - transition * 0.68)
+    )
 }
 
 private struct UsageRailHitShape: Shape {
