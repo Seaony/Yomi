@@ -63,30 +63,16 @@ struct UsageRailView: View {
                     .overlay(.white.opacity(0.08))
                     .padding(.horizontal, 16)
 
-                HStack(spacing: 8) {
-                    Button {
-                        Task { await store.refresh() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 13, weight: .semibold))
-                            .frame(width: 32, height: 32)
-                            .background(.white.opacity(0.08), in: Circle())
-                            .symbolEffect(.rotate, isActive: store.isRefreshing)
-                    }
-                    .buttonStyle(.plain)
-                    .help("刷新用量")
-
-                    Button {
-                        openSettings(nil)
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 16, weight: .medium))
-                            .frame(width: 34, height: 34)
-                            .background(.white.opacity(0.10), in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("设置")
+                Button {
+                    openSettings(nil)
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 16, weight: .medium))
+                        .frame(width: 34, height: 34)
+                        .background(.white.opacity(0.10), in: Circle())
                 }
+                .buttonStyle(.plain)
+                .help("设置")
                 .foregroundStyle(.white)
                 .padding(.vertical, 10)
             }
