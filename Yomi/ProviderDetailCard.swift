@@ -7,14 +7,14 @@ struct ProviderDetailCard: View {
     let settings: () -> Void
 
     private var tint: Color {
-        Color(hue: descriptor.hue, saturation: 0.92, brightness: 1)
+        ProviderBrandColors.color(for: descriptor.id)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
             HStack(spacing: 10) {
-                Image(systemName: descriptor.symbol)
-                    .font(.system(size: 20, weight: .medium))
+                ProviderIconView(provider: descriptor)
+                    .frame(width: 20, height: 20)
                     .foregroundStyle(tint)
                     .frame(width: 28, height: 28)
                 VStack(alignment: .leading, spacing: 1) {

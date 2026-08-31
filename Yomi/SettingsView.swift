@@ -166,9 +166,9 @@ private struct ProviderSettingsRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: descriptor.symbol)
-                .foregroundStyle(Color(hue: descriptor.hue, saturation: 0.78, brightness: 0.90))
-                .frame(width: 22)
+            ProviderIconView(provider: descriptor)
+                .frame(width: 22, height: 22)
+                .foregroundStyle(ProviderBrandColors.color(for: descriptor.id))
             VStack(alignment: .leading, spacing: 2) {
                 Text(descriptor.name).lineLimit(1)
                 Text(statusText)
@@ -212,9 +212,9 @@ private struct ProviderConfigurationView: View {
         Form {
             Section {
                 HStack(spacing: 14) {
-                    Image(systemName: descriptor.symbol)
-                        .font(.system(size: 28, weight: .medium))
-                        .foregroundStyle(Color(hue: descriptor.hue, saturation: 0.84, brightness: 0.92))
+                    ProviderIconView(provider: descriptor)
+                        .frame(width: 28, height: 28)
+                        .foregroundStyle(ProviderBrandColors.color(for: descriptor.id))
                         .frame(width: 48, height: 48)
                         .background(.quaternary, in: RoundedRectangle(cornerRadius: 13))
                     VStack(alignment: .leading, spacing: 3) {
@@ -311,9 +311,10 @@ private struct ProviderConfigurationView: View {
 private struct AboutSettingsView: View {
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: "chart.donut")
-                .font(.system(size: 58, weight: .light))
-                .foregroundStyle(.orange)
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 72, height: 72)
             Text("Yomi").font(.largeTitle.weight(.semibold))
             Text("跨 Provider 用量一览")
                 .foregroundStyle(.secondary)

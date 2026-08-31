@@ -350,7 +350,7 @@ private struct UsageRailHitShape: Shape {
     }
 }
 
-private enum ProviderBrandColors {
+enum ProviderBrandColors {
     private static let values: [String: UInt32] = [
         "abacus": 0x38BDF8,
         "aiand": 0xE25C2B,
