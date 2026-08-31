@@ -107,7 +107,8 @@ actor UsageCollector {
         guard (200..<300).contains(http.statusCode) else {
             throw UsageCollectionError.requestFailed(http.statusCode)
         }
-        return try UsageParser.parse(data, descriptor: descriptor)
+        let usage = try UsageParser.parse(data, descriptor: descriptor)
+        return addingLocalPlanIfNeeded(to: usage, descriptor: descriptor)
     }
 
     private func localUsage(descriptor: ProviderDescriptor) throws -> ProviderUsage {
@@ -115,7 +116,7 @@ actor UsageCollector {
         for url in localCandidates(for: descriptor.id) where manager.fileExists(atPath: url.path) {
             if let data = try? boundedData(from: url),
                let usage = try? UsageParser.parse(data, descriptor: descriptor) {
-                return usage
+                return addingLocalPlanIfNeeded(to: usage, descriptor: descriptor)
             }
         }
 
@@ -134,7 +135,7 @@ actor UsageCollector {
             for file in files.prefix(12) {
                 if let data = try? boundedData(from: file),
                    let usage = try? UsageParser.parse(data, descriptor: descriptor) {
-                    return usage
+                    return addingLocalPlanIfNeeded(to: usage, descriptor: descriptor)
                 }
             }
         }
@@ -145,7 +146,7 @@ actor UsageCollector {
         let cleaned = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw UsageCollectionError.commandFailed("未配置命令") }
 
-        return try await withCheckedThrowingContinuation { continuation in
+        let usage = try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 let process = Process()
                 let output = Pipe()
@@ -170,6 +171,7 @@ actor UsageCollector {
                 }
             }
         }
+        return addingLocalPlanIfNeeded(to: usage, descriptor: descriptor)
     }
 
     private func environmentSecret(for descriptor: ProviderDescriptor) -> String {
@@ -189,6 +191,33 @@ actor UsageCollector {
             return value
         }
         return ""
+    }
+
+    private func addingLocalPlanIfNeeded(
+        to usage: ProviderUsage,
+        descriptor: ProviderDescriptor
+    ) -> ProviderUsage {
+        guard usage.plan == nil, let plan = localPlan(for: descriptor) else { return usage }
+        var enriched = usage
+        enriched.plan = plan
+        return enriched
+    }
+
+    private func localPlan(for descriptor: ProviderDescriptor) -> String? {
+        guard descriptor.id.rawValue == "claude" else { return nil }
+        let profileURL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude.json")
+        guard let data = try? Data(contentsOf: profileURL),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let account = root["oauthAccount"] as? [String: Any]
+        else { return nil }
+
+        for key in ["organizationRateLimitTier", "subscriptionType", "billingType"] {
+            guard let value = account[key] as? String,
+                  let plan = UsageParser.displayPlan(value, descriptor: descriptor)
+            else { continue }
+            return plan
+        }
+        return nil
     }
 
     private func findString(in value: Any, keys: Set<String>) -> String? {

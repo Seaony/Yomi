@@ -188,7 +188,6 @@ struct ProviderDetailPanelView: View {
         .background {
             ProviderDetailPanelShape()
                 .fill(Color(red: 0.075, green: 0.075, blue: 0.085))
-                .shadow(color: .black.opacity(0.38), radius: 16, y: 8)
         }
         .padding(16)
     }

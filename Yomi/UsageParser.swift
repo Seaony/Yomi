@@ -78,12 +78,18 @@ nonisolated enum UsageParser {
             )]
         }
 
+        let rawPlan = firstString(named: [
+            "plan", "tier", "subscription", "plan_name", "plan_type",
+            "subscription_type", "login_method", "rate_limit_tier",
+            "organization_rate_limit_tier",
+        ], in: objects)
+
         return ProviderUsage(
             id: descriptor.id,
             state: .ready,
             windows: windows,
             balance: balance,
-            plan: firstString(named: ["plan", "tier", "subscription", "plan_name"], in: objects),
+            plan: rawPlan.flatMap { displayPlan($0, descriptor: descriptor) },
             updatedAt: Date(),
             message: nil
         )
@@ -227,5 +233,34 @@ nonisolated enum UsageParser {
         let digits = value < 10 ? 2 : 0
         let rendered = value.formatted(.number.precision(.fractionLength(0...digits)))
         return metric == .spend || metric == .balance ? "$\(rendered)" : rendered
+    }
+
+    static func displayPlan(_ value: String, descriptor: ProviderDescriptor) -> String? {
+        let normalized = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+        let words = normalized.split(whereSeparator: \Character.isWhitespace).map(String.init)
+        guard !words.isEmpty else { return nil }
+
+        if descriptor.id.rawValue == "claude" {
+            if words.contains("max") {
+                let multiplier = words.first { word in
+                    word.last == "x" && Int(word.dropLast()) != nil
+                }
+                return multiplier.map { "Max \($0)" } ?? "Max"
+            }
+            if words.contains("pro") { return "Pro" }
+            if words.contains("team") { return "Team" }
+            if words.contains("enterprise") { return "Enterprise" }
+            if words.contains("ultra") { return "Ultra" }
+        }
+
+        let displayWords = words
+            .filter { !["default", "account", "plan"].contains($0) }
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+        guard !displayWords.isEmpty else { return nil }
+        return displayWords.joined(separator: " ")
     }
 }
