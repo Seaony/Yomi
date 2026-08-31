@@ -135,8 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let root = ProviderDetailPanelView(
             store: store,
-            descriptor: descriptor,
-            settings: { [weak self] in self?.openSettings(providerID: descriptor.id) }
+            descriptor: descriptor
         )
         let hostingView = NSHostingView(rootView: root)
         let fittingSize = hostingView.fittingSize

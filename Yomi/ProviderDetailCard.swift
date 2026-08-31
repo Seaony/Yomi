@@ -3,78 +3,166 @@ import SwiftUI
 struct ProviderDetailCard: View {
     let descriptor: ProviderDescriptor
     let usage: ProviderUsage
-    let refresh: () -> Void
-    let settings: () -> Void
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 24, alignment: .leading),
+        GridItem(.flexible(), spacing: 24, alignment: .leading),
+    ]
 
     private var tint: Color {
         ProviderBrandColors.color(for: descriptor.id)
     }
 
+    private var headlineValue: String {
+        if [.balance, .credits, .spend].contains(descriptor.metricKind),
+           let balance = usage.balance {
+            return balance
+        }
+        return "\(Int((usage.headlineFraction * 100).rounded()))%"
+    }
+
+    private var headlineCaption: String {
+        guard let window = usage.windows.first else { return "当前用量" }
+        return "\(window.label) · 已用"
+    }
+
+    private var summaryMetrics: [DetailMetric] {
+        var metrics: [DetailMetric] = []
+        if let balance = usage.balance {
+            metrics.append(DetailMetric(label: "≈ 余额", value: balance))
+        }
+        if let first = usage.windows.first {
+            metrics.append(DetailMetric(
+                label: "剩余额度",
+                value: "\(Int(((1 - first.clampedFraction) * 100).rounded()))%"
+            ))
+        }
+        for window in usage.windows.dropFirst().prefix(2) {
+            metrics.append(DetailMetric(
+                label: window.label,
+                value: "\(Int((window.clampedFraction * 100).rounded()))% 已用"
+            ))
+        }
+        if let nextReset = usage.windows.compactMap(\.resetsAt).min() {
+            metrics.append(DetailMetric(label: "下次重置", value: compactDuration(until: nextReset)))
+        }
+        if let updatedAt = usage.updatedAt {
+            metrics.append(DetailMetric(
+                label: "更新时间",
+                value: updatedAt.formatted(date: .omitted, time: .shortened)
+            ))
+        }
+        return metrics
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            HStack(spacing: 10) {
-                ProviderIconView(provider: descriptor)
-                    .frame(width: 20, height: 20)
-                    .foregroundStyle(tint)
-                    .frame(width: 28, height: 28)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("\(descriptor.name) Usage")
-                        .font(.system(size: 17, weight: .semibold))
-                    if let plan = usage.plan {
-                        Text(plan)
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.48))
-                    }
-                }
-                Spacer()
-                Button(action: refresh) {
-                    Image(systemName: "arrow.clockwise")
-                        .frame(width: 28, height: 28)
-                        .background(.white.opacity(0.08), in: Circle())
-                }
-                .buttonStyle(.plain)
-                Button(action: settings) {
-                    Image(systemName: "slider.horizontal.3")
-                        .frame(width: 28, height: 28)
-                        .background(.white.opacity(0.08), in: Circle())
-                }
-                .buttonStyle(.plain)
-            }
+        VStack(alignment: .leading, spacing: 18) {
+            header
 
             if usage.windows.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label(usage.state == .loading ? "正在读取用量" : "暂时无法显示用量", systemImage: statusSymbol)
-                        .font(.system(size: 13, weight: .medium))
-                    if let message = usage.message {
-                        Text(message)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.48))
-                            .fixedSize(horizontal: false, vertical: true)
+                emptyState
+            } else {
+                headline
+
+                if !summaryMetrics.isEmpty {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                        ForEach(summaryMetrics) { metric in
+                            DetailMetricView(metric: metric)
+                        }
                     }
                 }
-                .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-            } else {
-                ForEach(Array(usage.windows.prefix(3))) { window in
-                    UsageWindowRow(window: window, tint: tint)
-                }
-            }
 
-            HStack {
-                if let balance = usage.balance {
-                    Text("余额 \(balance)")
+                Divider()
+                    .overlay(.white.opacity(0.14))
+
+                VStack(spacing: 15) {
+                    ForEach(Array(usage.windows.prefix(3))) { window in
+                        UsageWindowRow(window: window, tint: tint)
+                    }
                 }
-                Spacer()
-                if let updatedAt = usage.updatedAt {
-                    Text("更新于 \(updatedAt.formatted(date: .omitted, time: .shortened))")
-                }
+
+                footer
             }
-            .font(.system(size: 10.5))
-            .foregroundStyle(.white.opacity(0.38))
         }
-        .padding(18)
-        .frame(width: 360)
+        .padding(20)
+        .frame(width: 420)
         .foregroundStyle(.white)
         .preferredColorScheme(.dark)
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(tint)
+                .frame(width: 9, height: 9)
+
+            Text(descriptor.name)
+                .font(.system(size: 18, weight: .bold, design: .rounded))
+
+            Spacer()
+
+            if let plan = usage.plan {
+                Text(plan)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 6)
+                    .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            }
+        }
+    }
+
+    private var headline: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(headlineValue)
+                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .monospacedDigit()
+            Text(headlineCaption)
+                .font(.system(size: 13.5, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.48))
+                .lineLimit(1)
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Label(
+                usage.state == .loading ? "正在读取用量" : "暂时无法显示用量",
+                systemImage: statusSymbol
+            )
+            .font(.system(size: 14, weight: .semibold))
+
+            if let message = usage.message {
+                Text(message)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.46))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 96, alignment: .leading)
+    }
+
+    private var footer: some View {
+        HStack {
+            if let reset = usage.windows.compactMap(\.resetsAt).min() {
+                Text("\(compactDuration(until: reset)) 后重置")
+            } else if let updatedAt = usage.updatedAt {
+                Text("更新于 \(updatedAt.formatted(date: .omitted, time: .shortened))")
+            }
+
+            Spacer()
+
+            if let balance = usage.balance {
+                Text("余额 \(balance)")
+            } else {
+                Text("\(usage.windows.count) 个额度窗口")
+            }
+        }
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(.white.opacity(0.42))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
     }
 
     private var statusSymbol: String {
@@ -90,19 +178,16 @@ struct ProviderDetailCard: View {
 struct ProviderDetailPanelView: View {
     @ObservedObject var store: UsageStore
     let descriptor: ProviderDescriptor
-    let settings: () -> Void
 
     var body: some View {
         ProviderDetailCard(
             descriptor: descriptor,
-            usage: store.usage(for: descriptor.id),
-            refresh: { Task { await store.refresh() } },
-            settings: settings
+            usage: store.usage(for: descriptor.id)
         )
         .padding(.trailing, ProviderDetailPanelShape.arrowWidth)
         .background {
             ProviderDetailPanelShape()
-                .fill(.black)
+                .fill(Color(red: 0.075, green: 0.075, blue: 0.085))
                 .shadow(color: .black.opacity(0.38), radius: 24, y: 12)
         }
         .padding(24)
@@ -134,43 +219,87 @@ private struct ProviderDetailPanelShape: Shape {
     }
 }
 
+private struct DetailMetric: Identifiable {
+    let label: String
+    let value: String
+
+    var id: String { "\(label)-\(value)" }
+}
+
+private struct DetailMetricView: View {
+    let metric: DetailMetric
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(metric.label)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.44))
+            Text(metric.value)
+                .font(.system(size: 14, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.92))
+                .monospacedDigit()
+                .lineLimit(1)
+        }
+    }
+}
+
 private struct UsageWindowRow: View {
     let window: UsageWindow
     let tint: Color
 
+    private var remainingFraction: Double {
+        1 - window.clampedFraction
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(window.label)
-                    .font(.system(size: 12.5, weight: .medium))
+                    .font(.system(size: 13.5, weight: .bold))
                 Spacer()
-                Text(resetText)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.44))
+                Text("\(Int((remainingFraction * 100).rounded()))% left")
+                    .font(.system(size: 13.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(tint)
+                    .monospacedDigit()
+                if !resetText.isEmpty {
+                    Text(resetText)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.3))
+                        .monospacedDigit()
+                }
             }
 
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(.white.opacity(0.14))
+                    Capsule().fill(.white.opacity(0.13))
                     Capsule()
                         .fill(tint)
-                        .frame(width: max(6, proxy.size.width * window.clampedFraction))
+                        .frame(width: max(5, proxy.size.width * remainingFraction))
                 }
             }
-            .frame(height: 7)
+            .frame(height: 6)
 
-            HStack {
-                Text("\(Int((window.clampedFraction * 100).rounded()))% Used")
-                Spacer()
-                if let detail = window.detail { Text(detail) }
+            if let detail = window.detail {
+                Text(detail)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.34))
             }
-            .font(.system(size: 11.5))
-            .foregroundStyle(.white.opacity(0.78))
         }
     }
 
     private var resetText: String {
         guard let date = window.resetsAt else { return "" }
-        return "Resets \(date.formatted(.relative(presentation: .numeric)))"
+        return compactDuration(until: date)
     }
+}
+
+private func compactDuration(until date: Date) -> String {
+    let seconds = max(0, Int(date.timeIntervalSinceNow))
+    let days = seconds / 86_400
+    let hours = (seconds % 86_400) / 3_600
+    let minutes = (seconds % 3_600) / 60
+
+    if days > 0 { return "\(days)d \(hours)h" }
+    if hours > 0 { return "\(hours)h \(minutes)m" }
+    return "\(minutes)m"
 }
