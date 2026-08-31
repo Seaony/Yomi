@@ -6,10 +6,6 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		A11000013045010E00233947 /* CodexBarCore in Frameworks */ = {isa = PBXBuildFile; productRef = A11000033045010E00233947 /* CodexBarCore */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXFileReference section */
 		752595343045010E00233947 /* Yomi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Yomi.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -27,7 +23,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A11000013045010E00233947 /* CodexBarCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -70,7 +65,6 @@
 			);
 			name = Yomi;
 			packageProductDependencies = (
-				A11000033045010E00233947 /* CodexBarCore */,
 			);
 			productName = Yomi;
 			productReference = 752595343045010E00233947 /* Yomi.app */;
@@ -102,9 +96,6 @@
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 752595353045010E00233947 /* Products */;
-			packageReferences = (
-				A11000023045010E00233947 /* XCRemoteSwiftPackageReference "CodexBar" */,
-			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -263,7 +254,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = G34NXJXW94;
-				ENABLE_APP_SANDBOX = NO;
+				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
@@ -295,7 +286,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = G34NXJXW94;
-				ENABLE_APP_SANDBOX = NO;
+				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
@@ -340,25 +331,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		A11000023045010E00233947 /* XCRemoteSwiftPackageReference "CodexBar" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/steipete/CodexBar.git";
-			requirement = {
-				kind = revision;
-				revision = 64dfef1851c70378dd0c7fa6deaba6a3ba8cc5b9;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		A11000033045010E00233947 /* CodexBarCore */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = A11000023045010E00233947 /* XCRemoteSwiftPackageReference "CodexBar" */;
-			productName = CodexBarCore;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 7525952C3045010E00233947 /* Project object */;
 }
