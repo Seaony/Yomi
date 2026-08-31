@@ -32,6 +32,7 @@ final class UsageStore: ObservableObject {
         preferenceObserver = self.preferences.$configurations
             .dropFirst()
             .sink { [weak self] _ in
+                self?.objectWillChange.send()
                 Task { await self?.refresh() }
             }
     }

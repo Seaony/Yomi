@@ -6,6 +6,7 @@ enum UsageRailLayout {
     static let minimumPanelHeight: CGFloat = scaled(140)
     static let transitionHeight: CGFloat = scaled(88)
     static let contentInset: CGFloat = scaled(64)
+    static let bottomContentInset: CGFloat = scaled(16)
     static let settingsDiameter: CGFloat = scaled(56)
     static let settingsAreaHeight: CGFloat = scaled(68)
     static let settingsBottomPadding: CGFloat = scaled(6)
@@ -24,6 +25,7 @@ struct UsageRailView: View {
     @State private var appeared = false
     @State private var isHovering = false
     @State private var providerAnchorY: [ProviderID: CGFloat] = [:]
+    @State private var providerRowHeights: [ProviderID: CGFloat] = [:]
     @AppStorage("show-provider-names") private var showProviderNames = true
 
     var body: some View {
@@ -60,26 +62,22 @@ struct UsageRailView: View {
                                             + UsageRailLayout.scaled(28)
                                     ]
                                 )
+                                .preference(
+                                    key: ProviderRowHeightKey.self,
+                                    value: [descriptor.id: proxy.size.height]
+                                )
                             }
                         }
                     }
                 }
                 .padding(.vertical, UsageRailLayout.scaled(6))
                 .padding(.horizontal, UsageRailLayout.scaled(9))
-                .background {
-                    GeometryReader { proxy in
-                        Color.clear.preference(
-                            key: ProviderSectionHeightKey.self,
-                            value: proxy.size.height
-                        )
-                    }
-                }
             }
             .scrollIndicators(.never)
 
             Color.clear
                 .frame(
-                    height: UsageRailLayout.contentInset
+                    height: UsageRailLayout.bottomContentInset
                         + UsageRailLayout.settingsAreaHeight
                 )
         }
@@ -119,24 +117,37 @@ struct UsageRailView: View {
         .opacity(appeared ? 1 : 0)
         .onAppear {
             withAnimation(.spring(response: 0.48, dampingFraction: 0.82)) { appeared = true }
+            reportContentHeight(providerRows: providerRowHeights)
         }
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.18)) { isHovering = hovering }
         }
-        .onPreferenceChange(ProviderSectionHeightKey.self) { height in
-            reportContentHeight(providerSection: height)
+        .onPreferenceChange(ProviderRowHeightKey.self) { heights in
+            providerRowHeights = heights
+            reportContentHeight(providerRows: heights)
+        }
+        .onChange(of: store.enabledProviders.map(\.id)) { _, _ in
+            reportContentHeight(providerRows: providerRowHeights)
         }
         .onPreferenceChange(ProviderAnchorYKey.self) { providerAnchorY = $0 }
         .preferredColorScheme(.dark)
     }
 
-    private func reportContentHeight(providerSection: CGFloat) {
-        guard providerSection > 0 else { return }
-        contentHeightChanged(
-            providerSection
-                + UsageRailLayout.contentInset * 2
-                + UsageRailLayout.settingsAreaHeight
-        )
+    private func reportContentHeight(providerRows: [ProviderID: CGFloat]) {
+        let providers = store.enabledProviders
+        guard providers.allSatisfy({ providerRows[$0.id] != nil }) else { return }
+        let rowsHeight = providers.reduce(CGFloat.zero) { result, provider in
+            result + (providerRows[provider.id] ?? 0)
+        }
+        let spacing = CGFloat(max(providers.count - 1, 0)) * UsageRailLayout.scaled(12)
+        let sectionPadding = UsageRailLayout.scaled(12)
+        let height = rowsHeight
+            + spacing
+            + sectionPadding
+            + UsageRailLayout.contentInset
+            + UsageRailLayout.bottomContentInset
+            + UsageRailLayout.settingsAreaHeight
+        contentHeightChanged(height)
     }
 }
 
@@ -187,13 +198,24 @@ private struct ProviderAnchorYKey: PreferenceKey {
     }
 }
 
+private struct ProviderRowHeightKey: PreferenceKey {
+    nonisolated static let defaultValue: [ProviderID: CGFloat] = [:]
+
+    nonisolated static func reduce(
+        value: inout [ProviderID: CGFloat],
+        nextValue: () -> [ProviderID: CGFloat]
+    ) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
 private struct UsageRailShape: Shape {
     func path(in rect: CGRect) -> Path {
         let width = rect.width
         let height = rect.height
         let topTransition = min(UsageRailLayout.transitionHeight, height / 2)
         let bottomTransition = min(
-            UsageRailLayout.transitionHeight + UsageRailLayout.settingsAreaHeight,
+            UsageRailLayout.transitionHeight + UsageRailLayout.bottomContentInset,
             height - topTransition
         )
 
@@ -221,7 +243,7 @@ private struct UsageRailBottomArcShape: Shape {
     func path(in rect: CGRect) -> Path {
         let topTransition = min(UsageRailLayout.transitionHeight, rect.height / 2)
         let bottomTransition = min(
-            UsageRailLayout.transitionHeight + UsageRailLayout.settingsAreaHeight,
+            UsageRailLayout.transitionHeight + UsageRailLayout.bottomContentInset,
             rect.height - topTransition
         )
         var path = Path()
@@ -264,14 +286,6 @@ private struct UsageRailHitShape: Shape {
             )
         )
         return path
-    }
-}
-
-private struct ProviderSectionHeightKey: PreferenceKey {
-    nonisolated static let defaultValue: CGFloat = 0
-
-    nonisolated static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
     }
 }
 

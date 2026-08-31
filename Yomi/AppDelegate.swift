@@ -71,13 +71,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func createPanel() {
-        let height = initialPanelHeight()
+        let visibleHeight = (screenUnderPointer() ?? NSScreen.main)?.visibleFrame.height ?? 900
+        let measurementHeight = max(
+            UsageRailLayout.minimumPanelHeight,
+            visibleHeight - 24
+        )
         let panel = FloatingPanel(
             contentRect: NSRect(
                 x: 0,
                 y: 0,
                 width: UsageRailLayout.panelWidth,
-                height: height
+                height: measurementHeight
             ),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -93,9 +97,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.isMovableByWindowBackground = false
         panel.acceptsMouseMovedEvents = true
         panel.isReleasedWhenClosed = false
+        panel.alphaValue = 0
         panel.originConstraint = { [weak self] origin, size in
             self?.constrainedPanelOrigin(origin, size: size) ?? origin
         }
+        self.panel = panel
         panel.contentView = NSHostingView(rootView: UsageRailView(
             store: store,
             openSettings: { [weak self] providerID in self?.openSettings(providerID: providerID) },
@@ -103,13 +109,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self?.toggleProviderDetail(descriptor, localY: localY)
             },
             contentHeightChanged: { [weak self] height in
-                self?.resizePanel(to: height, animated: true)
+                guard let self else { return }
+                self.resizePanel(to: height, animated: (self.panel?.alphaValue ?? 0) > 0)
             }
         ))
-        self.panel = panel
+        panel.contentView?.layoutSubtreeIfNeeded()
         positionPanel(animated: false)
 
-        panel.alphaValue = 0
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.32
@@ -244,21 +250,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return NSScreen.screens.first { $0.frame.contains(point) }
     }
 
-    private func initialPanelHeight() -> CGFloat {
-        let visibleHeight = (screenUnderPointer() ?? NSScreen.main)?.visibleFrame.height ?? 900
-        let storedShowNames = UserDefaults.standard.object(forKey: "show-provider-names") as? Bool
-        let rowHeight = UsageRailLayout.scaled((storedShowNames ?? true) ? 101 : 84)
-        let verticalSpace = UsageRailLayout.contentInset * 2
-            + UsageRailLayout.settingsAreaHeight
-        let providerCount = store.enabledProviders.count
-        let providerSpacing = CGFloat(max(providerCount - 1, 0)) * UsageRailLayout.scaled(12)
-        let sectionPadding = UsageRailLayout.scaled(12)
-        let contentHeight = CGFloat(providerCount) * rowHeight
-            + providerSpacing
-            + sectionPadding
-            + verticalSpace
-        return min(max(contentHeight, UsageRailLayout.minimumPanelHeight), visibleHeight - 24)
-    }
 }
 
 final class FloatingPanel: NSPanel {
