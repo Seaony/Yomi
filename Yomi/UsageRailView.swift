@@ -68,35 +68,25 @@ struct UsageRailView: View {
             }
             .scrollIndicators(.never)
 
-            VStack(spacing: 0) {
-                Divider()
-                    .overlay(.white.opacity(0.08))
-                    .padding(.horizontal, 16)
-
-                Button {
-                    openSettings(nil)
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 16, weight: .medium))
-                        .frame(width: 34, height: 34)
-                        .background(.white.opacity(0.10), in: Circle())
+            Color.clear
+                .frame(height: 55)
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: FooterHeightKey.self,
+                            value: proxy.size.height
+                        )
+                    }
                 }
-                .buttonStyle(.plain)
-                .help("设置")
-                .foregroundStyle(.white)
-                .padding(.vertical, 10)
-            }
-            .background {
-                GeometryReader { proxy in
-                    Color.clear.preference(
-                        key: FooterHeightKey.self,
-                        value: proxy.size.height
-                    )
-                }
-            }
 
             Color.clear
                 .frame(height: UsageRailLayout.transitionHeight)
+        }
+        .overlay(alignment: .bottom) {
+            SettingsHoverControl(isHovering: isHovering) {
+                openSettings(nil)
+            }
+            .padding(.bottom, 18)
         }
         .coordinateSpace(name: "usageRail")
         .background {
@@ -107,7 +97,7 @@ struct UsageRailView: View {
                         .stroke(.white.opacity(0.06), lineWidth: 1)
                 }
         }
-        .contentShape(UsageRailShape())
+        .contentShape(UsageRailHitShape())
         .scaleEffect(appeared ? 1 : 0.96, anchor: .trailing)
         .opacity(appeared ? 1 : 0)
         .onAppear {
@@ -133,6 +123,58 @@ struct UsageRailView: View {
         contentHeightChanged(
             providerSection + footer + UsageRailLayout.transitionHeight * 2
         )
+    }
+}
+
+private struct SettingsHoverControl: View {
+    let isHovering: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                SettingsArcShape()
+                    .trim(from: 0, to: isHovering ? 0 : 1)
+                    .stroke(
+                        .black,
+                        style: StrokeStyle(lineWidth: 5, lineCap: .round)
+                    )
+                    .frame(width: 42, height: 42)
+                    .opacity(isHovering ? 0 : 1)
+
+                Circle()
+                    .fill(.black)
+                    .frame(width: 52, height: 52)
+                    .scaleEffect(isHovering ? 1 : 0.55)
+                    .opacity(isHovering ? 1 : 0)
+
+                Image(systemName: "gearshape")
+                    .font(.system(size: 21, weight: .medium))
+                    .foregroundStyle(.white)
+                    .scaleEffect(isHovering ? 1 : 0.55)
+                    .rotationEffect(.degrees(isHovering ? 0 : -35))
+                    .opacity(isHovering ? 1 : 0)
+            }
+            .frame(width: 52, height: 52)
+        }
+        .buttonStyle(.plain)
+        .help("设置")
+        .allowsHitTesting(isHovering)
+        .accessibilityHidden(!isHovering)
+        .animation(.spring(response: 0.34, dampingFraction: 0.78), value: isHovering)
+    }
+}
+
+private struct SettingsArcShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + 7, y: rect.minY + 8))
+        path.addCurve(
+            to: CGPoint(x: rect.maxX - 7, y: rect.maxY - 6),
+            control1: CGPoint(x: rect.midX + 5, y: rect.minY + 11),
+            control2: CGPoint(x: rect.maxX - 5, y: rect.midY + 2)
+        )
+        return path
     }
 }
 
@@ -178,6 +220,21 @@ private struct UsageRailShape: Shape {
             control2: CGPoint(x: width, y: transition * 0.32)
         )
         path.closeSubpath()
+        return path
+    }
+}
+
+private struct UsageRailHitShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = UsageRailShape().path(in: rect)
+        path.addEllipse(
+            in: CGRect(
+                x: rect.midX - 26,
+                y: rect.maxY - 70,
+                width: 52,
+                height: 52
+            )
+        )
         return path
     }
 }
