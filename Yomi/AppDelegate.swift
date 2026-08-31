@@ -218,7 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let constrainedY = min(max(origin.y, minimumY), maximumY)
         let travel = maximumY - minimumY
         verticalPosition = travel > 0 ? (constrainedY - minimumY) / travel : 0.5
-        return NSPoint(x: visible.maxX - size.width + 1, y: constrainedY)
+        return NSPoint(x: visible.maxX - size.width + 2, y: constrainedY)
     }
 
     private func positionPanel(animated: Bool) {
@@ -234,7 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let minimumY = visible.minY + 12
         let maximumY = max(minimumY, visible.maxY - height - 12)
         return NSRect(
-            x: visible.maxX - frame.width + 1,
+            x: visible.maxX - frame.width + 2,
             y: minimumY + (maximumY - minimumY) * verticalPosition,
             width: frame.width,
             height: height
