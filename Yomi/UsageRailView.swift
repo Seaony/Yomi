@@ -1,7 +1,14 @@
 import SwiftUI
 
 enum UsageRailLayout {
-    static let transitionHeight: CGFloat = 88
+    static let scale: CGFloat = 0.5
+    static let panelWidth: CGFloat = scaled(104)
+    static let minimumPanelHeight: CGFloat = scaled(140)
+    static let transitionHeight: CGFloat = scaled(88)
+
+    static func scaled(_ value: CGFloat) -> CGFloat {
+        value * scale
+    }
 }
 
 struct UsageRailView: View {
@@ -23,14 +30,14 @@ struct UsageRailView: View {
                 .frame(height: UsageRailLayout.transitionHeight)
 
             ScrollView(.vertical) {
-                VStack(spacing: 12) {
+                VStack(spacing: UsageRailLayout.scaled(12)) {
                     ForEach(Array(store.enabledProviders.enumerated()), id: \.element.id) { index, descriptor in
                         Button {
-                            let rowHeight: CGFloat = showProviderNames ? 101 : 84
+                            let rowHeight = UsageRailLayout.scaled(showProviderNames ? 101 : 84)
                             let fallbackY = UsageRailLayout.transitionHeight
-                                + 20
-                                + 28
-                                + CGFloat(index) * (rowHeight + 12)
+                                + UsageRailLayout.scaled(20)
+                                + UsageRailLayout.scaled(28)
+                                + CGFloat(index) * (rowHeight + UsageRailLayout.scaled(12))
                             let anchorY = providerAnchorY[descriptor.id] ?? fallbackY
                             toggleProviderDetail(descriptor, anchorY)
                         } label: {
@@ -47,16 +54,17 @@ struct UsageRailView: View {
                                 Color.clear.preference(
                                     key: ProviderAnchorYKey.self,
                                     value: [
-                                        descriptor.id: proxy.frame(in: .named("usageRail")).minY + 28
+                                        descriptor.id: proxy.frame(in: .named("usageRail")).minY
+                                            + UsageRailLayout.scaled(28)
                                     ]
                                 )
                             }
                         }
                     }
                 }
-                .padding(.top, 20)
-                .padding(.horizontal, 9)
-                .padding(.bottom, 8)
+                .padding(.top, UsageRailLayout.scaled(20))
+                .padding(.horizontal, UsageRailLayout.scaled(9))
+                .padding(.bottom, UsageRailLayout.scaled(8))
                 .background {
                     GeometryReader { proxy in
                         Color.clear.preference(
@@ -69,7 +77,7 @@ struct UsageRailView: View {
             .scrollIndicators(.never)
 
             Color.clear
-                .frame(height: 55)
+                .frame(height: UsageRailLayout.scaled(55))
                 .background {
                     GeometryReader { proxy in
                         Color.clear.preference(
@@ -86,7 +94,7 @@ struct UsageRailView: View {
             SettingsHoverControl(isHovering: isHovering) {
                 openSettings(nil)
             }
-            .padding(.bottom, 18)
+            .padding(.bottom, UsageRailLayout.scaled(18))
         }
         .coordinateSpace(name: "usageRail")
         .background {
@@ -94,7 +102,7 @@ struct UsageRailView: View {
                 .fill(.black.opacity(isHovering ? 0.96 : 0.92))
                 .overlay {
                     UsageRailShape()
-                        .stroke(.white.opacity(0.06), lineWidth: 1)
+                        .stroke(.white.opacity(0.06), lineWidth: UsageRailLayout.scaled(1))
                 }
         }
         .contentShape(UsageRailHitShape())
@@ -137,25 +145,37 @@ private struct SettingsHoverControl: View {
                     .trim(from: 0, to: isHovering ? 0 : 1)
                     .stroke(
                         .black,
-                        style: StrokeStyle(lineWidth: 5, lineCap: .round)
+                        style: StrokeStyle(
+                            lineWidth: UsageRailLayout.scaled(5),
+                            lineCap: .round
+                        )
                     )
-                    .frame(width: 42, height: 42)
+                    .frame(
+                        width: UsageRailLayout.scaled(42),
+                        height: UsageRailLayout.scaled(42)
+                    )
                     .opacity(isHovering ? 0 : 1)
 
                 Circle()
                     .fill(.black)
-                    .frame(width: 52, height: 52)
+                    .frame(
+                        width: UsageRailLayout.scaled(52),
+                        height: UsageRailLayout.scaled(52)
+                    )
                     .scaleEffect(isHovering ? 1 : 0.55)
                     .opacity(isHovering ? 1 : 0)
 
                 Image(systemName: "gearshape")
-                    .font(.system(size: 21, weight: .medium))
+                    .font(.system(size: UsageRailLayout.scaled(21), weight: .medium))
                     .foregroundStyle(.white)
                     .scaleEffect(isHovering ? 1 : 0.55)
                     .rotationEffect(.degrees(isHovering ? 0 : -35))
                     .opacity(isHovering ? 1 : 0)
             }
-            .frame(width: 52, height: 52)
+            .frame(
+                width: UsageRailLayout.scaled(52),
+                height: UsageRailLayout.scaled(52)
+            )
         }
         .buttonStyle(.plain)
         .help("设置")
@@ -168,11 +188,25 @@ private struct SettingsHoverControl: View {
 private struct SettingsArcShape: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        path.move(to: CGPoint(x: rect.minX + 7, y: rect.minY + 8))
+        path.move(
+            to: CGPoint(
+                x: rect.minX + UsageRailLayout.scaled(7),
+                y: rect.minY + UsageRailLayout.scaled(8)
+            )
+        )
         path.addCurve(
-            to: CGPoint(x: rect.maxX - 7, y: rect.maxY - 6),
-            control1: CGPoint(x: rect.midX + 5, y: rect.minY + 11),
-            control2: CGPoint(x: rect.maxX - 5, y: rect.midY + 2)
+            to: CGPoint(
+                x: rect.maxX - UsageRailLayout.scaled(7),
+                y: rect.maxY - UsageRailLayout.scaled(6)
+            ),
+            control1: CGPoint(
+                x: rect.midX + UsageRailLayout.scaled(5),
+                y: rect.minY + UsageRailLayout.scaled(11)
+            ),
+            control2: CGPoint(
+                x: rect.maxX - UsageRailLayout.scaled(5),
+                y: rect.midY + UsageRailLayout.scaled(2)
+            )
         )
         return path
     }
@@ -229,10 +263,10 @@ private struct UsageRailHitShape: Shape {
         var path = UsageRailShape().path(in: rect)
         path.addEllipse(
             in: CGRect(
-                x: rect.midX - 26,
-                y: rect.maxY - 70,
-                width: 52,
-                height: 52
+                x: rect.midX - UsageRailLayout.scaled(26),
+                y: rect.maxY - UsageRailLayout.scaled(70),
+                width: UsageRailLayout.scaled(52),
+                height: UsageRailLayout.scaled(52)
             )
         )
         return path
@@ -274,33 +308,60 @@ private struct ProviderRailItem: View {
     }
 
     var body: some View {
-        VStack(spacing: 5) {
+        VStack(spacing: UsageRailLayout.scaled(5)) {
             ZStack {
                 Circle()
-                    .stroke(.white.opacity(0.16), style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                    .stroke(
+                        .white.opacity(0.16),
+                        style: StrokeStyle(
+                            lineWidth: UsageRailLayout.scaled(6),
+                            lineCap: .round
+                        )
+                    )
                 Circle()
                     .trim(from: 0, to: animatedFraction)
-                    .stroke(tint, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                    .stroke(
+                        tint,
+                        style: StrokeStyle(
+                            lineWidth: UsageRailLayout.scaled(4),
+                            lineCap: .round
+                        )
+                    )
                     .rotationEffect(.degrees(-90))
                 Circle()
-                    .stroke(.white.opacity(0.08), lineWidth: 1)
-                    .padding(7)
+                    .stroke(.white.opacity(0.08), lineWidth: UsageRailLayout.scaled(1))
+                    .padding(UsageRailLayout.scaled(7))
                 ProviderIconView(provider: descriptor)
-                    .frame(width: 22, height: 22)
+                    .frame(
+                        width: UsageRailLayout.scaled(22),
+                        height: UsageRailLayout.scaled(22)
+                    )
                     .foregroundStyle(.white)
                     .symbolEffect(.pulse, isActive: usage.state == .loading)
             }
-            .frame(width: 56, height: 56)
-            .shadow(color: tint.opacity(hovered ? 0.35 : 0), radius: 12)
+            .frame(
+                width: UsageRailLayout.scaled(56),
+                height: UsageRailLayout.scaled(56)
+            )
+            .shadow(
+                color: tint.opacity(hovered ? 0.35 : 0),
+                radius: UsageRailLayout.scaled(12)
+            )
 
             Text(percentage)
-                .font(.system(size: 19, weight: .regular, design: .rounded))
+                .font(
+                    .system(
+                        size: UsageRailLayout.scaled(19),
+                        weight: .regular,
+                        design: .rounded
+                    )
+                )
                 .monospacedDigit()
                 .foregroundStyle(.white)
 
             if showName {
                 Text(descriptor.shortName)
-                    .font(.system(size: 9, weight: .medium))
+                    .font(.system(size: UsageRailLayout.scaled(9), weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
                     .lineLimit(1)
             }

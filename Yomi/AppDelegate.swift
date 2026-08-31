@@ -73,7 +73,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func createPanel() {
         let height = initialPanelHeight()
         let panel = FloatingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 104, height: height),
+            contentRect: NSRect(
+                x: 0,
+                y: 0,
+                width: UsageRailLayout.panelWidth,
+                height: height
+            ),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -189,7 +194,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func resizePanel(to contentHeight: CGFloat, animated: Bool) {
         guard let panel else { return }
         let visibleHeight = targetScreen()?.visibleFrame.height ?? 900
-        let newHeight = min(max(contentHeight, 140), visibleHeight - 24)
+        let newHeight = min(
+            max(contentHeight, UsageRailLayout.minimumPanelHeight),
+            visibleHeight - 24
+        )
         guard abs(panel.frame.height - newHeight) > 0.5 else { return }
         var frame = panel.frame
         frame.size.height = newHeight
@@ -239,10 +247,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func initialPanelHeight() -> CGFloat {
         let visibleHeight = (screenUnderPointer() ?? NSScreen.main)?.visibleFrame.height ?? 900
         let storedShowNames = UserDefaults.standard.object(forKey: "show-provider-names") as? Bool
-        let rowHeight: CGFloat = (storedShowNames ?? true) ? 101 : 84
+        let rowHeight = UsageRailLayout.scaled((storedShowNames ?? true) ? 101 : 84)
         let transitionSpace = UsageRailLayout.transitionHeight * 2
-        let contentHeight = CGFloat(max(store.enabledProviders.count, 1)) * rowHeight + 84 + transitionSpace
-        return min(max(contentHeight, 140), visibleHeight - 24)
+        let contentHeight = CGFloat(max(store.enabledProviders.count, 1)) * rowHeight
+            + UsageRailLayout.scaled(84)
+            + transitionSpace
+        return min(max(contentHeight, UsageRailLayout.minimumPanelHeight), visibleHeight - 24)
     }
 }
 
