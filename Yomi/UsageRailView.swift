@@ -319,6 +319,89 @@ private struct UsageRailHitShape: Shape {
     }
 }
 
+private enum ProviderBrandColors {
+    private static let values: [String: UInt32] = [
+        "abacus": 0x38BDF8,
+        "aiand": 0xE25C2B,
+        "alibaba": 0xFF6A00,
+        "alibabatokenplan": 0xFF6A00,
+        "amp": 0xDC2626,
+        "antigravity": 0x60BA7E,
+        "augment": 0x6366F1,
+        "azureopenai": 0x0078D4,
+        "bedrock": 0xFF9900,
+        "chutes": 0x3184FF,
+        "claude": 0xCC7C5E,
+        "clawrouter": 0x596EF6,
+        "clinepass": 0x61A3FA,
+        "codebuff": 0x44FF00,
+        "codex": 0x49A3B0,
+        "commandcode": 0xA04DFD,
+        "copilot": 0xA855F7,
+        "crof": 0x2EAB94,
+        "cursor": 0x00BFA5,
+        "deepgram": 0x6467F2,
+        "deepinfra": 0x2A3275,
+        "deepseek": 0x527DF0,
+        "devin": 0x46B482,
+        "doubao": 0x3370FF,
+        "elevenlabs": 0xEBEBE6,
+        "factory": 0xFF6B35,
+        "fireworks": 0xF25B1C,
+        "gemini": 0xAB87EA,
+        "grok": 0x10A37F,
+        "groq": 0xF56844,
+        "ibmbob": 0x0E61FA,
+        "jetbrains": 0xFF3399,
+        "kilo": 0xF27027,
+        "kimi": 0xFE603C,
+        "kiro": 0xFF9900,
+        "litellm": 0x4C89F0,
+        "llmproxy": 0x24B47E,
+        "longcat": 0xFFD100,
+        "manus": 0x34322D,
+        "mimo": 0xFF6900,
+        "minimax": 0xFE603C,
+        "mistral": 0xFF500F,
+        "moonshot": 0x205DEB,
+        "neuralwatt": 0x38D98C,
+        "notion": 0x337EA9,
+        "ollama": 0x888888,
+        "openai": 0x0F826E,
+        "opencode": 0x3B82F6,
+        "opencodego": 0x3B82F6,
+        "openrouter": 0x6467F2,
+        "perplexity": 0x20B2AA,
+        "poe": 0x5D5CDE,
+        "qoder": 0x10B981,
+        "qwencloud": 0x615CED,
+        "sakana": 0x2975DB,
+        "stepfun": 0x2196F2,
+        "sub2api": 0x2DC6D8,
+        "synthetic": 0x141414,
+        "t3chat": 0xF56647,
+        "venice": 0x3399FF,
+        "vertexai": 0x4285F4,
+        "warp": 0x938BB4,
+        "wayfinder": 0x10A37F,
+        "windsurf": 0x34E8BB,
+        "xai": 0x8E8E93,
+        "zai": 0xE85A6A,
+        "zed": 0x084EFF,
+        "zenmux": 0x6C5CE7,
+        "zoommate": 0x0B5CFF,
+    ]
+
+    static func color(for id: ProviderID) -> Color {
+        let value = values[id.rawValue] ?? 0xFFFFFF
+        return Color(
+            red: Double((value >> 16) & 0xFF) / 255,
+            green: Double((value >> 8) & 0xFF) / 255,
+            blue: Double(value & 0xFF) / 255
+        )
+    }
+}
+
 private struct ProviderRailItem: View {
     let descriptor: ProviderDescriptor
     let usage: ProviderUsage
@@ -329,7 +412,7 @@ private struct ProviderRailItem: View {
     @State private var hovered = false
 
     private var tint: Color {
-        Color(hue: descriptor.hue, saturation: 0.92, brightness: 1)
+        ProviderBrandColors.color(for: descriptor.id)
     }
 
     private var percentage: String {
@@ -366,7 +449,7 @@ private struct ProviderRailItem: View {
                         width: UsageRailLayout.scaled(26),
                         height: UsageRailLayout.scaled(26)
                     )
-                    .foregroundStyle(.white)
+                    .foregroundStyle(tint)
                     .symbolEffect(.pulse, isActive: usage.state == .loading)
             }
             .frame(
