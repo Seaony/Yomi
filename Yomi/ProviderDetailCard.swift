@@ -38,6 +38,10 @@ struct ProviderDetailCard: View {
         return compactTokenCount(tokens, language: language)
     }
 
+    private var last30DaysCostValue: String {
+        usage.last30Days?.valueUSD.map { String(format: "$%.2f", $0) } ?? "$—"
+    }
+
     private var weeklyEstimateValue: String {
         guard let value = usage.weeklyEstimate?.valueUSD else { return "—" }
         return "≈ " + compactDollarValue(value)
@@ -69,7 +73,7 @@ struct ProviderDetailCard: View {
     private var header: some View {
         HStack(spacing: 7) {
             ProviderIconView(provider: descriptor)
-                .frame(width: 16, height: 16)
+                .frame(width: 20, height: 20)
                 .foregroundStyle(tint)
 
             Text(descriptor.name)
@@ -151,7 +155,7 @@ struct ProviderDetailCard: View {
 
     private var footer: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text("30Days · \(last30DaysValue)")
+            Text("\(last30DaysValue) · \(last30DaysCostValue)")
                 .font(.system(size: 10.5, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .fixedSize(horizontal: true, vertical: false)

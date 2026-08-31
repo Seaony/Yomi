@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private static let panelVerticalPositionKey = "panel-vertical-position"
 
     let store = UsageStore.shared
+    let updates = UpdateController()
 
     private var panel: FloatingPanel?
     private var providerDetailPanel: ProviderDetailPanel?
@@ -43,7 +44,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func openSettings(providerID: ProviderID? = nil) {
         closeProviderDetail()
         if settingsWindow == nil {
-            let root = SettingsView(store: store, initialProviderID: providerID)
+            let root = SettingsView(
+                store: store,
+                updates: updates,
+                initialProviderID: providerID
+            )
             let controller = NSHostingController(rootView: root)
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 1_080, height: 680),

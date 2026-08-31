@@ -237,15 +237,17 @@ actor LocalDailyUsageScanner {
         }
 
         var summary: LocalTokenUsageSummary? {
-            let result = LocalTokenUsageSummary(
-                today: today.usage,
-                last30Days: last30Days.usage,
-                currentWeek: currentWeek.usage
-            )
-            guard result.today != nil || result.last30Days != nil || result.currentWeek != nil else {
+            let todayUsage = today.usage
+            let last30DaysUsage = last30Days.usage
+            let currentWeekUsage = currentWeek.usage
+            guard todayUsage != nil || last30DaysUsage != nil || currentWeekUsage != nil else {
                 return nil
             }
-            return result
+            return LocalTokenUsageSummary(
+                today: todayUsage ?? DailyTokenUsage(tokens: 0, valueUSD: 0),
+                last30Days: last30DaysUsage,
+                currentWeek: currentWeekUsage
+            )
         }
     }
 

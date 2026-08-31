@@ -139,25 +139,9 @@ private struct SettingsToggleRow: View {
         }
         .toggleStyle(.switch)
         .tint(SettingsPalette.blue)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 7)
         .pointerStyle(.link)
-    }
-}
-
-private struct SettingsPageHeader: View {
-    let title: String
-    let subtitle: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(.system(size: 22, weight: .bold, design: .rounded))
-                .foregroundStyle(SettingsPalette.primary)
-            Text(subtitle)
-                .font(.system(size: 12))
-                .foregroundStyle(SettingsPalette.tertiary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -169,6 +153,7 @@ struct SettingsView: View {
     }
 
     @ObservedObject var store: UsageStore
+    @ObservedObject var updates: UpdateController
     @ObservedObject private var appPreferences = AppPreferences.shared
     let initialProviderID: ProviderID?
 
@@ -179,48 +164,45 @@ struct SettingsView: View {
 
     private var copy: AppCopy { AppCopy(language: appPreferences.language) }
 
-    init(store: UsageStore, initialProviderID: ProviderID? = nil) {
+    init(
+        store: UsageStore,
+        updates: UpdateController,
+        initialProviderID: ProviderID? = nil
+    ) {
         self.store = store
+        self.updates = updates
         self.initialProviderID = initialProviderID
         _selectedProviderID = State(initialValue: initialProviderID)
         _selection = State(initialValue: initialProviderID == nil ? .general : .providers)
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            topBar
+        HStack(alignment: .top, spacing: 14) {
+            sidebar
 
-            Rectangle()
-                .fill(SettingsPalette.line)
-                .frame(height: 1)
-
-            HStack(alignment: .top, spacing: 14) {
-                sidebar
-
-                Group {
-                    switch selection {
-                    case .general:
-                        GeneralSettingsView(store: store)
-                    case .providers:
-                        ProviderSettingsView(
-                            store: store,
-                            selectedProviderID: $selectedProviderID,
-                            searchText: $searchText
-                        )
-                    case .about:
-                        AboutSettingsView()
-                    }
+            Group {
+                switch selection {
+                case .general:
+                    GeneralSettingsView(store: store)
+                case .providers:
+                    ProviderSettingsView(
+                        store: store,
+                        selectedProviderID: $selectedProviderID,
+                        searchText: $searchText
+                    )
+                case .about:
+                    AboutSettingsView(updateController: updates)
                 }
-                .id(selection)
-                .transition(
-                    reduceMotion
-                        ? .identity
-                        : .opacity.combined(with: .scale(scale: 0.99, anchor: .top))
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            .padding(16)
+            .id(selection)
+            .transition(
+                reduceMotion
+                    ? .identity
+                    : .opacity.combined(with: .scale(scale: 0.99, anchor: .top))
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+        .padding(16)
         .frame(minWidth: 920, minHeight: 600)
         .foregroundStyle(SettingsPalette.primary)
         .tint(SettingsPalette.blue)
@@ -232,82 +214,6 @@ struct SettingsView: View {
             reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.9),
             value: selection
         )
-    }
-
-    private var topBar: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 9) {
-                Image(nsImage: NSApp.applicationIconImage)
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: 28, height: 28)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Yomi")
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                    Text(copy.text("跨 Provider 用量一览", "Usage across providers"))
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(SettingsPalette.tertiary)
-                }
-            }
-
-            Spacer(minLength: 12)
-
-            HStack(spacing: 5) {
-                ForEach(Array(store.enabledProviders.prefix(10))) { descriptor in
-                    Button {
-                        selectedProviderID = descriptor.id
-                        selection = .providers
-                    } label: {
-                        ProviderIconView(provider: descriptor)
-                            .frame(width: 16, height: 16)
-                            .foregroundStyle(ProviderBrandColors.color(for: descriptor.id))
-                            .frame(width: 30, height: 30)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(SettingsPressButtonStyle())
-                    .help(descriptor.name)
-                }
-                if store.enabledProviders.count > 10 {
-                    Text("+\(store.enabledProviders.count - 10)")
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .foregroundStyle(SettingsPalette.tertiary)
-                        .frame(width: 30, height: 30)
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(SettingsPalette.control)
-            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-
-            Button {
-                Task { await store.refresh() }
-            } label: {
-                Group {
-                    if store.isRefreshing {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                }
-                .font(.system(size: 13, weight: .semibold))
-                .frame(width: 36, height: 36)
-                .background(SettingsPalette.control)
-                .clipShape(Circle())
-            }
-            .buttonStyle(SettingsPressButtonStyle())
-            .disabled(store.isRefreshing)
-            .help(copy.text("立即刷新", "Refresh now"))
-
-            Image(systemName: "gearshape.fill")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(SettingsPalette.primary)
-                .frame(width: 36, height: 36)
-                .background(SettingsPalette.control)
-                .clipShape(Circle())
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 11)
-        .background(SettingsPalette.panel)
     }
 
     private var sidebar: some View {
@@ -337,15 +243,22 @@ struct SettingsView: View {
 
             Spacer()
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Yomi \(appVersion)")
-                    .font(.system(size: 11.5, weight: .medium))
-                Text(copy.text(
-                    "已启用 \(store.enabledProviders.count) 个 Provider",
-                    "\(store.enabledProviders.count) providers enabled"
-                ))
-                    .font(.system(size: 11))
-                    .foregroundStyle(SettingsPalette.tertiary)
+            HStack(spacing: 10) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 32, height: 32)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Yomi \(appVersion)")
+                        .font(.system(size: 11.5, weight: .medium))
+                    Text(copy.text(
+                        "已启用 \(store.enabledProviders.count) 个 Provider",
+                        "\(store.enabledProviders.count) providers enabled"
+                    ))
+                        .font(.system(size: 11))
+                        .foregroundStyle(SettingsPalette.tertiary)
+                }
             }
             .padding(13)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -394,14 +307,6 @@ private struct GeneralSettingsView: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 12) {
-                SettingsPageHeader(
-                    title: copy.text("通用", "General"),
-                    subtitle: copy.text(
-                        "管理 Yomi 的外观、语言、刷新频率与启动行为。",
-                        "Manage Yomi's appearance, language, refresh rate, and startup behavior."
-                    )
-                )
-
                 SettingsCard(copy.text("语言", "Language")) {
                     HStack(spacing: 7) {
                         SettingsChoiceButton(
@@ -616,14 +521,6 @@ private struct ProviderSettingsView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            SettingsPageHeader(
-                title: "Providers",
-                subtitle: copy.text(
-                    "选择数据来源、配置认证信息并管理悬浮栏中显示的 Provider。",
-                    "Choose data sources, configure credentials, and manage the floating rail."
-                )
-            )
-
             HStack(spacing: 12) {
                 providerList
 
@@ -720,18 +617,24 @@ private struct ProviderSettingsRow: View {
                 HStack(spacing: 9) {
                     ProviderIconView(provider: descriptor)
                         .frame(width: 20, height: 20)
-                        .foregroundStyle(ProviderBrandColors.color(for: descriptor.id))
+                        .foregroundStyle(
+                            isEnabled
+                                ? ProviderBrandColors.color(for: descriptor.id)
+                                : SettingsPalette.tertiary
+                        )
                     VStack(alignment: .leading, spacing: 2) {
                         Text(descriptor.name)
                             .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(SettingsPalette.primary)
+                            .foregroundStyle(isEnabled ? SettingsPalette.primary : SettingsPalette.secondary)
                         HStack(spacing: 4) {
                             Circle()
-                                .fill(statusColor)
+                                .fill(isEnabled ? statusColor : SettingsPalette.tertiary)
                                 .frame(width: 5, height: 5)
                             Text(statusText)
                                 .font(.system(size: 10.5))
-                                .foregroundStyle(SettingsPalette.tertiary)
+                                .foregroundStyle(
+                                    SettingsPalette.tertiary.opacity(isEnabled ? 1 : 0.72)
+                                )
                                 .lineLimit(1)
                         }
                     }
@@ -995,54 +898,61 @@ private struct SettingsTextField: View {
 }
 
 private struct AboutSettingsView: View {
+    @ObservedObject var updateController: UpdateController
     @Environment(\.appLanguage) private var language
 
     private var copy: AppCopy { AppCopy(language: language) }
 
     var body: some View {
-        VStack(spacing: 12) {
-            SettingsPageHeader(
-                title: copy.text("关于", "About"),
-                subtitle: copy.text("Yomi 的版本与应用信息。", "Version and application information for Yomi.")
-            )
+        VStack(spacing: 16) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: 88, height: 88)
 
-            SettingsCard(copy.text("应用", "Application")) {
-                VStack(spacing: 16) {
-                    Image(nsImage: NSApp.applicationIconImage)
-                        .resizable()
-                        .interpolation(.high)
-                        .scaledToFit()
-                        .frame(width: 88, height: 88)
-
-                    VStack(spacing: 5) {
-                        Text("Yomi")
-                            .font(.system(size: 24, weight: .bold, design: .rounded))
-                        Text(copy.text("跨 Provider 用量一览", "Usage across all your providers"))
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(SettingsPalette.tertiary)
-                        Text(versionText)
-                            .font(.system(size: 11))
-                            .foregroundStyle(SettingsPalette.tertiary)
-                    }
-
-                    Button {
-                        NSApp.terminate(nil)
-                    } label: {
-                        Label(copy.text("退出 Yomi", "Quit Yomi"), systemImage: "power")
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(SettingsPalette.red)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(SettingsPalette.control)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-                    .buttonStyle(SettingsPressButtonStyle())
-                }
-                .frame(maxWidth: .infinity, minHeight: 360)
+            VStack(spacing: 5) {
+                Text("Yomi")
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                Text(copy.text("跨 Provider 用量一览", "Usage across all your providers"))
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(SettingsPalette.tertiary)
+                Text(versionText)
+                    .font(.system(size: 11))
+                    .foregroundStyle(SettingsPalette.tertiary)
             }
+            .multilineTextAlignment(.center)
 
-            Spacer(minLength: 0)
+            HStack(spacing: 10) {
+                Button {
+                    updateController.checkForUpdates()
+                } label: {
+                    Label(copy.text("检查更新", "Check for Updates"), systemImage: "arrow.clockwise")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(SettingsPalette.primary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(SettingsPalette.control)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(SettingsPressButtonStyle())
+                .disabled(!updateController.canCheckForUpdates)
+
+                Button {
+                    NSApp.terminate(nil)
+                } label: {
+                    Label(copy.text("退出 Yomi", "Quit Yomi"), systemImage: "power")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(SettingsPalette.red)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(SettingsPalette.control)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(SettingsPressButtonStyle())
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
     private var versionText: String {

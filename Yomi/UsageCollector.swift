@@ -71,6 +71,16 @@ actor UsageCollector {
         guard descriptor.id.rawValue == "codex" || descriptor.id.rawValue == "claude" else {
             return usage
         }
+        return await enrichLocalMetadata(to: usage, descriptor: descriptor)
+    }
+
+    func enrichLocalMetadata(
+        to usage: ProviderUsage,
+        descriptor: ProviderDescriptor
+    ) async -> ProviderUsage {
+        guard descriptor.id.rawValue == "codex" || descriptor.id.rawValue == "claude" else {
+            return usage
+        }
         let catalog = await resolvedPricingCatalog()
         return await addingLocalMetadata(
             to: usage,

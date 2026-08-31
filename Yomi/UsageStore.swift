@@ -118,6 +118,12 @@ final class UsageStore: ObservableObject {
 
             while let usage = await group.next() {
                 if usage.state == .failed, var cached = refreshedUsage[usage.id], !cached.windows.isEmpty {
+                    if let descriptor = ProviderCatalog.byID[usage.id] {
+                        cached = await collector.enrichLocalMetadata(
+                            to: cached,
+                            descriptor: descriptor
+                        )
+                    }
                     cached.state = .unavailable
                     cached.message = usage.message
                     refreshedUsage[usage.id] = cached
