@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private var panel: FloatingPanel?
     private var settingsWindow: NSWindow?
+    private var verticalPosition: CGFloat = 0.5
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -79,7 +80,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.isMovable = false
+        panel.isMovableByWindowBackground = false
         panel.isReleasedWhenClosed = false
+        panel.originConstraint = { [weak self] origin, size in
+            self?.constrainedPanelOrigin(origin, size: size) ?? origin
+        }
         panel.contentView = NSHostingView(rootView: UsageRailView(
             store: store,
             openSettings: { [weak self] providerID in self?.openSettings(providerID: providerID) },
@@ -101,15 +106,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func resizePanel(to contentHeight: CGFloat, animated: Bool) {
         guard let panel else { return }
-        let visibleHeight = (screenUnderPointer() ?? NSScreen.main)?.visibleFrame.height ?? 900
+        let visibleHeight = targetScreen()?.visibleFrame.height ?? 900
         let newHeight = min(max(contentHeight, 140), visibleHeight - 24)
         guard abs(panel.frame.height - newHeight) > 0.5 else { return }
         var frame = panel.frame
-        let midpoint = frame.midY
         frame.size.height = newHeight
-        frame.origin.y = midpoint - newHeight / 2
         frame = pinnedFrame(frame)
         panel.setFrame(frame, display: true, animate: animated)
+    }
+
+    private func constrainedPanelOrigin(_ origin: NSPoint, size: NSSize) -> NSPoint {
+        guard let visible = targetScreen()?.visibleFrame else { return origin }
+        let minimumY = visible.minY + 12
+        let maximumY = max(minimumY, visible.maxY - size.height - 12)
+        let constrainedY = min(max(origin.y, minimumY), maximumY)
+        let travel = maximumY - minimumY
+        verticalPosition = travel > 0 ? (constrainedY - minimumY) / travel : 0.5
+        return NSPoint(x: visible.maxX - size.width + 1, y: constrainedY)
     }
 
     private func positionPanel(animated: Bool) {
@@ -119,14 +132,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func pinnedFrame(_ frame: NSRect) -> NSRect {
-        let screen = screenUnderPointer() ?? NSScreen.main ?? NSScreen.screens.first
+        let screen = targetScreen()
         guard let visible = screen?.visibleFrame else { return frame }
+        let height = min(frame.height, visible.height - 24)
+        let minimumY = visible.minY + 12
+        let maximumY = max(minimumY, visible.maxY - height - 12)
         return NSRect(
             x: visible.maxX - frame.width + 1,
-            y: visible.midY - frame.height / 2,
+            y: minimumY + (maximumY - minimumY) * verticalPosition,
             width: frame.width,
-            height: min(frame.height, visible.height - 24)
+            height: height
         )
+    }
+
+    private func targetScreen() -> NSScreen? {
+        panel?.screen ?? screenUnderPointer() ?? NSScreen.main ?? NSScreen.screens.first
     }
 
     private func screenUnderPointer() -> NSScreen? {
@@ -145,6 +165,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 }
 
 final class FloatingPanel: NSPanel {
+    var originConstraint: ((NSPoint, NSSize) -> NSPoint)?
+    private var dragStartMouseLocation: NSPoint?
+    private var dragStartOrigin: NSPoint?
+    private var isDraggingVertically = false
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func setFrameOrigin(_ point: NSPoint) {
+        super.setFrameOrigin(originConstraint?(point, frame.size) ?? point)
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown:
+            dragStartMouseLocation = NSPoint(
+                x: frame.minX + event.locationInWindow.x,
+                y: frame.minY + event.locationInWindow.y
+            )
+            dragStartOrigin = frame.origin
+            isDraggingVertically = false
+            super.sendEvent(event)
+
+        case .leftMouseDragged:
+            guard let startMouse = dragStartMouseLocation,
+                  let startOrigin = dragStartOrigin
+            else {
+                super.sendEvent(event)
+                return
+            }
+
+            let currentMouse = NSPoint(
+                x: frame.minX + event.locationInWindow.x,
+                y: frame.minY + event.locationInWindow.y
+            )
+            let horizontalDistance = currentMouse.x - startMouse.x
+            let verticalDistance = currentMouse.y - startMouse.y
+
+            if !isDraggingVertically {
+                guard abs(verticalDistance) > 6,
+                      abs(verticalDistance) > abs(horizontalDistance)
+                else {
+                    super.sendEvent(event)
+                    return
+                }
+                super.sendEvent(event)
+                isDraggingVertically = true
+            }
+
+            setFrameOrigin(NSPoint(x: startOrigin.x, y: startOrigin.y + verticalDistance))
+
+        case .leftMouseUp:
+            dragStartMouseLocation = nil
+            dragStartOrigin = nil
+            isDraggingVertically = false
+            super.sendEvent(event)
+
+        default:
+            super.sendEvent(event)
+        }
+    }
 }
