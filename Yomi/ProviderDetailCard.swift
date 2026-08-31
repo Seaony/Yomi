@@ -74,12 +74,6 @@ struct ProviderDetailCard: View {
         .padding(18)
         .frame(width: 360)
         .foregroundStyle(.white)
-        .background {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(.black.opacity(0.95))
-                .shadow(color: .black.opacity(0.38), radius: 24, y: 12)
-        }
-        .padding(10)
         .preferredColorScheme(.dark)
     }
 
@@ -90,6 +84,53 @@ struct ProviderDetailCard: View {
         case .unavailable: "questionmark.circle"
         case .ready: "checkmark.circle"
         }
+    }
+}
+
+struct ProviderDetailPanelView: View {
+    @ObservedObject var store: UsageStore
+    let descriptor: ProviderDescriptor
+    let settings: () -> Void
+
+    var body: some View {
+        ProviderDetailCard(
+            descriptor: descriptor,
+            usage: store.usage(for: descriptor.id),
+            refresh: { Task { await store.refresh() } },
+            settings: settings
+        )
+        .padding(.trailing, ProviderDetailPanelShape.arrowWidth)
+        .background {
+            ProviderDetailPanelShape()
+                .fill(.black)
+                .shadow(color: .black.opacity(0.38), radius: 24, y: 12)
+        }
+        .padding(24)
+    }
+}
+
+private struct ProviderDetailPanelShape: Shape {
+    static let arrowWidth: CGFloat = 16
+
+    func path(in rect: CGRect) -> Path {
+        let cardRect = CGRect(
+            x: rect.minX,
+            y: rect.minY,
+            width: rect.width - Self.arrowWidth,
+            height: rect.height
+        )
+        let midpoint = rect.midY
+
+        var path = Path(
+            roundedRect: cardRect,
+            cornerRadius: 24,
+            style: .continuous
+        )
+        path.move(to: CGPoint(x: cardRect.maxX - 1, y: midpoint - 14))
+        path.addLine(to: CGPoint(x: rect.maxX, y: midpoint))
+        path.addLine(to: CGPoint(x: cardRect.maxX - 1, y: midpoint + 14))
+        path.closeSubpath()
+        return path
     }
 }
 

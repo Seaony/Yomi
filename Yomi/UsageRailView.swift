@@ -7,13 +7,14 @@ enum UsageRailLayout {
 struct UsageRailView: View {
     @ObservedObject var store: UsageStore
     let openSettings: (ProviderID?) -> Void
+    let toggleProviderDetail: (ProviderDescriptor, CGFloat) -> Void
     let contentHeightChanged: (CGFloat) -> Void
 
-    @State private var selectedProvider: ProviderID?
     @State private var appeared = false
     @State private var isHovering = false
     @State private var providerSectionHeight: CGFloat = 0
     @State private var footerHeight: CGFloat = 0
+    @State private var providerAnchorY: [ProviderID: CGFloat] = [:]
     @AppStorage("show-provider-names") private var showProviderNames = true
 
     var body: some View {
@@ -24,30 +25,32 @@ struct UsageRailView: View {
             ScrollView(.vertical) {
                 VStack(spacing: 12) {
                     ForEach(Array(store.enabledProviders.enumerated()), id: \.element.id) { index, descriptor in
-                        ProviderRailItem(
-                            descriptor: descriptor,
-                            usage: store.usage(for: descriptor.id),
-                            animationDelay: Double(index) * 0.045,
-                            showName: showProviderNames
-                        )
-                        .onTapGesture {
-                            selectedProvider = selectedProvider == descriptor.id ? nil : descriptor.id
-                        }
-                        .popover(
-                            isPresented: Binding(
-                                get: { selectedProvider == descriptor.id },
-                                set: { if !$0 { selectedProvider = nil } }
-                            ),
-                            attachmentAnchor: .rect(.bounds),
-                            arrowEdge: .leading
-                        ) {
-                            ProviderDetailCard(
+                        Button {
+                            let rowHeight: CGFloat = showProviderNames ? 101 : 84
+                            let fallbackY = UsageRailLayout.transitionHeight
+                                + 20
+                                + 28
+                                + CGFloat(index) * (rowHeight + 12)
+                            let anchorY = providerAnchorY[descriptor.id] ?? fallbackY
+                            toggleProviderDetail(descriptor, anchorY)
+                        } label: {
+                            ProviderRailItem(
                                 descriptor: descriptor,
                                 usage: store.usage(for: descriptor.id),
-                                refresh: { Task { await store.refresh() } },
-                                settings: { openSettings(descriptor.id) }
+                                animationDelay: Double(index) * 0.045,
+                                showName: showProviderNames
                             )
-                            .presentationBackground(.clear)
+                        }
+                        .buttonStyle(.plain)
+                        .background {
+                            GeometryReader { proxy in
+                                Color.clear.preference(
+                                    key: ProviderAnchorYKey.self,
+                                    value: [
+                                        descriptor.id: proxy.frame(in: .named("usageRail")).minY + 28
+                                    ]
+                                )
+                            }
                         }
                     }
                 }
@@ -95,6 +98,7 @@ struct UsageRailView: View {
             Color.clear
                 .frame(height: UsageRailLayout.transitionHeight)
         }
+        .coordinateSpace(name: "usageRail")
         .background {
             UsageRailShape()
                 .fill(.black.opacity(isHovering ? 0.96 : 0.92))
@@ -120,6 +124,7 @@ struct UsageRailView: View {
             footerHeight = height
             reportContentHeight(providerSection: providerSectionHeight, footer: height)
         }
+        .onPreferenceChange(ProviderAnchorYKey.self) { providerAnchorY = $0 }
         .preferredColorScheme(.dark)
     }
 
@@ -128,6 +133,17 @@ struct UsageRailView: View {
         contentHeightChanged(
             providerSection + footer + UsageRailLayout.transitionHeight * 2
         )
+    }
+}
+
+private struct ProviderAnchorYKey: PreferenceKey {
+    nonisolated static let defaultValue: [ProviderID: CGFloat] = [:]
+
+    nonisolated static func reduce(
+        value: inout [ProviderID: CGFloat],
+        nextValue: () -> [ProviderID: CGFloat]
+    ) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }
 

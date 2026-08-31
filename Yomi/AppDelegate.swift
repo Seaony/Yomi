@@ -6,6 +6,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let store = UsageStore.shared
 
     private var panel: FloatingPanel?
+    private var providerDetailPanel: ProviderDetailPanel?
+    private var selectedProviderID: ProviderID?
+    private var globalClickMonitor: Any?
     private var settingsWindow: NSWindow?
     private var verticalPosition: CGFloat = 0.5
 
@@ -23,10 +26,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        removeDetailClickMonitor()
         NotificationCenter.default.removeObserver(self)
     }
 
     func openSettings(providerID: ProviderID? = nil) {
+        closeProviderDetail()
         if settingsWindow == nil {
             let root = SettingsView(store: store, initialProviderID: providerID)
             let controller = NSHostingController(rootView: root)
@@ -88,6 +93,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.contentView = NSHostingView(rootView: UsageRailView(
             store: store,
             openSettings: { [weak self] providerID in self?.openSettings(providerID: providerID) },
+            toggleProviderDetail: { [weak self] descriptor, localY in
+                self?.toggleProviderDetail(descriptor, localY: localY)
+            },
             contentHeightChanged: { [weak self] height in
                 self?.resizePanel(to: height, animated: true)
             }
@@ -101,6 +109,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             context.duration = 0.32
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 1
+        }
+    }
+
+    private func toggleProviderDetail(_ descriptor: ProviderDescriptor, localY: CGFloat) {
+        if selectedProviderID == descriptor.id, providerDetailPanel?.isVisible == true {
+            closeProviderDetail()
+            return
+        }
+
+        closeProviderDetail()
+        guard let panel else { return }
+
+        let root = ProviderDetailPanelView(
+            store: store,
+            descriptor: descriptor,
+            settings: { [weak self] in self?.openSettings(providerID: descriptor.id) }
+        )
+        let hostingView = NSHostingView(rootView: root)
+        let fittingSize = hostingView.fittingSize
+        let detailPanel = ProviderDetailPanel(
+            contentRect: NSRect(origin: .zero, size: fittingSize),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        detailPanel.contentView = hostingView
+        detailPanel.isOpaque = false
+        detailPanel.backgroundColor = .clear
+        detailPanel.hasShadow = false
+        detailPanel.level = .statusBar
+        detailPanel.hidesOnDeactivate = false
+        detailPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        detailPanel.isReleasedWhenClosed = false
+
+        let visibleFrame = targetScreen()?.visibleFrame ?? panel.frame
+        let minimumY = visibleFrame.minY + 8
+        let maximumY = max(minimumY, visibleFrame.maxY - fittingSize.height - 8)
+        let anchorY = panel.frame.maxY - localY
+        let proposedY = anchorY - fittingSize.height / 2
+        let origin = NSPoint(
+            x: panel.frame.minX - fittingSize.width + 26,
+            y: min(max(proposedY, minimumY), maximumY)
+        )
+        detailPanel.setFrameOrigin(origin)
+
+        self.providerDetailPanel = detailPanel
+        selectedProviderID = descriptor.id
+        panel.addChildWindow(detailPanel, ordered: .above)
+        detailPanel.orderFrontRegardless()
+        installDetailClickMonitor()
+    }
+
+    private func closeProviderDetail() {
+        guard let detailPanel = providerDetailPanel else { return }
+        panel?.removeChildWindow(detailPanel)
+        detailPanel.orderOut(nil)
+        providerDetailPanel = nil
+        selectedProviderID = nil
+        removeDetailClickMonitor()
+    }
+
+    private func installDetailClickMonitor() {
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
+            Task { @MainActor in self?.closeProviderDetail() }
+        }
+    }
+
+    private func removeDetailClickMonitor() {
+        if let globalClickMonitor {
+            NSEvent.removeMonitor(globalClickMonitor)
+            self.globalClickMonitor = nil
         }
     }
 
@@ -226,4 +307,9 @@ final class FloatingPanel: NSPanel {
             super.sendEvent(event)
         }
     }
+}
+
+final class ProviderDetailPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
 }
