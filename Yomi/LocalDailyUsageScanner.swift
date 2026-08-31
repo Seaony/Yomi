@@ -2,7 +2,16 @@ import Darwin
 import Foundation
 
 actor LocalDailyUsageScanner {
-    private struct Tokens: Codable, Equatable {
+    private static let codexGPT56PricingCutoff = Date(timeIntervalSince1970: 1_785_369_600)
+    private static let codexGPT56SolPromotionCutoff = Date(timeIntervalSince1970: 1_787_270_400)
+    private static let claudeFullContextPricingCutoff = Date(timeIntervalSince1970: 1_773_360_000)
+
+    private enum RateResolution {
+        case priced(ModelTokenRates)
+        case unpriced
+    }
+
+    private struct Tokens: Codable, Equatable, Hashable {
         var input = 0
         var cacheRead = 0
         var cacheWrite = 0
@@ -20,10 +29,16 @@ actor LocalDailyUsageScanner {
         let isSidechain: Bool
     }
 
+    private struct CodexEventKey: Codable, Hashable {
+        let total: Tokens?
+        let last: Tokens?
+    }
+
     private struct CodexSample: Codable {
         let timestamp: Date
         let model: String?
         let tokens: Tokens
+        let eventKey: CodexEventKey?
     }
 
     private struct JSONLResumeState: Codable {
@@ -71,12 +86,46 @@ actor LocalDailyUsageScanner {
             let model: String?
             let modelName: String?
             let info: Info?
+            let id: String?
+            let sessionID: String?
+            let sessionId: String?
+            let forkedFromID: String?
+            let parentThreadID: String?
+            let parentSessionID: String?
+            let source: Source?
 
             enum CodingKeys: String, CodingKey {
                 case type
                 case model
                 case modelName = "model_name"
                 case info
+                case id
+                case sessionID = "session_id"
+                case sessionId
+                case forkedFromID = "forked_from_id"
+                case parentThreadID = "parent_thread_id"
+                case parentSessionID = "parent_session_id"
+                case source
+            }
+        }
+
+        struct Source: Decodable {
+            let subagent: Subagent?
+        }
+
+        struct Subagent: Decodable {
+            let threadSpawn: ThreadSpawn?
+
+            enum CodingKeys: String, CodingKey {
+                case threadSpawn = "thread_spawn"
+            }
+        }
+
+        struct ThreadSpawn: Decodable {
+            let parentThreadID: String?
+
+            enum CodingKeys: String, CodingKey {
+                case parentThreadID = "parent_thread_id"
             }
         }
 
@@ -329,6 +378,8 @@ actor LocalDailyUsageScanner {
         var fileID = ""
         var resumeState = JSONLResumeState()
         var resumeFingerprint = Data()
+        var sessionID: String?
+        var parentID: String?
         var currentModel: String?
         var accumulator = CodexAccumulator()
         var samples: [CodexSample] = []
@@ -396,8 +447,10 @@ actor LocalDailyUsageScanner {
         homeDirectory: URL,
         pricingCatalog: ModelPricingCatalog?
     ) -> LocalTokenUsageSummary? {
-        let root = homeDirectory.appending(path: ".codex/sessions")
-        let files = Self.filesModified(since: periods.last30DaysStart, below: root)
+        let files = Self.logFiles(
+            modifiedSince: periods.last30DaysStart,
+            below: Self.codexSessionRoots(homeDirectory: homeDirectory)
+        )
         let currentPaths = Set(files.map { $0.url.path })
         let deletedPaths = Set(codexFileStates.keys).subtracting(currentPaths)
         codexFileStates = codexFileStates.filter { currentPaths.contains($0.key) }
@@ -434,9 +487,21 @@ actor LocalDailyUsageScanner {
             let readResult = Self.readJSONLines(
                 from: file.url,
                 resumeState: resumeState,
-                matchingAny: [#""type":"turn_context""#, #""type":"token_count""#],
+                matchingAny: [
+                    #""type":"session_meta""#,
+                    #""type":"turn_context""#,
+                    #""type":"token_count""#,
+                ],
                 as: CodexLogLine.self
             ) { line in
+                if line.type == "session_meta", let payload = line.payload {
+                    state.sessionID = payload.id
+                        ?? payload.sessionID
+                        ?? payload.sessionId
+                        ?? state.sessionID
+                    state.parentID = Self.codexParentID(payload) ?? state.parentID
+                    return
+                }
                 if line.type == "turn_context", let payload = line.payload {
                     state.currentModel = payload.model ?? payload.modelName
                     return
@@ -465,7 +530,10 @@ actor LocalDailyUsageScanner {
                 state.samples.append(CodexSample(
                     timestamp: timestamp,
                     model: model,
-                    tokens: delta
+                    tokens: delta,
+                    eventKey: cumulative == nil && last == nil
+                        ? nil
+                        : CodexEventKey(total: cumulative, last: last)
                 ))
             }
             state.resumeState = readResult.resumeState
@@ -482,12 +550,39 @@ actor LocalDailyUsageScanner {
         }
         persistCodexStates(changedPaths: changedPaths, deletedPaths: deletedPaths)
 
+        let sessions = Self.canonicalCodexSessions(codexFileStates)
+        let droppedPrefixes = Self.replayedCodexPrefixes(sessions)
         var accumulated = periods
-        for state in codexFileStates.values {
-            for sample in state.samples {
-                let valueUSD = sample.model
-                    .flatMap { Self.codexRates(for: $0, at: sample.timestamp, catalog: pricingCatalog) }
-                    .map { Self.codexCost(tokens: sample.tokens, rates: $0) }
+        var rateCache: [String: RateResolution] = [:]
+        for (path, state) in sessions {
+            let droppedCount = droppedPrefixes[path] ?? 0
+            for sample in state.samples.dropFirst(droppedCount) {
+                let rates = sample.model.flatMap { model -> ModelTokenRates? in
+                    let era: String
+                    if sample.timestamp < Self.codexGPT56PricingCutoff {
+                        era = "pre-family-reduction"
+                    } else if sample.timestamp < Self.codexGPT56SolPromotionCutoff {
+                        era = "pre-sol-promotion"
+                    } else {
+                        era = "current"
+                    }
+                    let key = "\(era):\(model)"
+                    if let cached = rateCache[key] {
+                        if case let .priced(rates) = cached { return rates }
+                        return nil
+                    }
+                    guard let rates = Self.codexRates(
+                        for: model,
+                        at: sample.timestamp,
+                        catalog: pricingCatalog
+                    ) else {
+                        rateCache[key] = .unpriced
+                        return nil
+                    }
+                    rateCache[key] = .priced(rates)
+                    return rates
+                }
+                let valueUSD = rates.map { Self.codexCost(tokens: sample.tokens, rates: $0) }
                 accumulated.add(
                     timestamp: sample.timestamp,
                     tokens: sample.tokens.codexTotal,
@@ -498,13 +593,104 @@ actor LocalDailyUsageScanner {
         return accumulated.summary
     }
 
+    private static func canonicalCodexSessions(
+        _ states: [String: CodexFileState]
+    ) -> [(path: String, state: CodexFileState)] {
+        var selected: [String: (path: String, state: CodexFileState)] = [:]
+        for (path, state) in states {
+            let key = state.sessionID.map { "session:\($0)" }
+                ?? "file:\(URL(fileURLWithPath: path).lastPathComponent)"
+            let candidate = (path: path, state: state)
+            guard let current = selected[key] else {
+                selected[key] = candidate
+                continue
+            }
+            if codexSession(candidate, isMoreCompleteThan: current) {
+                selected[key] = candidate
+            }
+        }
+        return selected.values.sorted { $0.path < $1.path }
+    }
+
+    private static func codexSession(
+        _ candidate: (path: String, state: CodexFileState),
+        isMoreCompleteThan current: (path: String, state: CodexFileState)
+    ) -> Bool {
+        if candidate.state.samples.count != current.state.samples.count {
+            return candidate.state.samples.count > current.state.samples.count
+        }
+        let candidateLastDate = candidate.state.samples.last?.timestamp ?? .distantPast
+        let currentLastDate = current.state.samples.last?.timestamp ?? .distantPast
+        if candidateLastDate != currentLastDate {
+            return candidateLastDate > currentLastDate
+        }
+        return candidate.state.size > current.state.size
+    }
+
+    private static func replayedCodexPrefixes(
+        _ sessions: [(path: String, state: CodexFileState)]
+    ) -> [String: Int] {
+        let byID = Dictionary(
+            uniqueKeysWithValues: sessions.compactMap { session in
+                session.state.sessionID.map { ($0, session) }
+            }
+        )
+        var drops: [String: Int] = [:]
+
+        for child in sessions {
+            guard let parentID = child.state.parentID,
+                  let parent = byID[parentID]
+            else { continue }
+            let count = matchingCodexPrefix(child.state.samples, parent.state.samples)
+            if count > 0 { drops[child.path] = count }
+        }
+
+        for child in sessions where drops[child.path] == nil && child.state.samples.count >= 2 {
+            var best = 0
+            for parent in sessions
+            where parent.path != child.path && parent.state.samples.count >= 2 {
+                guard let childStart = child.state.samples.first?.timestamp,
+                      let parentStart = parent.state.samples.first?.timestamp,
+                      parentStart < childStart
+                else { continue }
+                best = max(best, matchingCodexPrefix(child.state.samples, parent.state.samples))
+            }
+            if best >= 2 { drops[child.path] = best }
+        }
+        return drops
+    }
+
+    private static func matchingCodexPrefix(
+        _ lhs: [CodexSample],
+        _ rhs: [CodexSample]
+    ) -> Int {
+        var count = 0
+        while count < lhs.count,
+              count < rhs.count,
+              let left = lhs[count].eventKey,
+              let right = rhs[count].eventKey,
+              left == right {
+            count += 1
+        }
+        return count
+    }
+
+    private static func codexParentID(_ payload: CodexLogLine.Payload) -> String? {
+        payload.forkedFromID
+            ?? payload.parentThreadID
+            ?? payload.parentSessionID
+            ?? payload.source?.subagent?.threadSpawn?.parentThreadID
+    }
+
     private func scanClaude(
         periods: PeriodAccumulators,
         homeDirectory: URL,
         pricingCatalog: ModelPricingCatalog?
     ) -> LocalTokenUsageSummary? {
-        let root = homeDirectory.appending(path: ".claude/projects")
-        let files = Self.filesModified(since: periods.last30DaysStart, below: root)
+        let files = Self.logFiles(
+            modifiedSince: periods.last30DaysStart,
+            below: Self.claudeProjectRoots(homeDirectory: homeDirectory)
+        )
         let currentPaths = Set(files.map { $0.url.path })
         let deletedPaths = Set(claudeFileStates.keys).subtracting(currentPaths)
         claudeFileStates = claudeFileStates.filter { currentPaths.contains($0.key) }
@@ -615,13 +801,29 @@ actor LocalDailyUsageScanner {
         let samples = keyedSamples.values.map(\.sample) + unkeyedSamples
         guard !samples.isEmpty else { return nil }
         var accumulated = periods
+        var rateCache: [String: RateResolution] = [:]
         for sample in samples {
-            let valueUSD = Self.claudeRates(
+            let era = sample.timestamp < Self.claudeFullContextPricingCutoff ? "historical" : "current"
+            let key = "\(era):\(sample.model)"
+            let rates: ModelTokenRates?
+            if let cached = rateCache[key] {
+                if case let .priced(value) = cached {
+                    rates = value
+                } else {
+                    rates = nil
+                }
+            } else if let resolved = Self.claudeRates(
                 for: sample.model,
                 at: sample.timestamp,
                 catalog: pricingCatalog
-            )
-                .map { Self.claudeCost(sample: sample, rates: $0) }
+            ) {
+                rateCache[key] = .priced(resolved)
+                rates = resolved
+            } else {
+                rateCache[key] = .unpriced
+                rates = nil
+            }
+            let valueUSD = rates.map { Self.claudeCost(sample: sample, rates: $0) }
             accumulated.add(
                 timestamp: sample.timestamp,
                 tokens: sample.tokens.claudeTotal,
@@ -629,6 +831,94 @@ actor LocalDailyUsageScanner {
             )
         }
         return accumulated.summary
+    }
+
+    private static func logFiles(modifiedSince start: Date, below roots: [URL]) -> [LogFile] {
+        var filesByPath: [String: LogFile] = [:]
+        for root in roots {
+            for file in filesModified(since: start, below: root) {
+                filesByPath[file.url.standardizedFileURL.path] = file
+            }
+        }
+        return filesByPath.values.sorted { $0.url.path < $1.url.path }
+    }
+
+    private static func codexSessionRoots(homeDirectory: URL) -> [URL] {
+        let environment = ProcessInfo.processInfo.environment
+        let configured = environment["CODEX_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let codexHome = if let configured, !configured.isEmpty {
+            URL(fileURLWithPath: configured, isDirectory: true)
+        } else {
+            homeDirectory.appending(path: ".codex", directoryHint: .isDirectory)
+        }
+        return [
+            codexHome.appending(path: "sessions", directoryHint: .isDirectory),
+            codexHome.appending(path: "archived_sessions", directoryHint: .isDirectory),
+        ]
+    }
+
+    private static func claudeProjectRoots(homeDirectory: URL) -> [URL] {
+        let environment = ProcessInfo.processInfo.environment
+        if let configured = environment["CLAUDE_CONFIG_DIR"], !configured.isEmpty {
+            let root = configured.hasPrefix("/")
+                ? URL(fileURLWithPath: configured, isDirectory: true)
+                : URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+                    .appending(path: configured, directoryHint: .isDirectory)
+            return [root.appending(path: "projects", directoryHint: .isDirectory)]
+        }
+
+        var roots = [
+            homeDirectory.appending(path: ".config/claude/projects", directoryHint: .isDirectory),
+            homeDirectory.appending(path: ".claude/projects", directoryHint: .isDirectory),
+        ]
+        roots.append(contentsOf: claudeDesktopProjectRoots(homeDirectory: homeDirectory))
+        var seen: Set<String> = []
+        return roots.compactMap {
+            let standardized = $0.standardizedFileURL
+            return seen.insert(standardized.path).inserted ? standardized : nil
+        }
+    }
+
+    private static func claudeDesktopProjectRoots(homeDirectory: URL) -> [URL] {
+        let applicationSupport = homeDirectory
+            .appending(path: "Library/Application Support/Claude", directoryHint: .isDirectory)
+        let sessionRoots = ["local-agent-mode-sessions", "claude-code-sessions"].map {
+            applicationSupport.appending(path: $0, directoryHint: .isDirectory)
+        }
+        let skipped = Set([".build", ".git", "build", "DerivedData", "node_modules", "outputs", "target"])
+        var queue = sessionRoots.map { (url: $0, depth: 0) }
+        var visited = Set(sessionRoots.map { $0.standardizedFileURL.path })
+        var roots: [URL] = []
+        var index = 0
+
+        while index < queue.count {
+            let current = queue[index]
+            index += 1
+            let projects = current.url.appending(path: ".claude/projects", directoryHint: .isDirectory)
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: projects.path, isDirectory: &isDirectory),
+               isDirectory.boolValue {
+                roots.append(projects.standardizedFileURL)
+            }
+
+            guard current.depth < 4,
+                  let children = try? FileManager.default.contentsOfDirectory(
+                      at: current.url,
+                      includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                      options: [.skipsHiddenFiles, .skipsPackageDescendants]
+                  )
+            else { continue }
+            for child in children where !skipped.contains(child.lastPathComponent) {
+                guard let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
+                      values.isDirectory == true,
+                      values.isSymbolicLink != true
+                else { continue }
+                let standardized = child.standardizedFileURL
+                guard visited.insert(standardized.path).inserted else { continue }
+                queue.append((standardized, current.depth + 1))
+            }
+        }
+        return roots
     }
 
     private static func filesModified(since start: Date, below root: URL) -> [LogFile] {
@@ -1074,7 +1364,7 @@ actor LocalDailyUsageScanner {
         catalog: ModelPricingCatalog?
     ) -> ModelTokenRates? {
         let model = normalizedCodexModel(rawModel.lowercased())
-        if timestamp < Date(timeIntervalSince1970: 1_785_369_600) {
+        if timestamp < codexGPT56PricingCutoff {
             if model == "gpt-5.6-terra" {
                 return ModelTokenRates(
                     input: 2.5e-6, cacheRead: 2.5e-7, cacheWrite: 3.125e-6, output: 1.5e-5,
@@ -1092,6 +1382,14 @@ actor LocalDailyUsageScanner {
                 )
             }
         }
+        if model == "gpt-5.6-sol", timestamp < codexGPT56SolPromotionCutoff {
+            return ModelTokenRates(
+                input: 5e-6, cacheRead: 5e-7, cacheWrite: 6.25e-6, output: 3e-5,
+                threshold: 272_000, inputAboveThreshold: 1e-5,
+                cacheReadAboveThreshold: 1e-6, cacheWriteAboveThreshold: 1.25e-5,
+                outputAboveThreshold: 4.5e-5
+            )
+        }
         if var rates = codexCatalogRates(for: rawModel, catalog: catalog) {
             if ["gpt-5.4", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
                 .contains(model) {
@@ -1100,7 +1398,14 @@ actor LocalDailyUsageScanner {
             return rates
         }
         return switch model {
-        case "gpt-5.6-sol", "gpt-5.5":
+        case "gpt-5.6-sol":
+            ModelTokenRates(
+                input: 4e-6, cacheRead: 4e-7, cacheWrite: 5e-6, output: 2e-5,
+                threshold: 272_000, inputAboveThreshold: 8e-6,
+                cacheReadAboveThreshold: 8e-7, cacheWriteAboveThreshold: 1e-5,
+                outputAboveThreshold: 3e-5
+            )
+        case "gpt-5.5":
             ModelTokenRates(
                 input: 5e-6, cacheRead: 5e-7, cacheWrite: 6.25e-6, output: 3e-5,
                 threshold: 272_000, inputAboveThreshold: 1e-5,
@@ -1161,7 +1466,7 @@ actor LocalDailyUsageScanner {
         let model = normalizedClaudeModel(rawModel.lowercased())
         let hasHistoricalLongContextPricing = model == "claude-opus-4-6"
             || model == "claude-sonnet-4-6"
-        if timestamp < Date(timeIntervalSince1970: 1_773_360_000),
+        if timestamp < claudeFullContextPricingCutoff,
            hasHistoricalLongContextPricing {
             let input = model.contains("opus") ? 5e-6 : 3e-6
             let output = model.contains("opus") ? 2.5e-5 : 1.5e-5

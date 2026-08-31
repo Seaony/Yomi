@@ -25,10 +25,27 @@ enum UsageCollectionError: LocalizedError {
     }
 }
 
+private nonisolated final class CommandOutputBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = Data()
+
+    func store(_ data: Data) {
+        lock.lock()
+        value = data
+        lock.unlock()
+    }
+
+    func data() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 actor UsageCollector {
     private let session: URLSession
     private var pricingCatalog: ModelPricingCatalog?
-    private var pricingCatalogLoadTask: Task<ModelPricingCatalog?, Never>?
+    private var pricingCatalogLoadTask: Task<ModelPricingCatalogLoadResult, Never>?
     private var pricingCatalogReloadAt = Date.distantPast
     private let localUsageScanner = LocalDailyUsageScanner()
 
@@ -158,17 +175,34 @@ actor UsageCollector {
 
                 do {
                     try process.run()
+                    let readers = DispatchGroup()
+                    let readerQueue = DispatchQueue(
+                        label: "Yomi.UsageCollector.CommandOutput",
+                        qos: .utility,
+                        attributes: .concurrent
+                    )
+                    let outputData = CommandOutputBuffer()
+                    let errorData = CommandOutputBuffer()
+                    readers.enter()
+                    readerQueue.async {
+                        outputData.store(output.fileHandleForReading.readDataToEndOfFile())
+                        readers.leave()
+                    }
+                    readers.enter()
+                    readerQueue.async {
+                        errorData.store(errors.fileHandleForReading.readDataToEndOfFile())
+                        readers.leave()
+                    }
                     process.waitUntilExit()
+                    readers.wait()
                     guard process.terminationStatus == 0 else {
-                        let data = errors.fileHandleForReading.readDataToEndOfFile()
-                        let message = String(data: data, encoding: .utf8) ?? AppLocalization.text(
+                        let message = String(data: errorData.data(), encoding: .utf8) ?? AppLocalization.text(
                             "退出码 \(process.terminationStatus)",
                             "Exit code \(process.terminationStatus)"
                         )
                         throw UsageCollectionError.commandFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
                     }
-                    let data = output.fileHandleForReading.readDataToEndOfFile()
-                    continuation.resume(returning: try UsageParser.parse(data, descriptor: descriptor))
+                    continuation.resume(returning: try UsageParser.parse(outputData.data(), descriptor: descriptor))
                 } catch {
                     continuation.resume(throwing: error)
                 }
@@ -190,12 +224,12 @@ actor UsageCollector {
         for url in localCandidates(for: id) {
             guard let data = try? Data(contentsOf: url),
                   let object = try? JSONSerialization.jsonObject(with: data),
-                  let value = findString(in: object, keys: Set(keys)) else { continue }
+                  let value = Self.findString(in: object, keys: Set(keys)) else { continue }
             return value
         }
         if id.rawValue == "claude", let data = claudeKeychainCredentialData(),
            let object = try? JSONSerialization.jsonObject(with: data),
-           let value = findString(
+           let value = Self.findString(
                in: object,
                keys: ["access_token", "accessToken", "oauth_token", "token"]
            ) {
@@ -222,11 +256,11 @@ actor UsageCollector {
     }
 
     private func codexAccountID() -> String? {
-        let url = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".codex/auth.json")
+        let url = codexHomeDirectory().appending(path: "auth.json")
         guard let data = try? Data(contentsOf: url),
               let object = try? JSONSerialization.jsonObject(with: data)
         else { return nil }
-        return findString(in: object, keys: ["account_id", "accountId"])
+        return Self.findString(in: object, keys: ["account_id", "accountId"])
     }
 
     private func addingLocalMetadata(
@@ -293,48 +327,123 @@ actor UsageCollector {
         let now = Date()
         if now < pricingCatalogReloadAt { return pricingCatalog }
         if let pricingCatalogLoadTask {
-            return await pricingCatalogLoadTask.value
+            return await pricingCatalogLoadTask.value.catalog
         }
 
         let task = Task { [session] in
             await ModelPricingCatalog.load(session: session, now: now)
         }
         pricingCatalogLoadTask = task
-        pricingCatalog = await task.value
+        let result = await task.value
+        pricingCatalog = result.catalog
         pricingCatalogLoadTask = nil
-        let retryInterval: TimeInterval = pricingCatalog == nil ? 15 * 60 : 24 * 60 * 60
-        pricingCatalogReloadAt = now.addingTimeInterval(retryInterval)
+        pricingCatalogReloadAt = result.reloadAt
         return pricingCatalog
     }
 
     private func localPlan(for descriptor: ProviderDescriptor) -> String? {
-        guard descriptor.id.rawValue == "claude" else { return nil }
-        let profileURL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude.json")
-        guard let data = try? Data(contentsOf: profileURL),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let account = root["oauthAccount"] as? [String: Any]
-        else { return nil }
+        switch descriptor.id.rawValue {
+        case "codex":
+            let url = codexHomeDirectory().appending(path: "auth.json")
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return Self.codexPlan(fromAuthData: data, descriptor: descriptor)
+        case "claude":
+            return localClaudePlan(descriptor: descriptor)
+        default:
+            return nil
+        }
+    }
 
-        for key in ["organizationRateLimitTier", "subscriptionType", "billingType"] {
-            guard let value = account[key] as? String,
-                  let plan = UsageParser.displayPlan(value, descriptor: descriptor)
-            else { continue }
-            return plan
+    private func localClaudePlan(descriptor: ProviderDescriptor) -> String? {
+        let account = claudeProfileURLs().lazy.compactMap { profileURL -> [String: Any]? in
+            guard let data = try? Data(contentsOf: profileURL),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return nil }
+            return root["oauthAccount"] as? [String: Any]
+        }.first
+        if let account {
+            let rateLimitTier = Self.findString(
+                in: account,
+                keys: ["organizationRateLimitTier", "rateLimitTier", "rate_limit_tier"]
+            )
+            let billingType = Self.findString(in: account, keys: ["billingType", "billing_type"])
+            let seatTier = Self.findString(in: account, keys: ["seatTier", "seat_tier"])
+            if let plan = UsageParser.displayClaudeWebPlan(
+                rateLimitTier: rateLimitTier,
+                billingType: billingType,
+                seatTier: seatTier
+            ) {
+                return plan
+            }
+        }
+
+        var credentialData = localCandidates(for: descriptor.id).compactMap { try? Data(contentsOf: $0) }
+        if let keychainData = claudeKeychainCredentialData() {
+            credentialData.append(keychainData)
+        }
+        for data in credentialData {
+            guard let root = try? JSONSerialization.jsonObject(with: data) else { continue }
+            let rateLimitTier = Self.findString(
+                in: root,
+                keys: ["rateLimitTier", "rate_limit_tier", "organizationRateLimitTier"]
+            )
+            let subscriptionType = Self.findString(
+                in: root,
+                keys: ["subscriptionType", "subscription_type"]
+            )
+            if let plan = UsageParser.displayClaudeOAuthPlan(
+                subscriptionType: subscriptionType,
+                rateLimitTier: rateLimitTier
+            ) {
+                return plan
+            }
         }
         return nil
     }
 
-    private func findString(in value: Any, keys: Set<String>) -> String? {
+    nonisolated static func codexPlan(
+        fromAuthData data: Data,
+        descriptor: ProviderDescriptor
+    ) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        let tokens = root["tokens"] as? [String: Any]
+        let idToken = (tokens?["id_token"] as? String)
+            ?? (tokens?["idToken"] as? String)
+            ?? (root["id_token"] as? String)
+            ?? (root["idToken"] as? String)
+        let payload = idToken.flatMap(Self.decodeJWTPayload)
+        let auth = payload?["https://api.openai.com/auth"] as? [String: Any]
+        let tokenPlan = (auth?["chatgpt_plan_type"] as? String)
+            ?? (payload?["chatgpt_plan_type"] as? String)
+        return tokenPlan.flatMap {
+            UsageParser.displayPlan($0, descriptor: descriptor)
+        }
+    }
+
+    private nonisolated static func decodeJWTPayload(_ token: String) -> [String: Any]? {
+        let parts = token.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        var payload = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while payload.count % 4 != 0 { payload.append("=") }
+        guard let data = Data(base64Encoded: payload) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private nonisolated static func findString(in value: Any, keys: Set<String>) -> String? {
         if let dictionary = value as? [String: Any] {
             for (key, child) in dictionary {
                 if keys.contains(key), let string = child as? String, !string.isEmpty { return string }
             }
             for child in dictionary.values {
-                if let result = findString(in: child, keys: keys) { return result }
+                if let result = Self.findString(in: child, keys: keys) { return result }
             }
         } else if let array = value as? [Any] {
             for child in array {
-                if let result = findString(in: child, keys: keys) { return result }
+                if let result = Self.findString(in: child, keys: keys) { return result }
             }
         }
         return nil
@@ -344,10 +453,15 @@ actor UsageCollector {
         let home = FileManager.default.homeDirectoryForCurrentUser
         switch id.rawValue {
         case "codex":
-            return [home.appending(path: ".codex/auth.json")]
+            return [codexHomeDirectory().appending(path: "auth.json")]
         case "claude":
+            let environment = ProcessInfo.processInfo.environment
+            if let secureRoot = environment["CLAUDE_SECURESTORAGE_CONFIG_DIR"] {
+                let root = secureRoot.isEmpty ? claudeConfigDirectory() : directoryURL(secureRoot)
+                return [root.appending(path: ".credentials.json")]
+            }
             return [
-                home.appending(path: ".claude/.credentials.json"),
+                claudeConfigDirectory().appending(path: ".credentials.json"),
                 home.appending(path: ".config/claude/credentials.json"),
             ]
         case "gemini":
@@ -358,6 +472,41 @@ actor UsageCollector {
         default:
             return []
         }
+    }
+
+    private func codexHomeDirectory() -> URL {
+        let configured = ProcessInfo.processInfo.environment["CODEX_HOME"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let configured, !configured.isEmpty {
+            return URL(fileURLWithPath: configured, isDirectory: true).standardizedFileURL
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: ".codex", directoryHint: .isDirectory)
+    }
+
+    private func claudeConfigDirectory() -> URL {
+        if let configured = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"], !configured.isEmpty {
+            return directoryURL(configured)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: ".claude", directoryHint: .isDirectory)
+    }
+
+    private func claudeProfileURLs() -> [URL] {
+        if let configured = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"], !configured.isEmpty {
+            let root = directoryURL(configured)
+            return [root.appending(path: ".config.json"), root.appending(path: ".claude.json")]
+        }
+        return [FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude.json")]
+    }
+
+    private func directoryURL(_ path: String) -> URL {
+        if path.hasPrefix("/") {
+            return URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+        }
+        return URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+            .appending(path: path, directoryHint: .isDirectory)
+            .standardizedFileURL
     }
 
 }

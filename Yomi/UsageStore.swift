@@ -82,6 +82,7 @@ final class UsageStore: ObservableObject {
             )
         }
         usageByID = loadingUsage
+        var refreshedUsage = loadingUsage
 
         await withTaskGroup(of: ProviderUsage.self) { group in
             let concurrencyLimit = 6
@@ -116,12 +117,12 @@ final class UsageStore: ObservableObject {
             }
 
             while let usage = await group.next() {
-                if usage.state == .failed, var cached = usageByID[usage.id], !cached.windows.isEmpty {
+                if usage.state == .failed, var cached = refreshedUsage[usage.id], !cached.windows.isEmpty {
                     cached.state = .unavailable
                     cached.message = usage.message
-                    usageByID[usage.id] = cached
+                    refreshedUsage[usage.id] = cached
                 } else {
-                    usageByID[usage.id] = usage
+                    refreshedUsage[usage.id] = usage
                 }
 
                 if nextJobIndex < jobs.count {
@@ -130,6 +131,7 @@ final class UsageStore: ObservableObject {
                 }
             }
         }
+        usageByID = refreshedUsage
         persistCache()
     }
 

@@ -12,7 +12,15 @@ nonisolated struct ModelTokenRates: Codable, Sendable {
     var outputAboveThreshold: Double?
 }
 
+nonisolated struct ModelPricingCatalogLoadResult: Sendable {
+    var catalog: ModelPricingCatalog?
+    var reloadAt: Date
+}
+
 nonisolated struct ModelPricingCatalog: Codable, Sendable {
+    private static let cacheLifetime: TimeInterval = 24 * 60 * 60
+    private static let retryInterval: TimeInterval = 15 * 60
+
     private nonisolated struct Provider: Codable, Sendable {
         var models: [String: Model]
     }
@@ -62,7 +70,10 @@ nonisolated struct ModelPricingCatalog: Codable, Sendable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        providers = try container.decode([String: Provider].self)
+        let decoded = try container.decode([String: Provider].self)
+        providers = decoded.reduce(into: [:]) { result, entry in
+            result[entry.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()] = entry.value
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -71,7 +82,8 @@ nonisolated struct ModelPricingCatalog: Codable, Sendable {
     }
 
     func rates(providerID: String, modelID: String) -> ModelTokenRates? {
-        guard let provider = providers[providerID.lowercased()] else { return nil }
+        let normalizedProvider = providerID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let provider = providers[normalizedProvider] else { return nil }
         for candidate in modelCandidates(modelID) {
             let model = provider.models[candidate]
                 ?? provider.models.values.first { $0.id == candidate }
@@ -96,14 +108,23 @@ nonisolated struct ModelPricingCatalog: Codable, Sendable {
         return nil
     }
 
-    static func load(session: URLSession, now: Date = Date()) async -> ModelPricingCatalog? {
+    static func load(session: URLSession, now: Date = Date()) async -> ModelPricingCatalogLoadResult {
         let cached = cachedArtifact()
-        if let cached, now.timeIntervalSince(cached.fetchedAt) <= 24 * 60 * 60 {
-            return cached.catalog
+        if let cached {
+            let age = now.timeIntervalSince(cached.fetchedAt)
+            if age >= 0, age <= cacheLifetime {
+                return ModelPricingCatalogLoadResult(
+                    catalog: cached.catalog,
+                    reloadAt: cached.fetchedAt.addingTimeInterval(cacheLifetime)
+                )
+            }
         }
 
         guard let url = URL(string: "https://models.dev/api.json") else {
-            return cached?.catalog
+            return ModelPricingCatalogLoadResult(
+                catalog: cached?.catalog,
+                reloadAt: now.addingTimeInterval(retryInterval)
+            )
         }
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
@@ -112,14 +133,56 @@ nonisolated struct ModelPricingCatalog: Codable, Sendable {
             guard let response = response as? HTTPURLResponse,
                   (200..<300).contains(response.statusCode),
                   let catalog = try? JSONDecoder().decode(ModelPricingCatalog.self, from: data),
-                  catalog.rates(providerID: "openai", modelID: "gpt-5") != nil,
-                  catalog.rates(providerID: "anthropic", modelID: "claude-sonnet-4-5") != nil
-            else { return cached?.catalog }
-            save(catalog, fetchedAt: now)
-            return catalog
+                  catalog.hasPriceableModels(providerID: "openai"),
+                  catalog.hasPriceableModels(providerID: "anthropic")
+            else {
+                return ModelPricingCatalogLoadResult(
+                    catalog: cached?.catalog,
+                    reloadAt: now.addingTimeInterval(retryInterval)
+                )
+            }
+            let merged = cached.map { catalog.mergingFallbackPricing(from: $0.catalog) } ?? catalog
+            save(merged, fetchedAt: now)
+            return ModelPricingCatalogLoadResult(
+                catalog: merged,
+                reloadAt: now.addingTimeInterval(cacheLifetime)
+            )
         } catch {
-            return cached?.catalog
+            return ModelPricingCatalogLoadResult(
+                catalog: cached?.catalog,
+                reloadAt: now.addingTimeInterval(retryInterval)
+            )
         }
+    }
+
+    private func hasPriceableModels(providerID: String) -> Bool {
+        providers[providerID.lowercased()]?.models.values.contains {
+            $0.cost?.input != nil && $0.cost?.output != nil
+        } == true
+    }
+
+    private func mergingFallbackPricing(from cached: ModelPricingCatalog) -> ModelPricingCatalog {
+        var merged = self
+        for (providerID, cachedProvider) in cached.providers {
+            guard var provider = merged.providers[providerID] else {
+                merged.providers[providerID] = cachedProvider
+                continue
+            }
+            for (modelKey, cachedModel) in cachedProvider.models {
+                guard cachedModel.cost?.input != nil,
+                      cachedModel.cost?.output != nil,
+                      !provider.models.values.contains(where: {
+                          $0.id == cachedModel.id && $0.cost?.input != nil && $0.cost?.output != nil
+                      })
+                else { continue }
+                let fallbackKey = provider.models[modelKey] == nil
+                    ? modelKey
+                    : "yomi-fallback:\(modelKey):\(cachedModel.id)"
+                provider.models[fallbackKey] = cachedModel
+            }
+            merged.providers[providerID] = provider
+        }
+        return merged
     }
 
     private func modelCandidates(_ raw: String) -> [String] {
@@ -140,6 +203,16 @@ nonisolated struct ModelPricingCatalog: Codable, Sendable {
         var index = 0
         while index < result.count {
             let candidate = result[index]
+            if let atSign = candidate.firstIndex(of: "@") {
+                let base = String(candidate[..<atSign])
+                let suffix = String(candidate[candidate.index(after: atSign)...])
+                if suffix.range(of: #"^\d{8}$"#, options: .regularExpression) != nil {
+                    append("\(base)-\(suffix)")
+                }
+                append(base)
+            } else if candidate.hasPrefix("claude-") {
+                append("\(candidate)@default")
+            }
             if let dated = candidate.range(of: #"-\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) {
                 append(String(candidate[..<dated.lowerBound]))
             }

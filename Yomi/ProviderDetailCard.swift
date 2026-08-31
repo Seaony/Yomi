@@ -11,8 +11,11 @@ enum ProviderDetailLayout {
 struct ProviderDetailCard: View {
     let descriptor: ProviderDescriptor
     let usage: ProviderUsage
+    let isRefreshing: Bool
+    let refresh: () -> Void
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.appLanguage) private var language
+    @State private var isRefreshHovering = false
 
     private var copy: AppCopy { AppCopy(language: language) }
 
@@ -85,6 +88,32 @@ struct ProviderDetailCard: View {
                         in: RoundedRectangle(cornerRadius: 7, style: .continuous)
                     )
             }
+
+            Button(action: refresh) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
+                    .frame(width: 23, height: 22)
+                    .background(
+                        AppTheme.primaryText(for: colorScheme).opacity(0.045),
+                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(isRefreshing)
+            .opacity(isRefreshing ? 0.45 : 1)
+            .scaleEffect(isRefreshHovering ? 1.06 : 1)
+            .help(copy.text("立即刷新", "Refresh now"))
+            .onHover { hovering in
+                if hovering { NSCursor.pointingHand.set() }
+                else { NSCursor.arrow.set() }
+                withAnimation(.easeOut(duration: 0.12)) {
+                    isRefreshHovering = hovering
+                }
+            }
+            .onDisappear {
+                if isRefreshHovering { NSCursor.arrow.set() }
+            }
         }
     }
 
@@ -122,7 +151,7 @@ struct ProviderDetailCard: View {
 
     private var footer: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text("\(copy.text("30 天", "30-day")) \(last30DaysValue)")
+            Text("30Days · \(last30DaysValue)")
                 .font(.system(size: 10.5, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .fixedSize(horizontal: true, vertical: false)
@@ -158,7 +187,11 @@ struct ProviderDetailPanelView: View {
     var body: some View {
         ProviderDetailCard(
             descriptor: descriptor,
-            usage: store.usage(for: descriptor.id)
+            usage: store.usage(for: descriptor.id),
+            isRefreshing: store.isRefreshing,
+            refresh: {
+                Task { await store.refresh() }
+            }
         )
         .padding(
             railSide == .right ? .trailing : .leading,
