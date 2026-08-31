@@ -10,7 +10,7 @@ enum UsageRailLayout {
     static let settingsDiameter: CGFloat = scaled(56)
     static let settingsAreaHeight: CGFloat = scaled(68)
     static let settingsBottomPadding: CGFloat = scaled(6)
-    static let settingsArcSize: CGFloat = scaled(64)
+    static let settingsArcSize: CGFloat = panelWidth / 2
     static let settingsArcBottomPadding: CGFloat = scaled(4)
     static let bottomExteriorSpace: CGFloat = scaled(20)
 
