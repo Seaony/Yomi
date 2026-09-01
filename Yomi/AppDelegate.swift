@@ -12,7 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var panel: FloatingPanel?
     private var providerDetailPanel: ProviderDetailPanel?
     private var providerDetailHostingView: NSHostingView<ProviderDetailPanelView>?
+    private var providerDetailPresentation: ProviderDetailPresentation?
     private var selectedProviderID: ProviderID?
+    private var selectedProviderLocalY: CGFloat?
     private var providerDetailCloseTask: Task<Void, Never>?
     private var settingsWindow: NSWindow?
     private var verticalPosition: CGFloat = 0.5
@@ -167,25 +169,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         guard let panel else { return }
 
-        let root = ProviderDetailPanelView(
-            store: store,
-            descriptor: descriptor,
-            railSide: railSide
-        )
-
         if let detailPanel = providerDetailPanel,
            let hostingView = providerDetailHostingView,
+           let presentation = providerDetailPresentation,
            detailPanel.isVisible {
-            let transitionDuration = animationDuration(0.08)
-            if transitionDuration > 0 {
-                hostingView.wantsLayer = true
-                let transition = CATransition()
-                transition.type = .fade
-                transition.duration = transitionDuration
-                transition.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                hostingView.layer?.add(transition, forKey: "provider-detail-content")
-            }
-            hostingView.rootView = root
+            let direction = ProviderDetailTransitionDirection(
+                previousLocalY: selectedProviderLocalY,
+                newLocalY: localY
+            )
+            presentation.update(
+                descriptor: descriptor,
+                direction: direction,
+                animated: animationDuration(1) > 0
+            )
             hostingView.layoutSubtreeIfNeeded()
             let finalFrame = providerDetailFrame(
                 fittingSize: hostingView.fittingSize,
@@ -193,6 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 panel: panel
             )
             selectedProviderID = descriptor.id
+            selectedProviderLocalY = localY
 
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = animationDuration(0.14)
@@ -203,6 +200,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         closeProviderDetail()
+        let presentation = ProviderDetailPresentation(descriptor: descriptor)
+        let root = ProviderDetailPanelView(
+            store: store,
+            presentation: presentation,
+            railSide: railSide,
+            hoverChanged: { [weak self] hovering in
+                self?.providerDetailHoverChanged(hovering)
+            }
+        )
         let hostingView = NSHostingView(rootView: root)
         let fittingSize = hostingView.fittingSize
         let finalFrame = providerDetailFrame(
@@ -230,7 +236,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         self.providerDetailPanel = detailPanel
         providerDetailHostingView = hostingView
+        providerDetailPresentation = presentation
         selectedProviderID = descriptor.id
+        selectedProviderLocalY = localY
         panel.addChildWindow(detailPanel, ordered: .above)
         detailPanel.orderFrontRegardless()
 
@@ -276,7 +284,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let detailPanel = providerDetailPanel else { return }
         providerDetailPanel = nil
         providerDetailHostingView = nil
+        providerDetailPresentation = nil
         selectedProviderID = nil
+        selectedProviderLocalY = nil
 
         let transitionDirection: CGFloat = railSide == .right ? 1 : -1
         let targetOrigin = NSPoint(
@@ -299,6 +309,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func closeProviderDetail(for providerID: ProviderID) {
         guard selectedProviderID == providerID else { return }
+        scheduleProviderDetailClose(for: providerID)
+    }
+
+    private func providerDetailHoverChanged(_ hovering: Bool) {
+        if hovering {
+            providerDetailCloseTask?.cancel()
+            providerDetailCloseTask = nil
+        } else if let selectedProviderID {
+            scheduleProviderDetailClose(for: selectedProviderID)
+        }
+    }
+
+    private func scheduleProviderDetailClose(for providerID: ProviderID) {
         providerDetailCloseTask?.cancel()
         providerDetailCloseTask = Task { [weak self] in
             try? await Task.sleep(for: Self.providerDetailDismissDelay)

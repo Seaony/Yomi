@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 enum ProviderDetailLayout {
@@ -8,13 +9,60 @@ enum ProviderDetailLayout {
     static let transitionOffset: CGFloat = 8
 }
 
+enum ProviderDetailTransitionDirection {
+    case up
+    case down
+    case stationary
+
+    init(previousLocalY: CGFloat?, newLocalY: CGFloat) {
+        guard let previousLocalY else {
+            self = .stationary
+            return
+        }
+        if newLocalY < previousLocalY {
+            self = .up
+        } else if newLocalY > previousLocalY {
+            self = .down
+        } else {
+            self = .stationary
+        }
+    }
+}
+
+@MainActor
+final class ProviderDetailPresentation: ObservableObject {
+    @Published private(set) var descriptor: ProviderDescriptor
+    private(set) var direction = ProviderDetailTransitionDirection.stationary
+
+    init(descriptor: ProviderDescriptor) {
+        self.descriptor = descriptor
+    }
+
+    func update(
+        descriptor: ProviderDescriptor,
+        direction: ProviderDetailTransitionDirection,
+        animated: Bool
+    ) {
+        self.direction = direction
+        if animated {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                self.descriptor = descriptor
+            }
+        } else {
+            self.descriptor = descriptor
+        }
+    }
+}
+
 struct ProviderDetailCard: View {
     let descriptor: ProviderDescriptor
     let usage: ProviderUsage
+    let transitionDirection: ProviderDetailTransitionDirection
     let isRefreshing: Bool
     let refresh: () -> Void
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.appLanguage) private var language
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isRefreshHovering = false
 
     private var copy: AppCopy { AppCopy(language: language) }
@@ -54,6 +102,31 @@ struct ProviderDetailCard: View {
         return usage.windows + usage.additionalWindows
     }
 
+    private var detailAnimation: Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.18)
+    }
+
+    private var sectionTransition: AnyTransition {
+        guard !reduceMotion else { return .identity }
+        let insertionOffset: CGFloat
+        let removalOffset: CGFloat
+        switch transitionDirection {
+        case .up:
+            insertionOffset = -7
+            removalOffset = 7
+        case .down:
+            insertionOffset = 7
+            removalOffset = -7
+        case .stationary:
+            insertionOffset = 0
+            removalOffset = 0
+        }
+        return .asymmetric(
+            insertion: .opacity.combined(with: .offset(y: insertionOffset)),
+            removal: .opacity.combined(with: .offset(y: removalOffset))
+        )
+    }
+
     private func formattedProviderCost(_ cost: ProviderCostSummary) -> String {
         let code = cost.currencyCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         if code == "POINTS" || code == "CREDITS" {
@@ -85,6 +158,7 @@ struct ProviderDetailCard: View {
                 VStack(spacing: 11) {
                     ForEach(displayedWindows) { window in
                         UsageWindowRow(window: window, tint: tint)
+                            .transition(sectionTransition)
                     }
                 }
 
@@ -99,16 +173,28 @@ struct ProviderDetailCard: View {
         .frame(width: 300)
         .fontDesign(.rounded)
         .foregroundStyle(AppTheme.primaryText(for: colorScheme))
+        .animation(detailAnimation, value: descriptor.id)
+        .animation(detailAnimation, value: usage)
     }
 
     private var header: some View {
         HStack(spacing: 7) {
-            ProviderIconView(provider: descriptor)
-                .frame(width: 20, height: 20)
-                .foregroundStyle(tint)
+            ZStack {
+                ProviderIconView(provider: descriptor)
+                    .frame(width: 20, height: 20)
+                    .foregroundStyle(tint)
+                    .id(descriptor.id)
+                    .transition(
+                        reduceMotion
+                            ? .identity
+                            : .opacity.combined(with: .scale(scale: 0.82))
+                    )
+            }
+            .frame(width: 20, height: 20)
 
             Text(descriptor.name)
                 .font(.system(size: 15, weight: .bold, design: .rounded))
+                .contentTransition(.opacity)
 
             Spacer()
 
@@ -121,6 +207,11 @@ struct ProviderDetailCard: View {
                     .background(
                         AppTheme.primaryText(for: colorScheme).opacity(0.045),
                         in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    )
+                    .transition(
+                        reduceMotion
+                            ? .identity
+                            : .opacity.combined(with: .scale(scale: 0.94))
                     )
             }
 
@@ -157,10 +248,12 @@ struct ProviderDetailCard: View {
             Text(headlineValue)
                 .font(.system(size: 26, weight: .bold, design: .rounded))
                 .monospacedDigit()
+                .contentTransition(.numericText(value: Double(usage.today?.tokens ?? 0)))
             Text(headlineCaption)
                 .font(.system(size: 11.5, weight: .semibold))
                 .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.48))
                 .lineLimit(1)
+                .contentTransition(.numericText(value: usage.today?.valueUSD ?? 0))
         }
     }
 
@@ -191,6 +284,7 @@ struct ProviderDetailCard: View {
                     Text(formattedProviderCost(cost))
                         .font(.system(size: 26, weight: .bold, design: .rounded))
                         .monospacedDigit()
+                        .contentTransition(.numericText(value: cost.used))
                     Text(cost.period ?? copy.text("费用", "Spend"))
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.48))
@@ -206,6 +300,7 @@ struct ProviderDetailCard: View {
                         .font(.system(size: 10.5, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .lineLimit(1)
+                        .contentTransition(.numericText())
                 }
             }
         }
@@ -218,12 +313,16 @@ struct ProviderDetailCard: View {
                 .monospacedDigit()
                 .fixedSize(horizontal: true, vertical: false)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .contentTransition(
+                    .numericText(value: Double(usage.last30Days?.tokens ?? 0))
+                )
 
             Text("\(weeklyEstimateValue) Weekly")
                 .font(.system(size: 10.5, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .fixedSize(horizontal: true, vertical: false)
                 .frame(maxWidth: .infinity, alignment: .trailing)
+                .contentTransition(.numericText(value: usage.weeklyEstimate?.valueUSD ?? 0))
         }
         .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.42))
         .padding(.top, 2)
@@ -242,17 +341,19 @@ struct ProviderDetailCard: View {
 struct ProviderDetailPanelView: View {
     @ObservedObject var store: UsageStore
     @ObservedObject private var appPreferences = AppPreferences.shared
-    let descriptor: ProviderDescriptor
+    @ObservedObject var presentation: ProviderDetailPresentation
     let railSide: UsageRailSide
+    let hoverChanged: (Bool) -> Void
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ProviderDetailCard(
-            descriptor: descriptor,
-            usage: store.usage(for: descriptor.id),
+            descriptor: presentation.descriptor,
+            usage: store.usage(for: presentation.descriptor.id),
+            transitionDirection: presentation.direction,
             isRefreshing: store.isRefreshing,
             refresh: {
-                Task { await store.refresh(providerID: descriptor.id) }
+                Task { await store.refresh(providerID: presentation.descriptor.id) }
             }
         )
         .padding(
@@ -264,6 +365,8 @@ struct ProviderDetailPanelView: View {
                 .fill(AppTheme.detailBackground(for: colorScheme))
         }
         .padding(ProviderDetailLayout.outerPadding)
+        .contentShape(Rectangle())
+        .onHover(perform: hoverChanged)
         .environment(\.appLanguage, appPreferences.language)
         .environment(\.locale, appPreferences.language.locale)
         .preferredColorScheme(appPreferences.appearance.colorScheme)
@@ -330,12 +433,14 @@ private struct UsageWindowRow: View {
                     .foregroundStyle(tint)
                     .monospacedDigit()
                     .fixedSize(horizontal: true, vertical: false)
+                    .contentTransition(.numericText(value: remainingFraction))
                 if !resetText.isEmpty {
                     Text(resetText)
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.3))
                         .monospacedDigit()
                         .fixedSize(horizontal: true, vertical: false)
+                        .contentTransition(.numericText())
                 }
             }
 
@@ -345,6 +450,7 @@ private struct UsageWindowRow: View {
                     Capsule()
                         .fill(tint)
                         .frame(width: max(4, proxy.size.width * remainingFraction))
+                        .animation(.easeInOut(duration: 0.18), value: remainingFraction)
                 }
             }
             .frame(height: 5)
