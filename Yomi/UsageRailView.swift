@@ -56,6 +56,10 @@ struct UsageRailView: View {
         UsageRailSide(rawValue: railSideValue) ?? .right
     }
 
+    private var railBackground: Color {
+        appPreferences.railBackgroundColor ?? AppTheme.railBackground(for: colorScheme)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Color.clear
@@ -110,7 +114,11 @@ struct UsageRailView: View {
                 )
         }
         .overlay(alignment: .bottom) {
-            SettingsHoverControl(isHovering: isHovering, railSide: railSide) {
+            SettingsHoverControl(
+                isHovering: isHovering,
+                railSide: railSide,
+                backgroundColor: railBackground
+            ) {
                 openSettings(nil)
             }
             .padding(.bottom, UsageRailLayout.settingsBottomPadding)
@@ -119,7 +127,7 @@ struct UsageRailView: View {
         .background {
             GeometryReader { proxy in
                 UsageRailShape(side: railSide)
-                    .fill(AppTheme.railBackground(for: colorScheme))
+                    .fill(railBackground)
                     .frame(
                         height: max(
                             0,
@@ -181,6 +189,7 @@ struct UsageRailView: View {
 private struct SettingsHoverControl: View {
     let isHovering: Bool
     let railSide: UsageRailSide
+    let backgroundColor: Color
     let action: () -> Void
 
     @State private var isControlHovering = false
@@ -196,7 +205,7 @@ private struct SettingsHoverControl: View {
                 Circle()
                     .trim(from: 0, to: isHovering ? 0 : 0.25)
                     .stroke(
-                        AppTheme.railBackground(for: colorScheme),
+                        backgroundColor,
                         style: StrokeStyle(
                             lineWidth: UsageRailLayout.scaled(5),
                             lineCap: .round
@@ -207,7 +216,7 @@ private struct SettingsHoverControl: View {
                     .opacity(isHovering ? 0 : 1)
 
                 Circle()
-                    .fill(AppTheme.railBackground(for: colorScheme))
+                    .fill(backgroundColor)
                     .frame(
                         width: UsageRailLayout.settingsDiameter,
                         height: UsageRailLayout.settingsDiameter

@@ -270,9 +270,21 @@ private struct GeneralSettingsView: View {
     @AppStorage("show-provider-names") private var showProviderNames = true
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
+    @State private var railBackgroundHex = ""
     @Environment(\.appLanguage) private var language
+    @Environment(\.colorScheme) private var colorScheme
 
     private var copy: AppCopy { AppCopy(language: language) }
+
+    private var railBackgroundColor: Binding<Color> {
+        Binding(
+            get: {
+                appPreferences.railBackgroundColor
+                    ?? AppTheme.railBackground(for: colorScheme)
+            },
+            set: { appPreferences.setRailBackgroundColor($0) }
+        )
+    }
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -337,6 +349,62 @@ private struct GeneralSettingsView: View {
                     ))
                         .font(.system(size: 11.5))
                         .foregroundStyle(SettingsPalette.tertiary)
+
+                    Rectangle().fill(SettingsPalette.line).frame(height: 1)
+
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(copy.text("悬浮侧边栏背景", "Floating rail background"))
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(SettingsPalette.primary)
+                            Text(copy.text(
+                                "自定义悬浮侧边栏的背景颜色",
+                                "Customize the floating rail background color"
+                            ))
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(SettingsPalette.tertiary)
+                        }
+
+                        Spacer()
+
+                        if appPreferences.railBackgroundColorHex != nil {
+                            Button(copy.text("恢复默认", "Reset")) {
+                                appPreferences.setRailBackgroundColor(nil)
+                            }
+                            .buttonStyle(SettingsPressButtonStyle())
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(SettingsPalette.secondary)
+                        }
+
+                        TextField("#RRGGBB", text: $railBackgroundHex)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                            .frame(width: 76)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 7)
+                            .background(SettingsPalette.inset)
+                            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                            .onChange(of: railBackgroundHex) { _, value in
+                                guard let normalized = appPreferences.setRailBackgroundColor(hex: value),
+                                      normalized != value
+                                else { return }
+                                railBackgroundHex = normalized
+                            }
+
+                        ColorPicker(
+                            "",
+                            selection: railBackgroundColor,
+                            supportsOpacity: false
+                        )
+                        .labelsHidden()
+                        .pointerStyle(.link)
+                    }
+                    .onAppear {
+                        railBackgroundHex = appPreferences.railBackgroundColorHex ?? ""
+                    }
+                    .onChange(of: appPreferences.railBackgroundColorHex) { _, value in
+                        railBackgroundHex = value ?? ""
+                    }
                 }
 
                 SettingsCard(copy.text("刷新间隔", "Refresh interval")) {

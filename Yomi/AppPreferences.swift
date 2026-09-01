@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import SwiftUI
 
@@ -213,8 +214,15 @@ final class AppPreferences: ObservableObject {
         }
     }
 
+    @Published private(set) var railBackgroundColorHex: String?
+
+    var railBackgroundColor: Color? {
+        railBackgroundColorHex.flatMap(Self.color(from:))
+    }
+
     private let defaults: UserDefaults
     private let appearanceKey = "app-appearance"
+    private let railBackgroundColorKey = "rail-background-color"
 
     private init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -224,6 +232,52 @@ final class AppPreferences: ObservableObject {
         language = AppLanguage(
             rawValue: defaults.string(forKey: AppLocalization.languageKey) ?? ""
         ) ?? .simplifiedChinese
+        railBackgroundColorHex = defaults.string(forKey: railBackgroundColorKey)
+            .flatMap(Self.normalizedHex(_:))
+    }
+
+    func setRailBackgroundColor(_ color: Color?) {
+        guard let color, let hex = Self.hexString(from: color) else {
+            railBackgroundColorHex = nil
+            defaults.removeObject(forKey: railBackgroundColorKey)
+            return
+        }
+        setRailBackgroundColor(hex: hex)
+    }
+
+    @discardableResult
+    func setRailBackgroundColor(hex: String) -> String? {
+        guard let normalized = Self.normalizedHex(hex) else { return nil }
+        railBackgroundColorHex = normalized
+        defaults.set(normalized, forKey: railBackgroundColorKey)
+        return normalized
+    }
+
+    private static func normalizedHex(_ hex: String) -> String? {
+        let trimmed = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
+        guard value.count == 6, UInt32(value, radix: 16) != nil else { return nil }
+        return "#" + value.uppercased()
+    }
+
+    private static func color(from hex: String) -> Color? {
+        let value = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard value.count == 6, let rgb = UInt32(value, radix: 16) else { return nil }
+        return Color(
+            red: Double((rgb >> 16) & 0xFF) / 255,
+            green: Double((rgb >> 8) & 0xFF) / 255,
+            blue: Double(rgb & 0xFF) / 255
+        )
+    }
+
+    private static func hexString(from color: Color) -> String? {
+        guard let rgb = NSColor(color).usingColorSpace(.sRGB) else { return nil }
+        return String(
+            format: "#%02X%02X%02X",
+            Int((rgb.redComponent * 255).rounded()),
+            Int((rgb.greenComponent * 255).rounded()),
+            Int((rgb.blueComponent * 255).rounded())
+        )
     }
 }
 
