@@ -47,19 +47,49 @@ struct ProviderDetailCard: View {
         return "≈ " + compactDollarValue(value)
     }
 
+    private var displayedWindows: [UsageWindow] {
+        if descriptor.id.rawValue == "antigravity", !usage.additionalWindows.isEmpty {
+            return usage.additionalWindows
+        }
+        return usage.windows + usage.additionalWindows
+    }
+
+    private func formattedProviderCost(_ cost: ProviderCostSummary) -> String {
+        let code = cost.currencyCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        if code == "POINTS" || code == "CREDITS" {
+            return cost.used.formatted(.number.precision(.fractionLength(0...2))) + " " + code.capitalized
+        }
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = code.isEmpty ? "USD" : code
+        formatter.locale = language == .simplifiedChinese
+            ? Locale(identifier: "zh_CN")
+            : Locale(identifier: "en_US")
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 2
+        return formatter.string(from: NSNumber(value: cost.used))
+            ?? "\(cost.used.formatted(.number.precision(.fractionLength(2)))) \(code)"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
 
-            if usage.windows.isEmpty {
+            if displayedWindows.isEmpty, usage.providerCost != nil || !usage.details.isEmpty {
+                providerSummaryContent
+            } else if displayedWindows.isEmpty {
                 emptyState
             } else {
                 headline
 
                 VStack(spacing: 11) {
-                    ForEach(Array(usage.windows.prefix(3))) { window in
+                    ForEach(displayedWindows) { window in
                         UsageWindowRow(window: window, tint: tint)
                     }
+                }
+
+                if usage.providerCost != nil || !usage.details.isEmpty {
+                    providerSummaryContent
                 }
 
                 footer
@@ -151,6 +181,33 @@ struct ProviderDetailCard: View {
             }
         }
         .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
+    }
+
+    private var providerSummaryContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let cost = usage.providerCost {
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Text(formattedProviderCost(cost))
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                    Text(cost.period ?? copy.text("费用", "Spend"))
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.48))
+                }
+            }
+            ForEach(usage.details) { detail in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(copy.usageLabel(detail.label))
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.42))
+                    Spacer(minLength: 8)
+                    Text(detail.value)
+                        .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+            }
+        }
     }
 
     private var footer: some View {
@@ -290,6 +347,13 @@ private struct UsageWindowRow: View {
                 }
             }
             .frame(height: 5)
+
+            if let detail = window.detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.38))
+                    .lineLimit(2)
+            }
         }
     }
 

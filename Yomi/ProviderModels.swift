@@ -5,7 +5,7 @@ struct ProviderID: RawRepresentable, Codable, Hashable, Sendable, Identifiable {
 
     var id: String { rawValue }
 
-    init(rawValue: String) {
+    nonisolated init(rawValue: String) {
         self.rawValue = rawValue
     }
 }
@@ -90,6 +90,20 @@ struct DailyTokenUsage: Codable, Hashable, Sendable {
     var valueUSD: Double?
 }
 
+struct ProviderCostSummary: Codable, Hashable, Sendable {
+    var used: Double
+    var limit: Double
+    var currencyCode: String
+    var period: String?
+    var balance: Double?
+}
+
+struct UsageDetail: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var label: String
+    var value: String
+}
+
 struct LocalTokenUsageSummary: Sendable {
     var today: DailyTokenUsage?
     var last30Days: DailyTokenUsage?
@@ -107,15 +121,99 @@ struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
     var id: ProviderID
     var state: State
     var windows: [UsageWindow]
+    var additionalWindows: [UsageWindow] = []
     var balance: String?
     var plan: String?
     var today: DailyTokenUsage? = nil
     var last30Days: DailyTokenUsage? = nil
     var weeklyEstimate: DailyTokenUsage? = nil
+    var providerCost: ProviderCostSummary? = nil
+    var details: [UsageDetail] = []
+    var commandCodeSubscriptionEnrichmentUnavailable = false
+    var commandCodeHasSubscriptionPlan = false
+    var commandCodeMonthlyGrantDepleted = false
     var updatedAt: Date?
     var message: String?
 
+    nonisolated init(
+        id: ProviderID,
+        state: State,
+        windows: [UsageWindow],
+        additionalWindows: [UsageWindow] = [],
+        balance: String? = nil,
+        plan: String? = nil,
+        today: DailyTokenUsage? = nil,
+        last30Days: DailyTokenUsage? = nil,
+        weeklyEstimate: DailyTokenUsage? = nil,
+        providerCost: ProviderCostSummary? = nil,
+        details: [UsageDetail] = [],
+        commandCodeSubscriptionEnrichmentUnavailable: Bool = false,
+        commandCodeHasSubscriptionPlan: Bool = false,
+        commandCodeMonthlyGrantDepleted: Bool = false,
+        updatedAt: Date? = nil,
+        message: String? = nil
+    ) {
+        self.id = id
+        self.state = state
+        self.windows = windows
+        self.additionalWindows = additionalWindows
+        self.balance = balance
+        self.plan = plan
+        self.today = today
+        self.last30Days = last30Days
+        self.weeklyEstimate = weeklyEstimate
+        self.providerCost = providerCost
+        self.details = details
+        self.commandCodeSubscriptionEnrichmentUnavailable = commandCodeSubscriptionEnrichmentUnavailable
+        self.commandCodeHasSubscriptionPlan = commandCodeHasSubscriptionPlan
+        self.commandCodeMonthlyGrantDepleted = commandCodeMonthlyGrantDepleted
+        self.updatedAt = updatedAt
+        self.message = message
+    }
+
     var headlineFraction: Double {
         windows.first?.clampedFraction ?? 0
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, state, windows, additionalWindows, balance, plan, today, last30Days
+        case weeklyEstimate, providerCost, details, updatedAt, message
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(ProviderID.self, forKey: .id)
+        state = try values.decodeIfPresent(State.self, forKey: .state) ?? .unavailable
+        windows = try values.decodeIfPresent([UsageWindow].self, forKey: .windows) ?? []
+        additionalWindows = try values.decodeIfPresent([UsageWindow].self, forKey: .additionalWindows) ?? []
+        balance = try values.decodeIfPresent(String.self, forKey: .balance)
+        plan = try values.decodeIfPresent(String.self, forKey: .plan)
+        today = try values.decodeIfPresent(DailyTokenUsage.self, forKey: .today)
+        last30Days = try values.decodeIfPresent(DailyTokenUsage.self, forKey: .last30Days)
+        weeklyEstimate = try values.decodeIfPresent(DailyTokenUsage.self, forKey: .weeklyEstimate)
+        providerCost = try values.decodeIfPresent(ProviderCostSummary.self, forKey: .providerCost)
+        details = try values.decodeIfPresent([UsageDetail].self, forKey: .details) ?? []
+        commandCodeSubscriptionEnrichmentUnavailable = false
+        commandCodeHasSubscriptionPlan = false
+        commandCodeMonthlyGrantDepleted = false
+        updatedAt = try values.decodeIfPresent(Date.self, forKey: .updatedAt)
+        message = try values.decodeIfPresent(String.self, forKey: .message)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(state, forKey: .state)
+        try values.encode(windows, forKey: .windows)
+        try values.encode(additionalWindows, forKey: .additionalWindows)
+        try values.encodeIfPresent(balance, forKey: .balance)
+        try values.encodeIfPresent(plan, forKey: .plan)
+        try values.encodeIfPresent(today, forKey: .today)
+        try values.encodeIfPresent(last30Days, forKey: .last30Days)
+        try values.encodeIfPresent(weeklyEstimate, forKey: .weeklyEstimate)
+        try values.encodeIfPresent(providerCost, forKey: .providerCost)
+        try values.encode(details, forKey: .details)
+        try values.encodeIfPresent(updatedAt, forKey: .updatedAt)
+        try values.encodeIfPresent(message, forKey: .message)
     }
 }

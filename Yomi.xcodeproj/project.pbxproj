@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A10F30A83045000100000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A10F30A93045000100000001 /* Sparkle */; };
+		A30F30A83045000100000001 /* SweetCookieKit in Frameworks */ = {isa = PBXBuildFile; productRef = A30F30A93045000100000001 /* SweetCookieKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -22,6 +23,7 @@
 
 /* Begin PBXFileReference section */
 		752595343045010E00233947 /* Yomi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Yomi.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20F30A13045000100000001 /* YomiTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = YomiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -33,6 +35,11 @@
 			path = Yomi;
 			sourceTree = "<group>";
 		};
+		A20F30A23045000100000001 /* YomiTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = YomiTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -41,6 +48,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10F30A83045000100000001 /* Sparkle in Frameworks */,
+				A30F30A83045000100000001 /* SweetCookieKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A20F30A53045000100000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -51,6 +66,7 @@
 			isa = PBXGroup;
 			children = (
 				752595363045010E00233947 /* Yomi */,
+				A20F30A23045000100000001 /* YomiTests */,
 				752595353045010E00233947 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -59,6 +75,7 @@
 			isa = PBXGroup;
 			children = (
 				752595343045010E00233947 /* Yomi.app */,
+				A20F30A13045000100000001 /* YomiTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -84,12 +101,46 @@
 			name = Yomi;
 			packageProductDependencies = (
 				A10F30A93045000100000001 /* Sparkle */,
+				A30F30A93045000100000001 /* SweetCookieKit */,
 			);
 			productName = Yomi;
 			productReference = 752595343045010E00233947 /* Yomi.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A20F30A33045000100000001 /* YomiTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A20F30AB3045000100000001 /* Build configuration list for PBXNativeTarget "YomiTests" */;
+			buildPhases = (
+				A20F30A43045000100000001 /* Sources */,
+				A20F30A53045000100000001 /* Frameworks */,
+				A20F30A63045000100000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A20F30A83045000100000001 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A20F30A23045000100000001 /* YomiTests */,
+			);
+			name = YomiTests;
+			packageProductDependencies = (
+			);
+			productName = YomiTests;
+			productReference = A20F30A13045000100000001 /* YomiTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXContainerItemProxy section */
+		A20F30A73045000100000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7525952C3045010E00233947 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 752595333045010E00233947;
+			remoteInfo = Yomi;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXProject section */
 		7525952C3045010E00233947 /* Project object */ = {
@@ -101,6 +152,10 @@
 				TargetAttributes = {
 					752595333045010E00233947 = {
 						CreatedOnToolsVersion = 26.6;
+					};
+					A20F30A33045000100000001 = {
+						CreatedOnToolsVersion = 26.6;
+						TestTargetID = 752595333045010E00233947;
 					};
 				};
 			};
@@ -117,17 +172,26 @@
 			productRefGroup = 752595353045010E00233947 /* Products */;
 			packageReferences = (
 				A10F30AA3045000100000001 /* XCRemoteSwiftPackageReference "Sparkle" */,
+				A30F30AA3045000100000001 /* XCRemoteSwiftPackageReference "SweetCookieKit" */,
 			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				752595333045010E00233947 /* Yomi */,
+				A20F30A33045000100000001 /* YomiTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		752595323045010E00233947 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A20F30A63045000100000001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -144,7 +208,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A20F30A43045000100000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A20F30A83045000100000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 752595333045010E00233947 /* Yomi */;
+			targetProxy = A20F30A73045000100000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		7525953D3045010F00233947 /* Debug */ = {
@@ -333,6 +412,44 @@
 			};
 			name = Release;
 		};
+		A20F30A93045000100000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = G34NXJXW94;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				PRODUCT_BUNDLE_IDENTIFIER = com.seaony.YomiTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Yomi.app/Contents/MacOS/Yomi";
+			};
+			name = Debug;
+		};
+		A20F30AA3045000100000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = G34NXJXW94;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				PRODUCT_BUNDLE_IDENTIFIER = com.seaony.YomiTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Yomi.app/Contents/MacOS/Yomi";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -354,6 +471,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		A20F30AB3045000100000001 /* Build configuration list for PBXNativeTarget "YomiTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A20F30A93045000100000001 /* Debug */,
+				A20F30AA3045000100000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -365,6 +491,14 @@
 				minimumVersion = 2.9.2;
 			};
 		};
+		A30F30AA3045000100000001 /* XCRemoteSwiftPackageReference "SweetCookieKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/steipete/SweetCookieKit";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.5.2;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -372,6 +506,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A10F30AA3045000100000001 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		A30F30A93045000100000001 /* SweetCookieKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A30F30AA3045000100000001 /* XCRemoteSwiftPackageReference "SweetCookieKit" */;
+			productName = SweetCookieKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

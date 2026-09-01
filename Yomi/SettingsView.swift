@@ -581,7 +581,7 @@ private struct ProviderSettingsRow: View {
     }
 
     private var statusText: String {
-        if let date = usage.updatedAt, !usage.windows.isEmpty {
+        if let date = usage.updatedAt, usage.state == .ready {
             return copy.text("已更新", "Updated")
                 + " · \(date.formatted(date: .omitted, time: .shortened))"
         }
@@ -604,6 +604,13 @@ private struct ProviderConfigurationView: View {
 
     @State private var configuration: ProviderConfiguration
     @State private var secret: String
+    @State private var managementSecret: String
+    @State private var secondarySecret: String
+    @State private var stepFunManualToken: String
+    @State private var bedrockAuthMode: String
+    @State private var bedrockProfile: String
+    @State private var bedrockRegion: String
+    @State private var deepSeekProfiles: [DeepSeekPlatformTokenImporter.TokenInfo]
     @State private var saveMessage: String?
     @Environment(\.appLanguage) private var language
 
@@ -612,8 +619,65 @@ private struct ProviderConfigurationView: View {
     init(store: UsageStore, descriptor: ProviderDescriptor) {
         self.store = store
         self.descriptor = descriptor
-        _configuration = State(initialValue: store.preferences.configuration(for: descriptor.id))
-        _secret = State(initialValue: store.preferences.secret(for: descriptor.id))
+        var configuration = store.preferences.configuration(for: descriptor.id)
+        let secret = store.preferences.secret(for: descriptor.id)
+        if descriptor.id.rawValue == "moonshot" {
+            if !secret.isEmpty, configuration.endpoint.isEmpty {
+                configuration.endpoint = MoonshotUsageRegion.china.rawValue
+            }
+            if configuration.account.isEmpty {
+                configuration.account = MoonshotUsageFetcher.resolvedRegion(
+                    configured: configuration.endpoint.isEmpty ? nil : configuration.endpoint,
+                    environment: ProcessInfo.processInfo.environment
+                ).rawValue
+            }
+        }
+        if descriptor.id.rawValue == "windsurf", configuration.account.isEmpty {
+            configuration.account = WindsurfSessionSource.automatic.rawValue
+        }
+        if (descriptor.id.rawValue == "longcat"
+            || descriptor.id.rawValue == "zoommate"
+            || descriptor.id.rawValue == "notion"),
+           configuration.source == .account || configuration.source == .token {
+            configuration.source = .automatic
+        }
+        _configuration = State(initialValue: configuration)
+        _secret = State(initialValue: secret)
+        _managementSecret = State(initialValue: store.preferences.auxiliarySecret(
+            for: descriptor.id,
+            key: "management-api-key"
+        ))
+        _secondarySecret = State(initialValue: store.preferences.auxiliarySecret(
+            for: descriptor.id,
+            key: "secret-access-key"
+        ))
+        let storedBedrockAuthMode = store.preferences.auxiliarySecret(for: descriptor.id, key: "aws-auth-mode")
+        _bedrockAuthMode = State(initialValue: storedBedrockAuthMode.isEmpty
+            ? BedrockCredentialResolver.inferredAuthMode(
+                configured: nil,
+                environment: ProcessInfo.processInfo.environment
+            ).rawValue
+            : storedBedrockAuthMode)
+        _bedrockProfile = State(initialValue: store.preferences.auxiliarySecret(
+            for: descriptor.id,
+            key: "aws-profile"
+        ))
+        _bedrockRegion = State(initialValue: store.preferences.auxiliarySecret(
+            for: descriptor.id,
+            key: "aws-region"
+        ))
+        let storedStepFunManualToken = store.preferences.auxiliarySecret(
+            for: descriptor.id,
+            key: "manual-token"
+        )
+        _stepFunManualToken = State(initialValue: descriptor.id.rawValue == "stepfun"
+            && configuration.source == .token
+            && storedStepFunManualToken.isEmpty
+            ? secret
+            : storedStepFunManualToken)
+        _deepSeekProfiles = State(initialValue: descriptor.id.rawValue == "deepseek"
+            ? DeepSeekPlatformTokenImporter.importTokens()
+            : [])
     }
 
     var body: some View {
@@ -648,8 +712,8 @@ private struct ProviderConfigurationView: View {
                 SettingsCard(copy.text("数据来源", "Data source")) {
                     SettingsLabeledRow(title: copy.text("读取方式", "Source")) {
                         Picker("", selection: $configuration.source) {
-                            ForEach(ProviderSource.allCases, id: \.self) { source in
-                                Text(source.title(language: language)).tag(source)
+                            ForEach(availableSources, id: \.self) { source in
+                                Text(sourceTitle(source)).tag(source)
                             }
                         }
                         .labelsHidden()
@@ -657,43 +721,246 @@ private struct ProviderConfigurationView: View {
                         .frame(width: 180)
                     }
 
-                    if configuration.source == .endpoint {
+                    if configuration.source == .endpoint
+                        || descriptor.id.rawValue == "azureopenai"
+                        || descriptor.id.rawValue == "deepgram"
+                        || descriptor.id.rawValue == "chutes"
+                        || descriptor.id.rawValue == "clawrouter"
+                        || descriptor.id.rawValue == "sub2api"
+                        || descriptor.id.rawValue == "wayfinder"
+                        || descriptor.id.rawValue == "llmproxy"
+                        || descriptor.id.rawValue == "litellm" {
                         SettingsTextField(
-                            title: copy.text("接口地址", "Endpoint URL"),
+                            title: descriptor.id.rawValue == "azureopenai"
+                                ? copy.text("Azure Endpoint", "Azure endpoint")
+                                : descriptor.id.rawValue == "deepgram"
+                                ? copy.text("Deepgram API URL（可选）", "Deepgram API URL (optional)")
+                                : descriptor.id.rawValue == "chutes"
+                                ? copy.text("Chutes API URL（可选）", "Chutes API URL (optional)")
+                                : descriptor.id.rawValue == "clawrouter"
+                                ? copy.text("ClawRouter Base URL（可选）", "ClawRouter Base URL (optional)")
+                                : descriptor.id.rawValue == "sub2api"
+                                ? "sub2api Base URL"
+                                : descriptor.id.rawValue == "wayfinder"
+                                ? copy.text(
+                                    "Gateway URL（默认 http://127.0.0.1:8088）",
+                                    "Gateway URL (default: http://127.0.0.1:8088)"
+                                )
+                                : descriptor.id.rawValue == "llmproxy"
+                                ? "LLM Proxy Base URL"
+                                : descriptor.id.rawValue == "litellm"
+                                ? "LiteLLM Base URL"
+                                : copy.text("接口地址", "Endpoint URL"),
                             text: $configuration.endpoint
                         )
                     }
                     if configuration.source == .command {
                         SettingsTextField(
-                            title: copy.text(
-                                "输出 JSON 或百分比的命令",
-                                "Command that outputs JSON or percentages"
-                            ),
+                            title: descriptor.id.rawValue == "doubao"
+                                ? copy.text("arkcli 可执行文件路径（可选）", "arkcli executable path (optional)")
+                                : descriptor.id.rawValue == "codex"
+                                ? copy.text("Codex CLI 可执行文件路径（可选）", "Codex CLI executable path (optional)")
+                                : descriptor.id.rawValue == "claude"
+                                ? copy.text("Claude CLI 可执行文件路径（可选）", "Claude CLI executable path (optional)")
+                                : copy.text(
+                                    "输出 JSON 或百分比的命令",
+                                    "Command that outputs JSON or percentages"
+                                ),
                             text: $configuration.command
                         )
                     }
-                    if configuration.source == .account {
+                    if descriptor.id.rawValue == "doubao" {
                         SettingsTextField(
-                            title: copy.text("账号标识（可选）", "Account identifier (optional)"),
+                            title: copy.text("Region（默认 cn-beijing）", "Region (default: cn-beijing)"),
+                            text: $configuration.account
+                        )
+                    }
+                    if descriptor.id.rawValue == "moonshot" {
+                        SettingsLabeledRow(title: copy.text("API 区域", "API region")) {
+                            Picker("", selection: $configuration.account) {
+                                Text(copy.text("国际", "International"))
+                                    .tag(MoonshotUsageRegion.international.rawValue)
+                                Text(copy.text("中国大陆", "China"))
+                                    .tag(MoonshotUsageRegion.china.rawValue)
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(width: 180)
+                            .onChange(of: configuration.account) { _, newRegion in
+                                guard !configuration.endpoint.isEmpty,
+                                      configuration.endpoint != newRegion
+                                else { return }
+                                secret = ""
+                            }
+                        }
+                        Text(copy.text(
+                            "切换区域后需要输入该区域对应的 API Key。自动模式也会读取 MOONSHOT_REGION。",
+                            "Switching regions requires that region's API key. Automatic mode also reads MOONSHOT_REGION."
+                        ))
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(SettingsPalette.tertiary)
+                    }
+                    if descriptor.id.rawValue == "notion" {
+                        SettingsTextField(
+                            title: copy.text("Workspace ID（可选）", "Workspace ID (optional)"),
+                            text: $configuration.account
+                        )
+                        Text(copy.text(
+                            "留空时优先选择首个 Business 或 Enterprise workspace。",
+                            "When left blank, the first Business or Enterprise workspace is preferred."
+                        ))
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(SettingsPalette.tertiary)
+                    }
+                    if descriptor.id.rawValue == "windsurf", configuration.source != .account {
+                        SettingsLabeledRow(title: copy.text("会话来源", "Session source")) {
+                            Picker("", selection: $configuration.account) {
+                                Text(copy.text("自动", "Automatic"))
+                                    .tag(WindsurfSessionSource.automatic.rawValue)
+                                Text(copy.text("手动", "Manual"))
+                                    .tag(WindsurfSessionSource.manual.rawValue)
+                                Text(copy.text("关闭", "Off"))
+                                    .tag(WindsurfSessionSource.off.rawValue)
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(width: 180)
+                        }
+                    }
+                    if descriptor.id.rawValue == "deepseek", deepSeekProfiles.count > 1 {
+                        SettingsLabeledRow(title: copy.text("Chrome Profile", "Chrome profile")) {
+                            Picker("", selection: $configuration.account) {
+                                Text(copy.text("未选择", "Not selected")).tag("")
+                                ForEach(deepSeekProfiles, id: \.id) { profile in
+                                    Text(profile.sourceLabel).tag(profile.id)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(width: 180)
+                        }
+                    }
+                    if configuration.source == .account
+                        && descriptor.id.rawValue != "antigravity"
+                        && descriptor.id.rawValue != "augment"
+                        && descriptor.id.rawValue != "codex"
+                        && descriptor.id.rawValue != "t3chat"
+                        && descriptor.id.rawValue != "zed"
+                        && descriptor.id.rawValue != "windsurf"
+                        || descriptor.id.rawValue == "openai"
+                        || descriptor.id.rawValue == "azureopenai"
+                        || descriptor.id.rawValue == "opencode"
+                        || descriptor.id.rawValue == "opencodego"
+                        || descriptor.id.rawValue == "alibaba"
+                        || descriptor.id.rawValue == "alibabatokenplan"
+                        || descriptor.id.rawValue == "fireworks"
+                        || descriptor.id.rawValue == "copilot"
+                        || descriptor.id.rawValue == "devin"
+                        || descriptor.id.rawValue == "kilo"
+                        || descriptor.id.rawValue == "zai"
+                        || descriptor.id.rawValue == "minimax"
+                        || descriptor.id.rawValue == "jetbrains"
+                        || descriptor.id.rawValue == "deepgram"
+                        || descriptor.id.rawValue == "xai"
+                        || descriptor.id.rawValue == "stepfun" && configuration.source != .token
+                        || descriptor.id.rawValue == "claude" && configuration.source == .cookie {
+                        SettingsTextField(
+                            title: configurationAccountLabel,
                             text: $configuration.account
                         )
                     }
                 }
 
-                SettingsCard(copy.text("认证", "Authentication")) {
-                    SecureField(secretLabel, text: $secret)
-                        .textFieldStyle(.plain)
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 9)
-                        .background(SettingsPalette.inset)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                if showsAuthenticationCard {
+                    SettingsCard(copy.text("认证", "Authentication")) {
+                        if descriptor.id.rawValue == "bedrock" {
+                            SettingsLabeledRow(title: copy.text("认证方式", "Authentication")) {
+                                Picker("", selection: $bedrockAuthMode) {
+                                    Text(copy.text("Access keys", "Access keys"))
+                                        .tag(BedrockAuthMode.keys.rawValue)
+                                    Text(copy.text("AWS Profile", "AWS profile"))
+                                        .tag(BedrockAuthMode.profile.rawValue)
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .frame(width: 180)
+                            }
+                            if bedrockAuthMode == BedrockAuthMode.profile.rawValue {
+                                SettingsTextField(
+                                    title: copy.text("Profile 名称", "Profile name"),
+                                    text: $bedrockProfile
+                                )
+                            } else {
+                                SecureField("Access Key ID", text: $secret)
+                                    .textFieldStyle(.plain)
+                                    .padding(.horizontal, 11)
+                                    .padding(.vertical, 9)
+                                    .background(SettingsPalette.inset)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                SecureField("Secret Access Key", text: $secondarySecret)
+                                    .textFieldStyle(.plain)
+                                    .padding(.horizontal, 11)
+                                    .padding(.vertical, 9)
+                                    .background(SettingsPalette.inset)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            }
+                            SettingsTextField(
+                                title: copy.text("Region（可选）", "Region (optional)"),
+                                text: $bedrockRegion
+                            )
+                        } else {
+                            SecureField(secretLabel, text: authenticationSecret)
+                                .textFieldStyle(.plain)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 9)
+                                .background(SettingsPalette.inset)
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
 
-                    if !descriptor.environmentKeys.isEmpty {
-                        Text(copy.text("自动模式也会读取：", "Automatic mode also reads: ")
-                            + descriptor.environmentKeys.joined(separator: ", "))
+                        if !descriptor.environmentKeys.isEmpty {
+                            Text(copy.text("自动模式也会读取：", "Automatic mode also reads: ")
+                                + descriptor.environmentKeys.joined(separator: ", "))
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(SettingsPalette.tertiary)
+                                .textSelection(.enabled)
+                        }
+                        if descriptor.id.rawValue == "groq" {
+                            Text(copy.text(
+                                "用量与支出会自动读取 console.groq.com 浏览器会话；API Key 为可选，仅用于补充 Enterprise Prometheus 指标。",
+                                "Usage and spend come from the console.groq.com browser session automatically; the optional API key only adds Enterprise Prometheus metrics."
+                            ))
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(SettingsPalette.tertiary)
+                        }
+                        if descriptor.id.rawValue == "openrouter" {
+                            SecureField(
+                                copy.text("管理 API Key（可选）", "Management API key (optional)"),
+                                text: $managementSecret
+                            )
+                            .textFieldStyle(.plain)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 9)
+                            .background(SettingsPalette.inset)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                            Text(copy.text(
+                                "管理 API Key 用于读取最近 30 天活动；也可设置 OPENROUTER_MANAGEMENT_API_KEY。",
+                                "The management API key enables 30-day activity; OPENROUTER_MANAGEMENT_API_KEY is also supported."
+                            ))
                             .font(.system(size: 10.5))
                             .foregroundStyle(SettingsPalette.tertiary)
-                            .textSelection(.enabled)
+                        }
+                        if descriptor.id.rawValue == "doubao" {
+                            SecureField(
+                                copy.text("Secret Access Key（可选）", "Secret Access Key (optional)"),
+                                text: $secondarySecret
+                            )
+                            .textFieldStyle(.plain)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 9)
+                            .background(SettingsPalette.inset)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
                     }
                 }
 
@@ -745,19 +1012,374 @@ private struct ProviderConfigurationView: View {
     }
 
     private var secretLabel: String {
-        configuration.source == .cookie
+        if descriptor.id.rawValue == "codex" {
+            return switch configuration.source {
+            case .token: "Codex PAT"
+            case .cookie: copy.text("ChatGPT Cookie", "ChatGPT Cookie")
+            default: copy.text("Codex PAT（可选）", "Codex PAT (optional)")
+            }
+        }
+        if descriptor.id.rawValue == "antigravity" {
+            return copy.text("OAuth 凭证 JSON（可选）", "OAuth credentials JSON (optional)")
+        }
+        if descriptor.id.rawValue == "t3chat", configuration.source == .cookie {
+            return copy.text("Cookie 或完整 cURL", "Cookie or full cURL")
+        }
+        if descriptor.id.rawValue == "ollama", configuration.source == .cookie {
+            return copy.text("Cookie 标头或会话值", "Cookie header or session value")
+        }
+        if descriptor.id.rawValue == "ollama", configuration.source == .token {
+            return copy.text("Ollama API Key", "Ollama API key")
+        }
+        if descriptor.id.rawValue == "ollama", configuration.source == .automatic {
+            return copy.text("API Key 或 Cookie（可选）", "API key or Cookie (optional)")
+        }
+        if descriptor.id.rawValue == "openrouter" {
+            return "OpenRouter API Key"
+        }
+        if descriptor.id.rawValue == "elevenlabs" {
+            return "API Key (xi-...)"
+        }
+        if descriptor.id.rawValue == "warp" {
+            return "Warp API Key"
+        }
+        if descriptor.id.rawValue == "windsurf" {
+            return copy.text("Windsurf 会话 JSON 包", "Windsurf session JSON bundle")
+        }
+        if descriptor.id.rawValue == "perplexity" {
+            return copy.text("Cookie 标头或会话值", "Cookie header or session value")
+        }
+        if descriptor.id.rawValue == "sakana" {
+            return copy.text("Cookie 标头", "Cookie header")
+        }
+        if descriptor.id.rawValue == "abacus" {
+            return copy.text("Cookie 标头或 cURL", "Cookie header or cURL")
+        }
+        if descriptor.id.rawValue == "mimo" {
+            return copy.text("Cookie 标头或完整 cURL", "Cookie header or full cURL")
+        }
+        if descriptor.id.rawValue == "deepinfra" {
+            return "DeepInfra API Key"
+        }
+        if descriptor.id.rawValue == "crof" {
+            return "Crof API Key"
+        }
+        if descriptor.id.rawValue == "venice" {
+            return "Venice API Key"
+        }
+        if descriptor.id.rawValue == "deepgram" {
+            return "Deepgram API Key"
+        }
+        if descriptor.id.rawValue == "poe" {
+            return "Poe API Key"
+        }
+        if descriptor.id.rawValue == "mistral" {
+            return copy.text("Cookie 标头或完整 cURL", "Cookie header or full cURL")
+        }
+        if descriptor.id.rawValue == "qoder" {
+            return copy.text("Cookie 标头或完整 cURL", "Cookie header or full cURL")
+        }
+        if descriptor.id.rawValue == "longcat" {
+            return copy.text("Cookie 标头", "Cookie header")
+        }
+        if descriptor.id.rawValue == "zoommate", configuration.source == .cookie {
+            return copy.text("ZoomMate 完整 cURL", "Full ZoomMate cURL")
+        }
+        if descriptor.id.rawValue == "notion", configuration.source == .cookie {
+            return copy.text(
+                "token_v2、Cookie 标头或完整 cURL",
+                "token_v2, Cookie header, or full cURL"
+            )
+        }
+        if descriptor.id.rawValue == "stepfun" {
+            return configuration.source == .token
+                ? "Oasis-Token"
+                : copy.text("密码", "Password")
+        }
+        if descriptor.id.rawValue == "deepseek" {
+            return switch configuration.source {
+            case .cookie: "DeepSeek Platform userToken"
+            case .automatic: copy.text("DeepSeek API Key（可选）", "DeepSeek API key (optional)")
+            default: "DeepSeek API Key"
+            }
+        }
+        if descriptor.id.rawValue == "chutes" {
+            return "Chutes API Key"
+        }
+        if descriptor.id.rawValue == "neuralwatt" {
+            return "Neuralwatt API Key"
+        }
+        if descriptor.id.rawValue == "xai" {
+            return "xAI Management API Key"
+        }
+        if descriptor.id.rawValue == "aiand" {
+            return "ai& API Key"
+        }
+        if descriptor.id.rawValue == "zenmux" {
+            return "ZenMux Management API Key"
+        }
+        if descriptor.id.rawValue == "sub2api" {
+            return copy.text("备用 API Key", "Fallback API key")
+        }
+        if descriptor.id.rawValue == "llmproxy" {
+            return "LLM Proxy API Key"
+        }
+        if descriptor.id.rawValue == "litellm" {
+            return "LiteLLM API Key"
+        }
+        if descriptor.id.rawValue == "ibmbob" {
+            return "IBM Bob API Key"
+        }
+        if descriptor.id.rawValue == "grok" {
+            return switch configuration.source {
+            case .token: copy.text("SuperGrok Bearer 令牌", "SuperGrok bearer token")
+            case .cookie: copy.text("grok.com Cookie 标头", "grok.com Cookie header")
+            default: copy.text(
+                "SuperGrok Bearer 令牌或 grok.com Cookie（可选）",
+                "SuperGrok bearer token or grok.com Cookie (optional)"
+            )
+            }
+        }
+        if descriptor.id.rawValue == "groq" {
+            return "Groq API Key (gsk_...)"
+        }
+        if descriptor.id.rawValue == "doubao" {
+            return "API Key / Access Key ID"
+        }
+        return configuration.source == .cookie
             ? copy.text("Cookie 内容", "Cookie contents")
             : copy.text("访问令牌或密钥", "Access token or key")
     }
 
+    private var availableSources: [ProviderSource] {
+        [.automatic] + descriptor.preferredSources
+    }
+
+    private func sourceTitle(_ source: ProviderSource) -> String {
+        if descriptor.id.rawValue == "codex" {
+            return switch source {
+            case .automatic: copy.text("自动", "Auto")
+            case .cookie: "Web"
+            case .command: "CLI"
+            case .account: "OAuth"
+            case .token: "API"
+            case .endpoint: source.title(language: language)
+            }
+        }
+        if descriptor.id.rawValue == "claude" {
+            return switch source {
+            case .automatic: copy.text("自动", "Auto")
+            case .account: "OAuth API"
+            case .token: copy.text("API（Admin Key）", "API (Admin key)")
+            case .cookie: copy.text("网页 API（Cookie）", "Web API (cookies)")
+            case .command: "CLI (PTY)"
+            case .endpoint: source.title(language: language)
+            }
+        }
+        if descriptor.id.rawValue == "windsurf" {
+            return switch source {
+            case .automatic: copy.text("自动", "Auto")
+            case .cookie: copy.text("网页接口（IndexedDB）", "Web API (IndexedDB)")
+            case .account: copy.text("本地（SQLite 缓存）", "Local (SQLite cache)")
+            default: source.title(language: language)
+            }
+        }
+        if descriptor.id.rawValue == "abacus" {
+            return configuration.source == .automatic
+                ? copy.text("自动导入浏览器 Cookie", "Automatic browser cookies")
+                : copy.text("手动 Cookie", "Manual Cookie")
+        }
+        if descriptor.id.rawValue == "mimo" {
+            return configuration.source == .automatic
+                ? copy.text("自动导入浏览器 Cookie", "Automatic browser cookies")
+                : copy.text("手动 Cookie", "Manual Cookie")
+        }
+        if descriptor.id.rawValue == "mistral" {
+            return source == .automatic
+                ? copy.text("自动导入浏览器 Cookie", "Automatic browser cookies")
+                : copy.text("手动 Cookie", "Manual Cookie")
+        }
+        if descriptor.id.rawValue == "qoder" {
+            return source == .automatic
+                ? copy.text("自动导入浏览器 Cookie", "Automatic browser cookies")
+                : copy.text("手动 Cookie", "Manual Cookie")
+        }
+        if descriptor.id.rawValue == "longcat" {
+            return source == .automatic
+                ? copy.text("自动导入浏览器 Cookie", "Automatic browser cookies")
+                : copy.text("手动 Cookie", "Manual Cookie")
+        }
+        if descriptor.id.rawValue == "zoommate" {
+            return source == .automatic
+                ? copy.text("自动导入 Chrome 会话", "Automatic Chrome session")
+                : copy.text("手动 cURL", "Manual cURL")
+        }
+        if descriptor.id.rawValue == "notion" {
+            return source == .automatic
+                ? copy.text("自动导入 Chrome Cookie", "Automatic Chrome cookies")
+                : copy.text("手动 Cookie", "Manual Cookie")
+        }
+        if descriptor.id.rawValue == "deepseek" {
+            return switch source {
+            case .automatic: copy.text("自动", "Auto")
+            case .token: "API"
+            case .cookie: "Web"
+            default: source.title(language: language)
+            }
+        }
+        if descriptor.id.rawValue == "doubao" {
+            return switch source {
+            case .command: "arkcli"
+            case .token: copy.text("API 凭据", "API credentials")
+            default: source.title(language: language)
+            }
+        }
+        if descriptor.id.rawValue == "ibmbob", source == .token {
+            return "API Key"
+        }
+        if descriptor.id.rawValue == "grok" {
+            return switch source {
+            case .automatic: copy.text("自动", "Auto")
+            case .account: "Grok CLI"
+            case .token: "SuperGrok OAuth"
+            case .cookie: copy.text("grok.com 浏览器会话", "grok.com browser session")
+            default: source.title(language: language)
+            }
+        }
+        if descriptor.id.rawValue == "groq" {
+            return switch source {
+            case .automatic: copy.text(
+                "自动（Console，失败时 Enterprise 指标）",
+                "Auto (Console, then Enterprise metrics)"
+            )
+            case .cookie: copy.text("Console（浏览器会话）", "Console (browser session)")
+            case .token: "Enterprise Prometheus"
+            default: source.title(language: language)
+            }
+        }
+        guard descriptor.id.rawValue == "amp" else { return source.title(language: language) }
+        return switch source {
+        case .account: copy.text("Amp 命令行工具", "Amp CLI")
+        case .token: copy.text("访问令牌", "Access token")
+        case .cookie: copy.text("浏览器会话", "Browser session")
+        default: source.title(language: language)
+        }
+    }
+
+    private var showsAuthenticationCard: Bool {
+        if descriptor.id.rawValue == "zed" { return false }
+        if descriptor.id.rawValue == "codex" {
+            return configuration.source == .automatic
+                || configuration.source == .token
+                || configuration.source == .cookie
+        }
+        if descriptor.id.rawValue == "claude" {
+            return configuration.source != .account && configuration.source != .command
+        }
+        if descriptor.id.rawValue == "amp", configuration.source == .account { return false }
+        if descriptor.id.rawValue == "windsurf" {
+            return configuration.source != .account
+                && configuration.account == WindsurfSessionSource.manual.rawValue
+        }
+        if descriptor.id.rawValue == "abacus" { return configuration.source == .cookie }
+        if descriptor.id.rawValue == "mimo" { return configuration.source == .cookie }
+        if descriptor.id.rawValue == "mistral" { return configuration.source == .cookie }
+        if descriptor.id.rawValue == "qoder" { return configuration.source == .cookie }
+        if descriptor.id.rawValue == "longcat" { return configuration.source == .cookie }
+        if descriptor.id.rawValue == "zoommate" { return configuration.source == .cookie }
+        if descriptor.id.rawValue == "notion" { return configuration.source == .cookie }
+        if descriptor.id.rawValue == "wayfinder" { return false }
+        if descriptor.id.rawValue == "doubao" { return configuration.source != .command }
+        if descriptor.id.rawValue == "grok" { return configuration.source != .account }
+        return true
+    }
+
+    private var configurationAccountLabel: String {
+        switch descriptor.id.rawValue {
+        case "openai": copy.text("Project ID（可选）", "Project ID (optional)")
+        case "azureopenai": copy.text("Deployment 名称", "Deployment name")
+        case "claude": copy.text("Organization ID（可选）", "Organization ID (optional)")
+        case "opencode": copy.text("Workspace ID（可选）", "Workspace ID (optional)")
+        case "opencodego": copy.text("Workspace ID（可选）", "Workspace ID (optional)")
+        case "alibaba": copy.text("区域（intl 或 cn）", "Region (intl or cn)")
+        case "alibabatokenplan": copy.text(
+            "区域（intl、cn、intl-personal 或 cn-personal）",
+            "Region (intl, cn, intl-personal, or cn-personal)"
+        )
+        case "fireworks": copy.text("账号 slug（可选）", "Account slug (optional)")
+        case "copilot": copy.text("企业主机（可选）", "Enterprise host (optional)")
+        case "devin": copy.text("组织 slug 或 URL（可选）", "Organization slug or URL (optional)")
+        case "kilo": copy.text("Organization ID（可选）", "Organization ID (optional)")
+        case "zai": copy.text("API 区域（global 或 bigmodel-cn）", "API region (global or bigmodel-cn)")
+        case "minimax": copy.text("MiniMax 区域（global 或 cn）", "MiniMax region (global or cn)")
+        case "jetbrains": copy.text("IDE 配置目录（可选）", "IDE configuration directory (optional)")
+        case "deepgram": copy.text("Project ID（可选；留空汇总全部项目）", "Project ID (optional; blank aggregates all projects)")
+        case "xai": copy.text("Team ID", "Team ID")
+        case "stepfun": copy.text("用户名", "Username")
+        default: copy.text("账号标识（可选）", "Account identifier (optional)")
+        }
+    }
+
     private func save() {
         do {
+            if descriptor.id.rawValue == "moonshot" {
+                configuration.endpoint = secret.isEmpty ? "" : configuration.account
+            }
             store.preferences.update(configuration)
             try store.preferences.setSecret(secret, for: descriptor.id)
+            if descriptor.id.rawValue == "openrouter" {
+                try store.preferences.setAuxiliarySecret(
+                    managementSecret,
+                    for: descriptor.id,
+                    key: "management-api-key"
+                )
+            }
+            if descriptor.id.rawValue == "doubao" {
+                try store.preferences.setAuxiliarySecret(
+                    secondarySecret,
+                    for: descriptor.id,
+                    key: "secret-access-key"
+                )
+            }
+            if descriptor.id.rawValue == "bedrock" {
+                try store.preferences.setAuxiliarySecret(
+                    secondarySecret,
+                    for: descriptor.id,
+                    key: "secret-access-key"
+                )
+                try store.preferences.setAuxiliarySecret(
+                    bedrockProfile,
+                    for: descriptor.id,
+                    key: "aws-profile"
+                )
+                try store.preferences.setAuxiliarySecret(
+                    bedrockRegion,
+                    for: descriptor.id,
+                    key: "aws-region"
+                )
+                try store.preferences.setAuxiliarySecret(
+                    bedrockAuthMode,
+                    for: descriptor.id,
+                    key: "aws-auth-mode"
+                )
+            }
+            if descriptor.id.rawValue == "stepfun" {
+                try store.preferences.setAuxiliarySecret(
+                    stepFunManualToken,
+                    for: descriptor.id,
+                    key: "manual-token"
+                )
+            }
             saveMessage = copy.text("已保存", "Saved")
         } catch {
             saveMessage = error.localizedDescription
         }
+    }
+
+    private var authenticationSecret: Binding<String> {
+        descriptor.id.rawValue == "stepfun" && configuration.source == .token
+            ? $stepFunManualToken
+            : $secret
     }
 
     private func stateText(_ state: ProviderUsage.State) -> String {

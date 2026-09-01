@@ -66,6 +66,7 @@ final class UsageStore: ObservableObject {
             let secret = preferences.secret(for: descriptor.id)
             return (descriptor, configuration, secret)
         }
+        let allowVertexClaudeFallback = !enabledProviders.contains { $0.id.rawValue == "claude" }
 
         var loadingUsage = usageByID
         for job in jobs {
@@ -73,11 +74,20 @@ final class UsageStore: ObservableObject {
                 id: job.0.id,
                 state: .loading,
                 windows: loadingUsage[job.0.id]?.windows ?? [],
+                additionalWindows: loadingUsage[job.0.id]?.additionalWindows ?? [],
                 balance: loadingUsage[job.0.id]?.balance,
                 plan: loadingUsage[job.0.id]?.plan,
                 today: loadingUsage[job.0.id]?.today,
                 last30Days: loadingUsage[job.0.id]?.last30Days,
                 weeklyEstimate: loadingUsage[job.0.id]?.weeklyEstimate,
+                providerCost: loadingUsage[job.0.id]?.providerCost,
+                details: loadingUsage[job.0.id]?.details ?? [],
+                commandCodeSubscriptionEnrichmentUnavailable:
+                    loadingUsage[job.0.id]?.commandCodeSubscriptionEnrichmentUnavailable ?? false,
+                commandCodeHasSubscriptionPlan:
+                    loadingUsage[job.0.id]?.commandCodeHasSubscriptionPlan ?? false,
+                commandCodeMonthlyGrantDepleted:
+                    loadingUsage[job.0.id]?.commandCodeMonthlyGrantDepleted ?? false,
                 updatedAt: loadingUsage[job.0.id]?.updatedAt,
                 message: nil
             )
@@ -96,7 +106,9 @@ final class UsageStore: ObservableObject {
                         return try await collector.collect(
                             descriptor: descriptor,
                             configuration: configuration,
-                            secret: secret
+                            secret: secret,
+                            allowVertexClaudeFallback: allowVertexClaudeFallback,
+                            allowBrowserCookieImport: providerID != nil
                         )
                     } catch {
                         return ProviderUsage(
@@ -118,18 +130,25 @@ final class UsageStore: ObservableObject {
             }
 
             while let usage = await group.next() {
-                if usage.state == .failed, var cached = refreshedUsage[usage.id], !cached.windows.isEmpty {
+                let resolvedUsage = Self.commandCodeUsageResolvingDepletionOnEnrichmentFailure(
+                    current: usage,
+                    previous: refreshedUsage[usage.id]
+                )
+                if resolvedUsage.state == .failed,
+                   var cached = refreshedUsage[resolvedUsage.id],
+                   !cached.windows.isEmpty {
                     if let descriptor = ProviderCatalog.byID[usage.id] {
                         cached = await collector.enrichLocalMetadata(
                             to: cached,
-                            descriptor: descriptor
+                            descriptor: descriptor,
+                            allowVertexClaudeFallback: allowVertexClaudeFallback
                         )
                     }
                     cached.state = .unavailable
-                    cached.message = usage.message
-                    refreshedUsage[usage.id] = cached
+                    cached.message = resolvedUsage.message
+                    refreshedUsage[resolvedUsage.id] = cached
                 } else {
-                    refreshedUsage[usage.id] = usage
+                    refreshedUsage[resolvedUsage.id] = resolvedUsage
                 }
 
                 if nextJobIndex < jobs.count {
@@ -157,7 +176,42 @@ final class UsageStore: ObservableObject {
     private func restoreCache() {
         guard let data = defaults.data(forKey: cacheKey),
               let cached = try? JSONDecoder().decode([ProviderUsage].self, from: data) else { return }
-        usageByID = Dictionary(uniqueKeysWithValues: cached.map { ($0.id, $0) })
+        let sanitized = cached.map(Self.sanitizeCachedUsage)
+        usageByID = Dictionary(uniqueKeysWithValues: sanitized.map { ($0.id, $0) })
+    }
+
+    private static func sanitizeCachedUsage(_ usage: ProviderUsage) -> ProviderUsage {
+        guard usage.id.rawValue == "codex" else { return usage }
+        var sanitized = usage
+        let weekly = (sanitized.windows + sanitized.additionalWindows)
+            .first { $0.label == "Weekly" }
+        sanitized.windows = weekly.map { [$0] } ?? []
+        sanitized.additionalWindows = []
+        return sanitized
+    }
+
+    nonisolated static func commandCodeUsageResolvingDepletionOnEnrichmentFailure(
+        current: ProviderUsage,
+        previous: ProviderUsage?
+    ) -> ProviderUsage {
+        guard current.id.rawValue == "commandcode" else { return current }
+        let previousMonthly = previous?.windows.first { $0.id == "commandcode-monthly" }
+        let previousProvesPaidDepletion = previous?.commandCodeHasSubscriptionPlan == true
+            || (previous?.commandCodeSubscriptionEnrichmentUnavailable == true
+                && previous?.commandCodeMonthlyGrantDepleted == true
+                && previousMonthly?.clampedFraction == 1)
+        guard current.commandCodeSubscriptionEnrichmentUnavailable,
+              current.commandCodeMonthlyGrantDepleted,
+              previousProvesPaidDepletion,
+              var depleted = previousMonthly else { return current }
+        depleted.usedFraction = 1
+        var resolved = current
+        if let index = resolved.windows.firstIndex(where: { $0.id == "commandcode-monthly" }) {
+            resolved.windows[index] = depleted
+        } else {
+            resolved.windows.append(depleted)
+        }
+        return resolved
     }
 
     private func persistCache() {

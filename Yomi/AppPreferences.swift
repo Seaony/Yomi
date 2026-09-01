@@ -55,6 +55,14 @@ struct AppCopy {
 
     func usageLabel(_ label: String) -> String {
         guard language == .simplifiedChinese else { return label }
+        let basePrefix = "Base - "
+        if label.hasPrefix(basePrefix) {
+            return "\(Self.usageLabels["Base"] ?? "Base") - \(label.dropFirst(basePrefix.count))"
+        }
+        let workspacePrefix = "Workspace "
+        if label.hasPrefix(workspacePrefix) {
+            return "工作区 \(label.dropFirst(workspacePrefix.count))"
+        }
         return Self.usageLabels[label] ?? label
     }
 
@@ -124,15 +132,35 @@ struct AppCopy {
         "Current": "当前",
         "Refill": "补充",
         "Balance": "余额",
+        "Amp Free": "Amp 免费额度",
+        "Other usage": "其他用量",
+        "Orb usage": "Orb 用量",
+        "Individual credits": "个人点数",
         "Base": "基础",
         "Overage": "超额",
         "Five-hour quota": "5 小时额度",
         "Weekly tokens": "每周 Token",
         "Voices": "语音",
+        "Voice slots": "语音槽位",
+        "Professional voices": "专业语音",
+        "Remaining": "剩余",
+        "Used": "已用",
+        "Total added": "累计充值",
+        "API key limit": "API Key 限额",
+        "API key remaining": "API Key 剩余",
+        "API key used": "API Key 已用",
+        "Reset window": "重置周期",
+        "Today": "今天",
+        "This week": "本周",
+        "This month": "本月",
+        "Rate limit": "速率限制",
+        "Last 30 days": "最近 30 天",
+        "Last 30 days requests": "最近 30 天请求",
         "Add-on credits": "附加点数",
         "Edit predictions": "编辑预测",
         "Billing cycle": "计费周期",
         "Bonus credits": "赠送点数",
+        "Purchased": "已购买点数",
         "Budget": "预算",
         "Cost": "费用",
         "Personal budget": "个人预算",
@@ -150,6 +178,12 @@ struct AppCopy {
         "Rolling": "滚动周期",
         "Monthly": "每月",
         "Monthly Bobcoins": "每月 Bobcoins",
+        "Gemini Models": "Gemini 模型",
+        "Total usage": "总用量",
+        "Code 7-day": "Code 7 天",
+        "Kilo Pass": "Kilo Pass",
+        "MCP": "MCP",
+        "Account balance": "账户余额",
     ]
 }
 

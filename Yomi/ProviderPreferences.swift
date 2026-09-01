@@ -55,6 +55,19 @@ final class ProviderPreferences: ObservableObject {
         }
     }
 
+    func auxiliarySecret(for id: ProviderID, key: String) -> String {
+        SecretVault.read(account: "\(id.rawValue).\(key)") ?? ""
+    }
+
+    func setAuxiliarySecret(_ secret: String, for id: ProviderID, key: String) throws {
+        let account = "\(id.rawValue).\(key)"
+        if secret.isEmpty {
+            try SecretVault.delete(account: account)
+        } else {
+            try SecretVault.write(secret, account: account)
+        }
+    }
+
     private func persist() {
         guard let data = try? JSONEncoder().encode(configurations) else { return }
         defaults.set(data, forKey: storageKey)

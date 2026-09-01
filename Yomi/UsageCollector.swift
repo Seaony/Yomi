@@ -25,23 +25,6 @@ enum UsageCollectionError: LocalizedError {
     }
 }
 
-private nonisolated final class CommandOutputBuffer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value = Data()
-
-    func store(_ data: Data) {
-        lock.lock()
-        value = data
-        lock.unlock()
-    }
-
-    func data() -> Data {
-        lock.lock()
-        defer { lock.unlock() }
-        return value
-    }
-}
-
 actor UsageCollector {
     private let session: URLSession
     private var pricingCatalog: ModelPricingCatalog?
@@ -61,48 +44,237 @@ actor UsageCollector {
     func collect(
         descriptor: ProviderDescriptor,
         configuration: ProviderConfiguration,
-        secret: String
+        secret: String,
+        allowVertexClaudeFallback: Bool = false,
+        allowBrowserCookieImport: Bool = false
     ) async throws -> ProviderUsage {
         let usage = try await collectRaw(
             descriptor: descriptor,
             configuration: configuration,
-            secret: secret
+            secret: secret,
+            allowBrowserCookieImport: allowBrowserCookieImport
         )
-        guard descriptor.id.rawValue == "codex" || descriptor.id.rawValue == "claude" else {
+        if descriptor.id.rawValue == "opencodego" {
+            return OpenCodeGoLocalUsageReader.enrich(usage)
+        }
+        let claudeUsesAdminAPI = descriptor.id.rawValue == "claude"
+            && configuration.source == .token
+            && [secret, environmentSecret(for: descriptor)].contains { credential in
+                credential.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased().hasPrefix("sk-ant-admin")
+            }
+        if claudeUsesAdminAPI {
             return usage
         }
-        return await enrichLocalMetadata(to: usage, descriptor: descriptor)
+        guard descriptor.id.rawValue == "codex"
+            || descriptor.id.rawValue == "claude"
+            || descriptor.id.rawValue == "vertexai"
+        else {
+            return usage
+        }
+        return await enrichLocalMetadata(
+            to: usage,
+            descriptor: descriptor,
+            allowVertexClaudeFallback: allowVertexClaudeFallback
+        )
     }
 
     func enrichLocalMetadata(
         to usage: ProviderUsage,
-        descriptor: ProviderDescriptor
+        descriptor: ProviderDescriptor,
+        allowVertexClaudeFallback: Bool = false
     ) async -> ProviderUsage {
-        guard descriptor.id.rawValue == "codex" || descriptor.id.rawValue == "claude" else {
+        guard descriptor.id.rawValue == "codex"
+            || descriptor.id.rawValue == "claude"
+            || descriptor.id.rawValue == "vertexai"
+        else {
             return usage
         }
         let catalog = await resolvedPricingCatalog()
         return await addingLocalMetadata(
             to: usage,
             descriptor: descriptor,
-            pricingCatalog: catalog
+            pricingCatalog: catalog,
+            allowVertexClaudeFallback: allowVertexClaudeFallback
         )
     }
 
     private func collectRaw(
         descriptor: ProviderDescriptor,
         configuration: ProviderConfiguration,
-        secret: String
+        secret: String,
+        allowBrowserCookieImport: Bool
     ) async throws -> ProviderUsage {
-        if configuration.source == .command {
-            return try await commandUsage(descriptor: descriptor, command: configuration.command)
+        if descriptor.id.rawValue == "codex" {
+            let cachedCookie = await MainActor.run {
+                ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie")
+            }
+            var environment = ProcessInfo.processInfo.environment
+            let configuredBinary = configuration.command.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !configuredBinary.isEmpty { environment["CODEX_CLI_PATH"] = configuredBinary }
+            return try await CodexUsageFetcher.fetch(
+                source: configuration.source,
+                configuredCredential: secret.isEmpty ? nil : secret,
+                cachedCookieHeader: cachedCookie.isEmpty ? nil : cachedCookie,
+                allowBrowserImport: allowBrowserCookieImport,
+                session: session,
+                environment: environment,
+                cacheUpdate: { value in
+                    await MainActor.run {
+                        try? ProviderPreferences.shared.setAuxiliarySecret(
+                            value ?? "",
+                            for: descriptor.id,
+                            key: "imported-cookie"
+                        )
+                    }
+                }
+            )
+        }
+        if descriptor.id.rawValue == "kiro" {
+            return try await KiroUsageFetcher.fetch(
+                configuredCommand: configuration.command.isEmpty ? nil : configuration.command,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "windsurf" {
+            let dataSource: WindsurfUsageDataSource = switch configuration.source {
+            case .cookie: .web
+            case .account: .local
+            default: .automatic
+            }
+            let sessionSource = WindsurfSessionSource(rawValue: configuration.account) ?? .automatic
+            return try await WindsurfUsageFetcher.fetch(
+                dataSource: dataSource,
+                sessionSource: sessionSource,
+                manualSessionInput: secret.isEmpty ? nil : secret,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "bedrock" {
+            let stored = await MainActor.run {
+                let preferences = ProviderPreferences.shared
+                return (
+                    secretAccessKey: preferences.auxiliarySecret(for: descriptor.id, key: "secret-access-key"),
+                    profile: preferences.auxiliarySecret(for: descriptor.id, key: "aws-profile"),
+                    region: preferences.auxiliarySecret(for: descriptor.id, key: "aws-region"),
+                    authMode: preferences.auxiliarySecret(for: descriptor.id, key: "aws-auth-mode")
+                )
+            }
+            return try await BedrockUsageFetcher.fetch(
+                accessKeyID: secret.isEmpty ? nil : secret,
+                secretAccessKey: stored.secretAccessKey.isEmpty ? nil : stored.secretAccessKey,
+                profile: stored.profile.isEmpty ? nil : stored.profile,
+                region: stored.region.isEmpty ? nil : stored.region,
+                authMode: BedrockAuthMode(rawValue: stored.authMode),
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "sub2api" {
+            return try await Sub2APIUsageFetcher.fetch(
+                apiKey: secret.isEmpty ? nil : secret,
+                endpointOverride: configuration.endpoint.isEmpty ? nil : configuration.endpoint,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "wayfinder" {
+            return try await WayfinderUsageFetcher.fetch(
+                configuredBaseURL: configuration.endpoint.isEmpty ? nil : configuration.endpoint
+            )
+        }
+        if descriptor.id.rawValue == "llmproxy" {
+            return try await LLMProxyUsageFetcher.fetch(
+                apiKey: secret.isEmpty ? nil : secret,
+                endpointOverride: configuration.endpoint.isEmpty ? nil : configuration.endpoint,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "litellm" {
+            return try await LiteLLMUsageFetcher.fetch(
+                apiKey: secret.isEmpty ? nil : secret,
+                endpointOverride: configuration.endpoint.isEmpty ? nil : configuration.endpoint,
+                session: session
+            )
         }
 
-        if configuration.source == .endpoint {
-            guard !configuration.endpoint.isEmpty else { throw UsageCollectionError.missingEndpoint }
-            return try await remoteUsage(
+        if descriptor.id.rawValue == "codebuff" {
+            return try await CodebuffUsageFetcher.fetch(
+                credential: secret.isEmpty ? nil : secret,
+                source: configuration.source,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "stepfun" {
+            let stored = await MainActor.run {
+                let preferences = ProviderPreferences.shared
+                return (
+                    manual: preferences.auxiliarySecret(for: descriptor.id, key: "manual-token"),
+                    cached: preferences.auxiliarySecret(for: descriptor.id, key: "session-token")
+                )
+            }
+            let configuredSecret = configuration.source == .token
+                ? (stored.manual.isEmpty ? secret : stored.manual)
+                : secret
+            return try await StepFunUsageFetcher.fetch(
+                source: configuration.source,
+                configuredUsername: configuration.account.isEmpty ? nil : configuration.account,
+                configuredSecret: configuredSecret.isEmpty ? nil : configuredSecret,
+                cachedToken: stored.cached.isEmpty ? nil : stored.cached,
+                session: session,
+                cachedTokenUpdater: { token in
+                    await MainActor.run {
+                        try? ProviderPreferences.shared.setAuxiliarySecret(
+                            token ?? "",
+                            for: descriptor.id,
+                            key: "session-token"
+                        )
+                    }
+                },
+                manualTokenUpdater: { token in
+                    await MainActor.run {
+                        try? ProviderPreferences.shared.setAuxiliarySecret(
+                            token,
+                            for: descriptor.id,
+                            key: "manual-token"
+                        )
+                    }
+                }
+            )
+        }
+        if descriptor.id.rawValue == "longcat" {
+            return try await LongCatUsageFetcher.fetch(
+                credential: secret,
+                source: configuration.source,
+                session: session,
+                environment: ProcessInfo.processInfo.environment,
+                allowBrowserImport: allowBrowserCookieImport
+            )
+        }
+        if descriptor.id.rawValue == "zoommate" {
+            let cached = await MainActor.run {
+                ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie")
+            }
+            return try await ZoomMateUsageFetcher.fetch(
+                credential: secret.isEmpty ? nil : secret,
+                source: configuration.source,
+                session: session,
+                cachedCookieHeaders: cached.isEmpty ? nil : cached,
+                allowBrowserImport: allowBrowserCookieImport,
+                cacheUpdate: { value in
+                    await MainActor.run {
+                        try? ProviderPreferences.shared.setAuxiliarySecret(
+                            value ?? "",
+                            for: descriptor.id,
+                            key: "imported-cookie"
+                        )
+                    }
+                }
+            )
+        }
+
+        if descriptor.id.rawValue == "claude" {
+            return try await claudeUsage(
                 descriptor: descriptor,
-                recipe: ProviderRecipe(configuration.endpoint),
+                configuration: configuration,
                 secret: secret
             )
         }
@@ -110,12 +282,524 @@ actor UsageCollector {
         let environmentValue = environmentSecret(for: descriptor)
         let localValue = localCredential(for: descriptor.id)
         let resolvedSecret = [secret, environmentValue, localValue].first(where: { !$0.isEmpty }) ?? ""
+        if descriptor.id.rawValue == "notion" {
+            let cachedCookie = await MainActor.run {
+                ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie")
+            }
+            return try await NotionUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                workspaceID: configuration.account.isEmpty ? nil : configuration.account,
+                session: session,
+                cachedCookieHeader: cachedCookie.isEmpty ? nil : cachedCookie,
+                cacheUpdate: { value in
+                    await MainActor.run {
+                        try? ProviderPreferences.shared.setAuxiliarySecret(
+                            value ?? "",
+                            for: descriptor.id,
+                            key: "imported-cookie"
+                        )
+                    }
+                },
+                allowBrowserImport: allowBrowserCookieImport
+            )
+        }
+        if descriptor.id.rawValue == "vertexai" {
+            return try await VertexAIUsageFetcher.fetch(session: session)
+        }
+        if descriptor.id.rawValue == "openai", !resolvedSecret.isEmpty {
+            let environment = ProcessInfo.processInfo.environment
+            let projectID = [
+                configuration.account,
+                environment["OPENAI_PROJECT_ID"] ?? "",
+            ].first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+            let usesAdminKey = !secret.isEmpty || !(environment["OPENAI_ADMIN_KEY"] ?? "").isEmpty
+            return try await OpenAIAPIUsageFetcher.fetch(
+                apiKey: resolvedSecret,
+                projectID: projectID,
+                usesAdminKey: usesAdminKey,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "azureopenai" {
+            let environment = ProcessInfo.processInfo.environment
+            let endpoint = [
+                configuration.endpoint,
+                environment["AZURE_OPENAI_ENDPOINT"] ?? "",
+            ].first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+            let deployment = [
+                configuration.account,
+                environment["AZURE_OPENAI_DEPLOYMENT_NAME"] ?? "",
+            ].first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+            return try await AzureOpenAIUsageFetcher.fetch(
+                apiKey: resolvedSecret,
+                endpoint: endpoint,
+                deploymentName: deployment,
+                apiVersion: environment["AZURE_OPENAI_API_VERSION"],
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "cursor" {
+            return try await CursorUsageFetcher.fetch(
+                credential: resolvedSecret,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "opencode" {
+            return try await OpenCodeUsageFetcher.fetch(
+                cookie: resolvedSecret,
+                workspaceID: configuration.account.isEmpty ? nil : configuration.account,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "opencodego" {
+            return try await OpenCodeGoUsageFetcher.fetch(
+                credential: resolvedSecret,
+                workspaceID: configuration.account.isEmpty ? nil : configuration.account,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "alibaba" {
+            return try await AlibabaCodingPlanFetcher.fetch(
+                credential: resolvedSecret,
+                region: configuration.account.isEmpty ? nil : configuration.account,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "alibabatokenplan" {
+            return try await AlibabaTokenPlanFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                region: configuration.account.isEmpty ? nil : configuration.account,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "factory" {
+            return try await FactoryUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "qwencloud" {
+            return try await QwenCloudUsageFetcher.fetch(
+                credential: resolvedSecret,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "gemini" {
+            return try await GeminiUsageFetcher.fetch(session: session)
+        }
+        if descriptor.id.rawValue == "antigravity" {
+            return try await AntigravityUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "fireworks" {
+            guard let apiKey = FireworksUsageFetcher.resolvedAPIKey(configured: resolvedSecret) else {
+                throw FireworksUsageError.missingCredentials
+            }
+            let snapshot = try await FireworksUsageFetcher.fetch(
+                apiKey: apiKey,
+                accountSlug: FireworksUsageFetcher.resolvedAccountSlug(
+                    configured: configuration.account
+                ),
+                session: session
+            )
+            if snapshot.accountSlugWasDiscovered {
+                await FireworksUsageFetcher.persistDiscoveredAccountSlug(snapshot.accountSlug)
+            }
+            return snapshot.toProviderUsage()
+        }
+        if descriptor.id.rawValue == "copilot" {
+            return try await CopilotUsageFetcher.fetch(
+                token: resolvedSecret,
+                enterpriseHost: configuration.account.isEmpty ? nil : configuration.account,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "devin" {
+            return try await DevinUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                organization: configuration.account.isEmpty ? nil : configuration.account,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "zai" {
+            return try await ZaiUsageFetcher.fetch(
+                apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                region: configuration.account.isEmpty ? nil : configuration.account,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "minimax" {
+            return try await MiniMaxUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                region: configuration.account.isEmpty ? nil : configuration.account,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "manus" {
+            return try await ManusUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "kimi" {
+            return try await KimiUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "kilo" {
+            return try await KiloUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                organization: configuration.account.isEmpty ? nil : configuration.account,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "augment" {
+            return try await AugmentUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "jetbrains" {
+            return try JetBrainsUsageFetcher.fetch(
+                configuredPath: configuration.account.isEmpty ? nil : configuration.account
+            )
+        }
+        if descriptor.id.rawValue == "moonshot" {
+            return try await MoonshotUsageFetcher.fetch(
+                apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                region: configuration.account.isEmpty ? nil : configuration.account,
+                apiKeyRegion: MoonshotUsageFetcher.storedAPIKeyRegion(
+                    configuration.endpoint,
+                    hasLegacyStoredKey: !secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ),
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "t3chat" {
+            return try await T3ChatUsageFetcher.fetch(
+                cookieHeaderOverride: configuration.source == .cookie ? resolvedSecret : nil,
+                source: configuration.source,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "amp" {
+            return try await AmpUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "ollama" {
+            return try await OllamaUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "synthetic" {
+            return try await SyntheticUsageFetcher.fetch(
+                apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "zed" {
+            return try await ZedUsageFetcher.fetch(session: session)
+        }
+        if descriptor.id.rawValue == "openrouter" {
+            let managementAPIKey = await MainActor.run {
+                ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "management-api-key")
+            }
+            return try await OpenRouterUsageFetcher.fetch(
+                apiKey: resolvedSecret,
+                endpoint: configuration.endpoint.isEmpty ? nil : configuration.endpoint,
+                managementAPIKey: managementAPIKey.isEmpty ? nil : managementAPIKey,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "elevenlabs" {
+            return try await ElevenLabsUsageFetcher.fetch(
+                apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "warp" {
+            return try await WarpUsageFetcher.fetch(
+                apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "perplexity" {
+            return try await PerplexityUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "mimo" {
+            return try await MiMoUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                endpointOverride: configuration.endpoint.isEmpty ? nil : configuration.endpoint,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "doubao" {
+            let secretAccessKey = await MainActor.run {
+                ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "secret-access-key")
+            }
+            return try await DoubaoUsageFetcher.fetch(
+                credential: resolvedSecret,
+                secretAccessKey: secretAccessKey.isEmpty ? nil : secretAccessKey,
+                region: configuration.account.isEmpty ? nil : configuration.account,
+                source: configuration.source,
+                configuredCommand: configuration.command.isEmpty ? nil : configuration.command,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "sakana" {
+            return try await SakanaUsageFetcher.fetch(
+                cookie: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "abacus" {
+            let cachedCookie = await MainActor.run {
+                ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie")
+            }
+            return try await AbacusUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                session: session,
+                cachedCookieHeader: cachedCookie.isEmpty ? nil : cachedCookie,
+                cacheUpdate: { value in
+                    await MainActor.run {
+                        try? ProviderPreferences.shared.setAuxiliarySecret(
+                            value ?? "",
+                            for: descriptor.id,
+                            key: "imported-cookie"
+                        )
+                    }
+                }
+            )
+        }
+        if descriptor.id.rawValue == "deepinfra" {
+            return try await DeepInfraUsageFetcher.fetch(
+                apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "crof" {
+            return try await CrofUsageFetcher.fetch(
+                apiKey: secret.isEmpty ? nil : secret,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "venice" {
+            return try await VeniceUsageFetcher.fetch(
+                apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "deepgram" {
+            return try await DeepgramUsageFetcher.fetch(
+                apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                projectID: configuration.account.isEmpty ? nil : configuration.account,
+                endpointOverride: configuration.endpoint.isEmpty ? nil : configuration.endpoint,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "poe" {
+            return try await PoeUsageFetcher.fetch(
+                apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "commandcode" {
+            let cachedCookie = await MainActor.run {
+                ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie")
+            }
+            return try await CommandCodeUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                session: session,
+                cachedCookieHeader: cachedCookie.isEmpty ? nil : cachedCookie,
+                cacheUpdate: { value in
+                    await MainActor.run {
+                        try? ProviderPreferences.shared.setAuxiliarySecret(
+                            value ?? "",
+                            for: descriptor.id,
+                            key: "imported-cookie"
+                        )
+                    }
+                }
+            )
+        }
+        if descriptor.id.rawValue == "mistral" {
+            let cachedCookie = await MainActor.run {
+                ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie")
+            }
+            return try await MistralUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                session: session,
+                cachedCookieHeader: cachedCookie.isEmpty ? nil : cachedCookie,
+                cacheUpdate: { value in
+                    await MainActor.run {
+                        try? ProviderPreferences.shared.setAuxiliarySecret(
+                            value ?? "",
+                            for: descriptor.id,
+                            key: "imported-cookie"
+                        )
+                    }
+                }
+            )
+        }
+        if descriptor.id.rawValue == "qoder" {
+            let cached = await MainActor.run {
+                let preferences = ProviderPreferences.shared
+                return (
+                    cookie: preferences.auxiliarySecret(for: descriptor.id, key: "imported-cookie"),
+                    site: preferences.auxiliarySecret(for: descriptor.id, key: "imported-site")
+                )
+            }
+            return try await QoderUsageFetcher.fetch(
+                credential: resolvedSecret,
+                source: configuration.source,
+                session: session,
+                cachedCookieHeader: cached.cookie.isEmpty ? nil : cached.cookie,
+                cachedSite: QoderWebSite(cacheKey: cached.site),
+                cacheUpdate: { cookie, site in
+                    await MainActor.run {
+                        try? ProviderPreferences.shared.setAuxiliarySecret(
+                            cookie ?? "",
+                            for: descriptor.id,
+                            key: "imported-cookie"
+                        )
+                        try? ProviderPreferences.shared.setAuxiliarySecret(
+                            site?.cacheKey ?? "",
+                            for: descriptor.id,
+                            key: "imported-site"
+                        )
+                    }
+                }
+            )
+        }
+        if descriptor.id.rawValue == "deepseek" {
+            return try await DeepSeekUsageFetcher.fetch(
+                source: configuration.source,
+                apiKey: configuration.source == .cookie
+                    ? nil
+                    : (resolvedSecret.isEmpty ? nil : resolvedSecret),
+                platformToken: configuration.source == .cookie
+                    ? (resolvedSecret.isEmpty ? nil : resolvedSecret)
+                    : nil,
+                selectedProfileID: configuration.account.isEmpty ? nil : configuration.account,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "chutes" {
+            return try await ChutesUsageFetcher.fetch(
+                apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                endpointOverride: configuration.endpoint.isEmpty ? nil : configuration.endpoint,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "neuralwatt" {
+            return try await NeuralWattUsageFetcher.fetch(
+                apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "clawrouter" {
+            return try await ClawRouterUsageFetcher.fetch(
+                apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                endpointOverride: configuration.endpoint.isEmpty ? nil : configuration.endpoint,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "xai" {
+            return try await XAIUsageFetcher.fetch(
+                apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                teamID: configuration.account.isEmpty ? nil : configuration.account,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "aiand" {
+            return try await AiAndUsageFetcher.fetch(
+                apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "zenmux" {
+            return try await ZenMuxUsageFetcher.fetch(
+                managementKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "ibmbob" {
+            return try await IBMBobUsageFetcher.fetch(
+                apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "grok" {
+            let cachedCookie = await MainActor.run {
+                ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie")
+            }
+            return try await GrokUsageFetcher.fetch(
+                source: configuration.source,
+                credential: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                cachedCookie: cachedCookie.isEmpty ? nil : cachedCookie,
+                allowBrowserImport: allowBrowserCookieImport,
+                session: session,
+                environment: ProcessInfo.processInfo.environment,
+                cacheUpdate: { value in
+                    await MainActor.run {
+                        try? ProviderPreferences.shared.setAuxiliarySecret(
+                            value ?? "",
+                            for: descriptor.id,
+                            key: "imported-cookie"
+                        )
+                    }
+                }
+            )
+        }
+        if descriptor.id.rawValue == "groq" {
+            let cachedCookie = await MainActor.run {
+                ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie")
+            }
+            return try await GroqUsageFetcher.fetch(
+                configuredAPIKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
+                source: configuration.source,
+                session: session,
+                cachedCookieHeader: cachedCookie.isEmpty ? nil : cachedCookie,
+                allowBrowserImport: allowBrowserCookieImport,
+                cacheUpdate: { value in
+                    await MainActor.run {
+                        try? ProviderPreferences.shared.setAuxiliarySecret(
+                            value ?? "",
+                            for: descriptor.id,
+                            key: "imported-cookie"
+                        )
+                    }
+                }
+            )
+        }
         if let recipe = ProviderRecipes.recipe(for: descriptor.id), !resolvedSecret.isEmpty {
             return try await remoteUsage(descriptor: descriptor, recipe: recipe, secret: resolvedSecret)
-        }
-
-        if !configuration.command.isEmpty {
-            return try await commandUsage(descriptor: descriptor, command: configuration.command)
         }
 
         if resolvedSecret.isEmpty { throw UsageCollectionError.missingCredential }
@@ -145,9 +829,7 @@ actor UsageCollector {
             }
         }
 
-        if descriptor.id.rawValue == "codex", let accountID = codexAccountID() {
-            request.setValue(accountID, forHTTPHeaderField: "ChatGPT-Account-Id")
-        } else if descriptor.id.rawValue == "claude" {
+        if descriptor.id.rawValue == "claude" {
             request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.setValue("claude-code/2.1.0", forHTTPHeaderField: "User-Agent")
@@ -165,60 +847,107 @@ actor UsageCollector {
         return try UsageParser.parse(data, descriptor: descriptor)
     }
 
-    private func commandUsage(descriptor: ProviderDescriptor, command: String) async throws -> ProviderUsage {
-        let cleaned = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else {
-            throw UsageCollectionError.commandFailed(
-                AppLocalization.text("未配置命令", "Command is not configured")
+    private func claudeUsage(
+        descriptor: ProviderDescriptor,
+        configuration: ProviderConfiguration,
+        secret: String
+    ) async throws -> ProviderUsage {
+        let environment = ProcessInfo.processInfo.environment
+        let configured = secret.trimmingCharacters(in: .whitespacesAndNewlines)
+        let environmentCredential = environmentSecret(for: descriptor)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let local = localCredential(for: descriptor.id)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let oauthCredential = [configured, local].first { value in
+            value.lowercased().hasPrefix("sk-ant-oat")
+        }
+        let tokenCredential = [configured, environmentCredential, local]
+            .first { !$0.isEmpty }
+        let webCredential = !configured.isEmpty
+            && !configured.lowercased().hasPrefix("sk-ant-") ? configured : nil
+        let configuredBinary = configuration.command.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasCLI = ClaudeCLIUsageFetcher.resolveBinary(
+            configuredBinary: configuredBinary.isEmpty ? nil : configuredBinary,
+            environment: environment,
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+        ) != nil
+
+        let sources: [ClaudeUsageDataSource]
+        switch configuration.source {
+        case .automatic:
+            sources = ClaudeUsageSourcePlanner.automaticAppOrder(
+                hasOAuthCredentials: oauthCredential != nil,
+                hasCLI: hasCLI,
+                hasWebSession: webCredential != nil
             )
+        case .account:
+            sources = ClaudeUsageSourcePlanner.explicitOAuthAppOrder(hasCLI: hasCLI)
+        case .token:
+            guard let source = ClaudeUsageSourcePlanner.explicitSource(
+                for: configuration.source,
+                credential: tokenCredential ?? ""
+            ) else {
+                throw UsageCollectionError.missingCredential
+            }
+            sources = [source]
+        case .cookie, .command:
+            guard let source = ClaudeUsageSourcePlanner.explicitSource(
+                for: configuration.source,
+                credential: configured
+            ) else {
+                throw UsageCollectionError.missingCredential
+            }
+            sources = [source]
+        case .endpoint:
+            throw UsageCollectionError.missingEndpoint
         }
 
-        let usage = try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                let process = Process()
-                let output = Pipe()
-                let errors = Pipe()
-                process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                process.arguments = ["-lc", cleaned]
-                process.standardOutput = output
-                process.standardError = errors
-
-                do {
-                    try process.run()
-                    let readers = DispatchGroup()
-                    let readerQueue = DispatchQueue(
-                        label: "Yomi.UsageCollector.CommandOutput",
-                        qos: .utility,
-                        attributes: .concurrent
+        guard !sources.isEmpty else { throw UsageCollectionError.missingCredential }
+        var lastError: Error?
+        for source in sources {
+            do {
+                switch source {
+                case .oauthAPI:
+                    let credential = configuration.source == .token
+                        ? tokenCredential
+                        : oauthCredential
+                    guard let credential else { throw UsageCollectionError.missingCredential }
+                    guard let recipe = ProviderRecipes.recipe(for: descriptor.id) else {
+                        throw UsageCollectionError.missingEndpoint
+                    }
+                    return try await remoteUsage(
+                        descriptor: descriptor,
+                        recipe: recipe,
+                        secret: credential
                     )
-                    let outputData = CommandOutputBuffer()
-                    let errorData = CommandOutputBuffer()
-                    readers.enter()
-                    readerQueue.async {
-                        outputData.store(output.fileHandleForReading.readDataToEndOfFile())
-                        readers.leave()
-                    }
-                    readers.enter()
-                    readerQueue.async {
-                        errorData.store(errors.fileHandleForReading.readDataToEndOfFile())
-                        readers.leave()
-                    }
-                    process.waitUntilExit()
-                    readers.wait()
-                    guard process.terminationStatus == 0 else {
-                        let message = String(data: errorData.data(), encoding: .utf8) ?? AppLocalization.text(
-                            "退出码 \(process.terminationStatus)",
-                            "Exit code \(process.terminationStatus)"
-                        )
-                        throw UsageCollectionError.commandFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
-                    }
-                    continuation.resume(returning: try UsageParser.parse(outputData.data(), descriptor: descriptor))
-                } catch {
-                    continuation.resume(throwing: error)
+                case .adminAPI:
+                    let credential = [configured, environmentCredential]
+                        .first { $0.lowercased().hasPrefix("sk-ant-admin") }
+                    guard let credential else { throw UsageCollectionError.missingCredential }
+                    return try await ClaudeAdminAPIUsageFetcher.fetch(apiKey: credential, session: session)
+                case .webAPI:
+                    guard let webCredential else { throw UsageCollectionError.missingCredential }
+                    return try await ClaudeWebUsageFetcher.fetch(
+                        cookie: webCredential,
+                        organizationID: configuration.account,
+                        descriptor: descriptor,
+                        session: session
+                    )
+                case .cli:
+                    return try await ClaudeCLIUsageFetcher.fetch(
+                        configuredBinary: configuredBinary.isEmpty ? nil : configuredBinary,
+                        environment: environment
+                    )
+                case .automatic:
+                    throw UsageCollectionError.missingCredential
                 }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastError = error
             }
         }
-        return usage
+        throw lastError ?? UsageCollectionError.missingCredential
     }
 
     private func environmentSecret(for descriptor: ProviderDescriptor) -> String {
@@ -230,6 +959,12 @@ actor UsageCollector {
     }
 
     private func localCredential(for id: ProviderID) -> String {
+        if id.rawValue == "cursor", let token = cursorAppAccessToken() {
+            return token
+        }
+        if id.rawValue == "opencodego", let key = openCodeGoLocalAPIKey() {
+            return key
+        }
         let keys = ["access_token", "accessToken", "oauth_token", "token", "api_key", "apiKey"]
         for url in localCandidates(for: id) {
             guard let data = try? Data(contentsOf: url),
@@ -246,6 +981,47 @@ actor UsageCollector {
             return value
         }
         return ""
+    }
+
+    private func openCodeGoLocalAPIKey() -> String? {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: ".local/share/opencode/auth.json")
+        guard let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entry = root["opencode-go"] as? [String: Any],
+              let key = entry["key"] as? String
+        else { return nil }
+        let normalized = OpenCodeGoUsageFetcher.normalizeAPIKey(key)
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private func cursorAppAccessToken() -> String? {
+        let database = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/Application Support/Cursor/User/globalStorage/state.vscdb")
+        guard FileManager.default.fileExists(atPath: database.path),
+              FileManager.default.isExecutableFile(atPath: "/usr/bin/sqlite3")
+        else { return nil }
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = [
+            "-readonly",
+            database.path,
+            "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken' LIMIT 1;",
+        ]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            let token = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return token?.isEmpty == false ? token : nil
+        } catch {
+            return nil
+        }
     }
 
     private func claudeKeychainCredentialData() -> Data? {
@@ -265,18 +1041,11 @@ actor UsageCollector {
         return item as? Data
     }
 
-    private func codexAccountID() -> String? {
-        let url = codexHomeDirectory().appending(path: "auth.json")
-        guard let data = try? Data(contentsOf: url),
-              let object = try? JSONSerialization.jsonObject(with: data)
-        else { return nil }
-        return Self.findString(in: object, keys: ["account_id", "accountId"])
-    }
-
     private func addingLocalMetadata(
         to usage: ProviderUsage,
         descriptor: ProviderDescriptor,
-        pricingCatalog: ModelPricingCatalog?
+        pricingCatalog: ModelPricingCatalog?,
+        allowVertexClaudeFallback: Bool
     ) async -> ProviderUsage {
         var enriched = usage
         if enriched.plan == nil {
@@ -292,7 +1061,8 @@ actor UsageCollector {
             providerID: descriptor.id,
             currentWeekStart: weekStart,
             now: now,
-            pricingCatalog: pricingCatalog
+            pricingCatalog: pricingCatalog,
+            allowVertexClaudeFallback: allowVertexClaudeFallback
         )
         enriched.today = localUsage?.today
         enriched.last30Days = localUsage?.last30Days
@@ -479,6 +1249,8 @@ actor UsageCollector {
                 home.appending(path: ".gemini/oauth_creds.json"),
                 home.appending(path: ".gemini/google_accounts.json"),
             ]
+        case "opencodego":
+            return [home.appending(path: ".local/share/opencode/auth.json")]
         default:
             return []
         }

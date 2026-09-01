@@ -509,13 +509,39 @@ private struct ProviderRailItem: View {
     }
 
     private var remainingFraction: Double {
-        guard !usage.windows.isEmpty else { return 0 }
-        return 1 - usage.headlineFraction
+        guard let window = headlineWindow else { return 0 }
+        return 1 - window.clampedFraction
     }
 
     private var percentage: String {
-        guard !usage.windows.isEmpty else { return "—" }
+        guard headlineWindow != nil else { return "—" }
         return "\(Int((remainingFraction * 100).rounded()))%"
+    }
+
+    private var headlineWindow: UsageWindow? {
+        if descriptor.id.rawValue == "deepinfra",
+           let cost = usage.providerCost,
+           cost.used.isFinite,
+           cost.limit.isFinite,
+           cost.limit > 0 {
+            return UsageWindow(
+                id: "deepinfra-billing-cycle",
+                label: "Billing cycle",
+                usedFraction: min(1, max(0, cost.used / cost.limit)),
+                resetsAt: nil,
+                detail: nil
+            )
+        }
+        guard descriptor.id.rawValue == "perplexity" else { return usage.windows.first }
+        let primary = usage.windows.first { $0.id == "perplexity-recurring" }
+        let fallbacks = ["perplexity-purchased", "perplexity-promotional"]
+            .compactMap { id in usage.windows.first { $0.id == id } }
+        let orderedFallbacks = fallbacks.filter { $0.clampedFraction < 1 }
+            + fallbacks.filter { $0.clampedFraction >= 1 }
+        guard let primary else { return orderedFallbacks.first }
+        return primary.clampedFraction < 1 || orderedFallbacks.isEmpty
+            ? primary
+            : orderedFallbacks.first
     }
 
     var body: some View {
@@ -562,7 +588,7 @@ private struct ProviderRailItem: View {
                 radius: UsageRailLayout.scaled(12)
             )
 
-            if !usage.windows.isEmpty {
+            if headlineWindow != nil {
                 Text(percentage)
                     .font(
                         .system(

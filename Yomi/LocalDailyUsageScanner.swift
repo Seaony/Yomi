@@ -195,6 +195,12 @@ actor LocalDailyUsageScanner {
         }
     }
 
+    private enum ClaudeLogProviderFilter {
+        case all
+        case vertexOnly
+        case excludeVertex
+    }
+
     private struct PeriodAccumulator {
         var tokens: Int64 = 0
         var valueUSD = 0.0
@@ -405,6 +411,8 @@ actor LocalDailyUsageScanner {
 
     private var codexFileStates: [String: CodexFileState] = [:]
     private var claudeFileStates: [String: ClaudeFileState] = [:]
+    private var vertexFileStates: [String: ClaudeFileState] = [:]
+    private var activeVertexCacheProvider: String?
     private var loadedProviders: Set<String> = []
     private let cacheStore = LocalUsageCacheStore()
     private let priorityTurnStore = CodexPriorityTurnStore()
@@ -422,9 +430,19 @@ actor LocalDailyUsageScanner {
         currentWeekStart: Date,
         now: Date = Date(),
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        pricingCatalog: ModelPricingCatalog? = nil
+        pricingCatalog: ModelPricingCatalog? = nil,
+        allowVertexClaudeFallback: Bool = false
     ) -> LocalTokenUsageSummary? {
-        loadCachedStatesIfNeeded(provider: providerID.rawValue)
+        let cacheProvider = switch providerID.rawValue {
+        case "claude": "claude-filtered"
+        case "vertexai": allowVertexClaudeFallback ? "vertexai-all" : "vertexai-only"
+        default: providerID.rawValue
+        }
+        if providerID.rawValue == "vertexai", activeVertexCacheProvider != cacheProvider {
+            vertexFileStates = [:]
+            activeVertexCacheProvider = cacheProvider
+        }
+        loadCachedStatesIfNeeded(provider: cacheProvider)
         let calendar = Calendar.current
         let todayStart = calendar.startOfDay(for: now)
         guard let end = calendar.date(byAdding: .day, value: 1, to: todayStart),
@@ -445,7 +463,16 @@ actor LocalDailyUsageScanner {
         case "claude": scanClaude(
             periods: periods,
             homeDirectory: homeDirectory,
-            pricingCatalog: pricingCatalog
+            pricingCatalog: pricingCatalog,
+            cacheProvider: cacheProvider,
+            filter: .excludeVertex
+        )
+        case "vertexai": scanClaude(
+            periods: periods,
+            homeDirectory: homeDirectory,
+            pricingCatalog: pricingCatalog,
+            cacheProvider: cacheProvider,
+            filter: allowVertexClaudeFallback ? .all : .vertexOnly
         )
         default: nil
         }
@@ -729,20 +756,23 @@ actor LocalDailyUsageScanner {
     private func scanClaude(
         periods: PeriodAccumulators,
         homeDirectory: URL,
-        pricingCatalog: ModelPricingCatalog?
+        pricingCatalog: ModelPricingCatalog?,
+        cacheProvider: String,
+        filter: ClaudeLogProviderFilter
     ) -> LocalTokenUsageSummary? {
         let files = Self.logFiles(
             modifiedSince: periods.last30DaysStart,
             below: Self.claudeProjectRoots(homeDirectory: homeDirectory)
         )
+        var fileStates = cacheProvider.hasPrefix("vertexai-") ? vertexFileStates : claudeFileStates
         let currentPaths = Set(files.map { $0.url.path })
-        let deletedPaths = Set(claudeFileStates.keys).subtracting(currentPaths)
-        claudeFileStates = claudeFileStates.filter { currentPaths.contains($0.key) }
+        let deletedPaths = Set(fileStates.keys).subtracting(currentPaths)
+        fileStates = fileStates.filter { currentPaths.contains($0.key) }
         var changedPaths: Set<String> = []
 
         for file in files {
             let path = file.url.path
-            var state = claudeFileStates[path] ?? ClaudeFileState()
+            var state = fileStates[path] ?? ClaudeFileState()
             let previousKeyedCount = state.keyedSamples.count
             let previousUnkeyedCount = state.unkeyedSamples.count
             state.keyedSamples = state.keyedSamples.filter {
@@ -759,7 +789,7 @@ actor LocalDailyUsageScanner {
             if state.fileID == file.fileID,
                state.size == file.size,
                state.modificationNanoseconds == file.modificationNanoseconds {
-                claudeFileStates[path] = state
+                fileStates[path] = state
                 continue
             }
             if state.size > 0, !Self.canResume(
@@ -777,6 +807,13 @@ actor LocalDailyUsageScanner {
                 from: file.url,
                 resumeState: resumeState,
                 matchingAny: [#""type":"assistant""#],
+                accepting: { value in
+                    switch filter {
+                    case .all: true
+                    case .vertexOnly: VertexAILogClassifier.isVertexUsageEntry(value)
+                    case .excludeVertex: !VertexAILogClassifier.isVertexUsageEntry(value)
+                    }
+                },
                 as: ClaudeLogLine.self
             ) { line in
                 guard line.type == "assistant",
@@ -821,15 +858,25 @@ actor LocalDailyUsageScanner {
                 for: file.url,
                 endingAt: state.resumeState.offset
             )
-            claudeFileStates[path] = state
+            fileStates[path] = state
             changedPaths.insert(path)
         }
-        persistClaudeStates(changedPaths: changedPaths, deletedPaths: deletedPaths)
+        if cacheProvider.hasPrefix("vertexai-") {
+            vertexFileStates = fileStates
+        } else {
+            claudeFileStates = fileStates
+        }
+        persistClaudeStates(
+            provider: cacheProvider,
+            states: fileStates,
+            changedPaths: changedPaths,
+            deletedPaths: deletedPaths
+        )
 
         var keyedSamples: [String: (path: String, sample: ClaudeSample)] = [:]
         var unkeyedSamples: [ClaudeSample] = []
         for path in files.map({ $0.url.path }).sorted() {
-            guard let state = claudeFileStates[path] else { continue }
+            guard let state = fileStates[path] else { continue }
             for (key, sample) in state.keyedSamples {
                 let candidate = (path: path, sample: sample)
                 if let existing = keyedSamples[key] {
@@ -989,6 +1036,7 @@ actor LocalDailyUsageScanner {
         from url: URL,
         resumeState initialState: JSONLResumeState,
         matchingAny patterns: [String],
+        accepting predicate: ((Any) -> Bool)? = nil,
         as type: Value.Type,
         handle: (Value) -> Void
     ) -> JSONLReadResult {
@@ -1012,9 +1060,13 @@ actor LocalDailyUsageScanner {
         let decoder = JSONDecoder()
 
         func process(_ line: Data.SubSequence) {
-            guard bytePatterns.contains(where: { line.range(of: $0) != nil }),
-                  let value = try? decoder.decode(type, from: line)
-            else { return }
+            guard bytePatterns.contains(where: { line.range(of: $0) != nil }) else { return }
+            if let predicate {
+                guard let raw = try? JSONSerialization.jsonObject(with: Data(line)),
+                      predicate(raw)
+                else { return }
+            }
+            guard let value = try? decoder.decode(type, from: line) else { return }
             handle(value)
         }
 
@@ -1063,6 +1115,11 @@ actor LocalDailyUsageScanner {
             let isRelevant = bytePatterns.contains(where: { pending.range(of: $0) != nil })
             let isComplete = autoreleasepool {
                 if isRelevant {
+                    if let predicate {
+                        guard let raw = try? JSONSerialization.jsonObject(with: pending),
+                              predicate(raw)
+                        else { return true }
+                    }
                     guard let value = try? decoder.decode(type, from: pending) else { return false }
                     handle(value)
                     return true
@@ -1140,7 +1197,7 @@ actor LocalDailyUsageScanner {
                 state.modificationNanoseconds = record.modificationNanoseconds
                 state.size = record.size
                 codexFileStates[record.path] = state
-            case "claude":
+            case "claude-filtered":
                 guard var state = try? cacheDecoder.decode(ClaudeFileState.self, from: record.payload) else {
                     invalidPaths.insert(record.path)
                     continue
@@ -1149,6 +1206,15 @@ actor LocalDailyUsageScanner {
                 state.modificationNanoseconds = record.modificationNanoseconds
                 state.size = record.size
                 claudeFileStates[record.path] = state
+            case "vertexai-only", "vertexai-all":
+                guard var state = try? cacheDecoder.decode(ClaudeFileState.self, from: record.payload) else {
+                    invalidPaths.insert(record.path)
+                    continue
+                }
+                state.fileID = record.fileID
+                state.modificationNanoseconds = record.modificationNanoseconds
+                state.size = record.size
+                vertexFileStates[record.path] = state
             default:
                 return
             }
@@ -1173,10 +1239,15 @@ actor LocalDailyUsageScanner {
         cacheStore.commit(provider: "codex", records: records, deletingPaths: deletedPaths)
     }
 
-    private func persistClaudeStates(changedPaths: Set<String>, deletedPaths: Set<String>) {
+    private func persistClaudeStates(
+        provider: String,
+        states: [String: ClaudeFileState],
+        changedPaths: Set<String>,
+        deletedPaths: Set<String>
+    ) {
         guard let cacheStore else { return }
         let records = changedPaths.compactMap { path -> LocalUsageCacheStore.Record? in
-            guard let state = claudeFileStates[path],
+            guard let state = states[path],
                   let payload = try? cacheEncoder.encode(state)
             else { return nil }
             return LocalUsageCacheStore.Record(
@@ -1187,7 +1258,7 @@ actor LocalDailyUsageScanner {
                 payload: payload
             )
         }
-        cacheStore.commit(provider: "claude", records: records, deletingPaths: deletedPaths)
+        cacheStore.commit(provider: provider, records: records, deletingPaths: deletedPaths)
     }
 
     private static func claudeCandidateWins(
