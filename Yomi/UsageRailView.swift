@@ -282,7 +282,7 @@ private struct SettingsHoverControl: View {
     }
 }
 
-private struct PointingHandCursorRegion: NSViewRepresentable {
+struct PointingHandCursorRegion: NSViewRepresentable {
     func makeNSView(context: Context) -> PointingHandCursorView {
         PointingHandCursorView()
     }
@@ -290,7 +290,7 @@ private struct PointingHandCursorRegion: NSViewRepresentable {
     func updateNSView(_ nsView: PointingHandCursorView, context: Context) {}
 }
 
-private final class PointingHandCursorView: NSView {
+final class PointingHandCursorView: NSView {
     private var trackingArea: NSTrackingArea?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {

@@ -221,7 +221,7 @@ final class UsageStore: ObservableObject {
     var overviewUsage: ProviderUsage {
         let usages = enabledProviders.map { usage(for: $0.id) }
         let today = Self.combinedUsage(usages.compactMap(\.today))
-        let daily = Self.overviewDailyUsage(usages: usages, today: today)
+        let daily = Self.overviewDailyUsage(usages: usages)
         let last30Days = Self.combinedLast30DaysUsage(usages)
         let isFullRefresh = !enabledProviders.isEmpty
             && enabledProviders.allSatisfy { usage(for: $0.id).state == .loading }
@@ -258,33 +258,48 @@ final class UsageStore: ObservableObject {
         })
     }
 
-    private static func overviewDailyUsage(
+    nonisolated static func overviewDailyUsage(
         usages: [ProviderUsage],
-        today: DailyTokenUsage?
+        now: Date = Date()
     ) -> [DailyTokenUsagePoint] {
         let calendar = Calendar.current
-        let todayStart = calendar.startOfDay(for: Date())
+        let todayStart = calendar.startOfDay(for: now)
         guard let start = calendar.date(byAdding: .day, value: -29, to: todayStart) else {
             return []
         }
-        var valuesByDay: [Date: [DailyTokenUsage]] = [:]
-        for point in usages.flatMap(\.last30DaysDaily) {
-            let day = calendar.startOfDay(for: point.date)
-            guard day >= start, day <= todayStart else { continue }
-            valuesByDay[day, default: []].append(point.usage)
-        }
-        if let today {
-            valuesByDay[todayStart] = [today]
+        var valuesByDay: [Date: [ProviderID: [DailyTokenUsage]]] = [:]
+        for usage in usages {
+            for point in usage.last30DaysDaily {
+                let day = calendar.startOfDay(for: point.date)
+                guard day >= start, day <= todayStart else { continue }
+                valuesByDay[day, default: [:]][usage.id, default: []].append(point.usage)
+            }
+            if let today = usage.today {
+                valuesByDay[todayStart, default: [:]][usage.id] = [today]
+            }
         }
         guard !valuesByDay.isEmpty else { return [] }
         return (0..<30).compactMap { offset in
             guard let date = calendar.date(byAdding: .day, value: offset, to: start) else {
                 return nil
             }
+            let providerBreakdown = (valuesByDay[date] ?? [:]).compactMap {
+                providerID,
+                usages -> ProviderTokenUsageBreakdown? in
+                combinedUsage(usages).map {
+                    ProviderTokenUsageBreakdown(providerID: providerID, usage: $0)
+                }
+            }.sorted { lhs, rhs in
+                if lhs.usage.tokens != rhs.usage.tokens {
+                    return lhs.usage.tokens > rhs.usage.tokens
+                }
+                return lhs.providerID.rawValue < rhs.providerID.rawValue
+            }
             return DailyTokenUsagePoint(
                 date: date,
-                usage: combinedUsage(valuesByDay[date] ?? [])
-                    ?? DailyTokenUsage(tokens: 0, valueUSD: 0)
+                usage: combinedUsage(providerBreakdown.map(\.usage))
+                    ?? DailyTokenUsage(tokens: 0, valueUSD: 0),
+                providerBreakdown: providerBreakdown
             )
         }
     }

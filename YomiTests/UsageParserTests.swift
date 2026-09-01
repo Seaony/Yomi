@@ -237,6 +237,57 @@ final class UsageParserTests: XCTestCase {
         XCTAssertEqual(combined.valueUSD, 3)
     }
 
+    func testOverviewDailyUsageKeepsProviderBreakdownAndUsesAuthoritativeToday() throws {
+        let calendar = Calendar.current
+        let now = Date(timeIntervalSince1970: 1_788_000_000)
+        let today = calendar.startOfDay(for: now)
+        let yesterday = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: today))
+        let codexID = ProviderID(rawValue: "codex")
+        let claudeID = ProviderID(rawValue: "claude")
+        let usages = [
+            ProviderUsage(
+                id: codexID,
+                state: .ready,
+                windows: [],
+                today: DailyTokenUsage(tokens: 12, valueUSD: 1.2),
+                last30DaysDaily: [
+                    DailyTokenUsagePoint(
+                        date: today,
+                        usage: DailyTokenUsage(tokens: 10, valueUSD: 1)
+                    ),
+                    DailyTokenUsagePoint(
+                        date: yesterday,
+                        usage: DailyTokenUsage(tokens: 20, valueUSD: 2)
+                    ),
+                ]
+            ),
+            ProviderUsage(
+                id: claudeID,
+                state: .ready,
+                windows: [],
+                today: DailyTokenUsage(tokens: 5, valueUSD: 0.5),
+                last30DaysDaily: [
+                    DailyTokenUsagePoint(
+                        date: yesterday,
+                        usage: DailyTokenUsage(tokens: 30, valueUSD: 3)
+                    ),
+                ]
+            ),
+        ]
+
+        let points = UsageStore.overviewDailyUsage(usages: usages, now: now)
+        let todayPoint = try XCTUnwrap(points.first { calendar.isDate($0.date, inSameDayAs: today) })
+        let yesterdayPoint = try XCTUnwrap(
+            points.first { calendar.isDate($0.date, inSameDayAs: yesterday) }
+        )
+
+        XCTAssertEqual(todayPoint.usage.tokens, 17)
+        XCTAssertEqual(todayPoint.providerBreakdown?.map(\.providerID), [codexID, claudeID])
+        XCTAssertEqual(todayPoint.providerBreakdown?.map(\.usage.tokens), [12, 5])
+        XCTAssertEqual(yesterdayPoint.usage.tokens, 50)
+        XCTAssertEqual(yesterdayPoint.providerBreakdown?.map(\.usage.tokens), [30, 20])
+    }
+
     private func parseCodex(_ json: String) throws -> ProviderUsage {
         let descriptor = try XCTUnwrap(ProviderCatalog.byID[ProviderID(rawValue: "codex")])
         return try UsageParser.parse(Data(json.utf8), descriptor: descriptor)

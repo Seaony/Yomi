@@ -6,6 +6,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private static let panelVerticalPositionKey = "panel-vertical-position"
     private static let providerDetailDismissDelay: Duration = .milliseconds(110)
+    private static let providerDetailPointerCheckInterval: Duration = .milliseconds(40)
 
     let store = UsageStore.shared
     let updates = UpdateController()
@@ -214,10 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let root = ProviderDetailPanelView(
             store: store,
             presentation: presentation,
-            railSide: railSide,
-            hoverChanged: { [weak self] hovering in
-                self?.providerDetailHoverChanged(hovering)
-            }
+            railSide: railSide
         )
         let hostingView = NSHostingView(rootView: root)
         let fittingSize = hostingView.fittingSize
@@ -347,26 +345,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         scheduleProviderDetailClose(for: providerID)
     }
 
-    private func providerDetailHoverChanged(_ hovering: Bool) {
-        if hovering {
-            providerDetailCloseTask?.cancel()
-            providerDetailCloseTask = nil
-        } else if let selectedProviderID {
-            scheduleProviderDetailClose(for: selectedProviderID)
-        }
-    }
-
     private func scheduleProviderDetailClose(for providerID: ProviderID) {
         providerDetailCloseTask?.cancel()
         providerDetailCloseTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.providerDetailDismissDelay)
-            guard !Task.isCancelled,
-                  let self,
-                  self.selectedProviderID == providerID
-            else { return }
-            self.providerDetailCloseTask = nil
-            self.closeProviderDetail()
+            do {
+                try await Task.sleep(for: Self.providerDetailDismissDelay)
+                while let self,
+                      self.selectedProviderID == providerID,
+                      !Task.isCancelled {
+                    if !self.isPointerInsideProviderDetailRegion {
+                        self.providerDetailCloseTask = nil
+                        self.closeProviderDetail()
+                        return
+                    }
+                    try await Task.sleep(for: Self.providerDetailPointerCheckInterval)
+                }
+            } catch {
+                return
+            }
         }
+    }
+
+    private var isPointerInsideProviderDetailRegion: Bool {
+        guard let panel,
+              let detailPanel = providerDetailPanel,
+              detailPanel.isVisible
+        else { return false }
+        return ProviderDetailInteractionRegion.contains(
+            NSEvent.mouseLocation,
+            detailFrame: detailPanel.frame,
+            railFrame: panel.frame,
+            railSide: railSide
+        )
     }
 
     private func resizePanel(to contentHeight: CGFloat, animated: Bool) {
@@ -556,4 +566,29 @@ final class FloatingPanel: NSPanel {
 final class ProviderDetailPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+}
+
+enum ProviderDetailInteractionRegion {
+    private static let edgeTolerance: CGFloat = 2
+
+    static func contains(
+        _ point: NSPoint,
+        detailFrame: NSRect,
+        railFrame: NSRect,
+        railSide: UsageRailSide
+    ) -> Bool {
+        if railFrame.insetBy(dx: -edgeTolerance, dy: -edgeTolerance).contains(point) {
+            return true
+        }
+        var region = detailFrame.insetBy(dx: -edgeTolerance, dy: -edgeTolerance)
+        switch railSide {
+        case .left:
+            let minimumX = min(region.minX, railFrame.maxX)
+            region.size.width = region.maxX - minimumX
+            region.origin.x = minimumX
+        case .right:
+            region.size.width = max(region.maxX, railFrame.minX) - region.minX
+        }
+        return region.contains(point)
+    }
 }

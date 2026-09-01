@@ -90,9 +90,17 @@ nonisolated struct DailyTokenUsage: Codable, Hashable, Sendable {
     var valueUSD: Double?
 }
 
+nonisolated struct ProviderTokenUsageBreakdown: Codable, Hashable, Sendable, Identifiable {
+    var providerID: ProviderID
+    var usage: DailyTokenUsage
+
+    var id: ProviderID { providerID }
+}
+
 nonisolated struct DailyTokenUsagePoint: Codable, Hashable, Sendable, Identifiable {
     var date: Date
     var usage: DailyTokenUsage
+    var providerBreakdown: [ProviderTokenUsageBreakdown]? = nil
 
     var id: Date { date }
 }

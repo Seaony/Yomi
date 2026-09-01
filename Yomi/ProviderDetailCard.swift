@@ -417,7 +417,6 @@ struct ProviderDetailPanelView: View {
     @ObservedObject private var appPreferences = AppPreferences.shared
     @ObservedObject var presentation: ProviderDetailPresentation
     let railSide: UsageRailSide
-    let hoverChanged: (Bool) -> Void
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -450,9 +449,6 @@ struct ProviderDetailPanelView: View {
         }
         .padding(ProviderDetailLayout.outerPadding)
         .contentShape(Rectangle())
-        .background {
-            ProviderDetailHoverRegion(hoverChanged: hoverChanged)
-        }
         .animation(
             reduceMotion ? nil : .easeInOut(duration: 0.18),
             value: presentation.descriptor.id
@@ -463,69 +459,15 @@ struct ProviderDetailPanelView: View {
     }
 }
 
-private struct ProviderDetailHoverRegion: NSViewRepresentable {
-    let hoverChanged: (Bool) -> Void
-
-    func makeNSView(context: Context) -> ProviderDetailHoverTrackingView {
-        let view = ProviderDetailHoverTrackingView()
-        view.hoverChanged = hoverChanged
-        return view
-    }
-
-    func updateNSView(_ nsView: ProviderDetailHoverTrackingView, context: Context) {
-        nsView.hoverChanged = hoverChanged
-    }
-}
-
-private final class ProviderDetailHoverTrackingView: NSView {
-    var hoverChanged: ((Bool) -> Void)?
-    private var trackingArea: NSTrackingArea?
-    private var isHovering = false
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        window?.acceptsMouseMovedEvents = true
-        updateTrackingAreas()
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingArea {
-            removeTrackingArea(trackingArea)
-        }
-        let trackingArea = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(trackingArea)
-        self.trackingArea = trackingArea
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        guard !isHovering else { return }
-        isHovering = true
-        hoverChanged?(true)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        guard isHovering else { return }
-        isHovering = false
-        hoverChanged?(false)
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        nil
-    }
-}
-
 private struct DailyUsageBarChart: View {
     let points: [DailyTokenUsagePoint]
     let tint: Color
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var appeared = false
+    @State private var hoveredPointID: Date?
+
+    private let tooltipWidth: CGFloat = 176
 
     private var maximumTokens: Double {
         max(1, Double(points.map(\.usage.tokens).max() ?? 0))
@@ -540,33 +482,160 @@ private struct DailyUsageBarChart: View {
             HStack(alignment: .bottom, spacing: spacing) {
                 ForEach(Array(points.enumerated()), id: \.element.id) { index, point in
                     let fraction = Double(point.usage.tokens) / maximumTokens
-                    RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(
-                            tint.opacity(Calendar.current.isDateInToday(point.date) ? 1 : 0.58)
-                        )
-                        .frame(
-                            width: barWidth,
-                            height: max(2, proxy.size.height * fraction)
-                        )
-                        .opacity(point.usage.tokens > 0 ? 1 : 0.2)
-                        .scaleEffect(y: appeared ? 1 : 0.05, anchor: .bottom)
-                        .animation(
-                            reduceMotion
-                                ? nil
-                                : .spring(response: 0.32, dampingFraction: 0.82)
-                                    .delay(Double(index) * 0.006),
-                            value: appeared
-                        )
-                        .animation(
-                            reduceMotion ? nil : .easeInOut(duration: 0.18),
-                            value: point.usage.tokens
-                        )
+                    let isHovered = hoveredPointID == point.id
+                    ZStack(alignment: .bottom) {
+                        Color.clear
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .fill(tint.opacity(barOpacity(for: point, isHovered: isHovered)))
+                            .frame(height: max(2, proxy.size.height * fraction))
+                            .opacity(point.usage.tokens > 0 ? 1 : 0.2)
+                            .scaleEffect(
+                                x: isHovered ? 1.22 : 1,
+                                y: appeared ? 1 : 0.05,
+                                anchor: .bottom
+                            )
+                            .shadow(
+                                color: tint.opacity(isHovered ? 0.48 : 0),
+                                radius: isHovered ? 4 : 0
+                            )
+                            .animation(
+                                reduceMotion
+                                    ? nil
+                                    : .spring(response: 0.32, dampingFraction: 0.82)
+                                        .delay(Double(index) * 0.006),
+                                value: appeared
+                            )
+                            .animation(
+                                reduceMotion ? nil : .easeOut(duration: 0.1),
+                                value: isHovered
+                            )
+                            .animation(
+                                reduceMotion ? nil : .easeInOut(duration: 0.18),
+                                value: point.usage.tokens
+                            )
+                    }
+                    .frame(width: barWidth, height: proxy.size.height)
+                    .contentShape(Rectangle())
+                    .background {
+                        PointingHandCursorRegion()
+                    }
+                    .onHover { hovering in
+                        if hovering {
+                            hoveredPointID = point.id
+                        } else if hoveredPointID == point.id {
+                            hoveredPointID = nil
+                        }
+                    }
                 }
             }
-            .frame(maxHeight: .infinity, alignment: .bottom)
+            .frame(
+                width: proxy.size.width,
+                height: proxy.size.height,
+                alignment: .bottomLeading
+            )
+            .overlay(alignment: .bottomLeading) {
+                if let hoveredPointID,
+                   let index = points.firstIndex(where: { $0.id == hoveredPointID }) {
+                    let point = points[index]
+                    let barCenter = CGFloat(index) * (barWidth + spacing) + barWidth / 2
+                    let tooltipX = min(
+                        max(0, barCenter - tooltipWidth / 2),
+                        max(0, proxy.size.width - tooltipWidth)
+                    )
+                    VStack(spacing: 6) {
+                        DailyUsageTooltip(point: point)
+                            .frame(width: tooltipWidth)
+                        Color.clear
+                            .frame(width: tooltipWidth, height: proxy.size.height)
+                    }
+                    .offset(x: tooltipX)
+                    .allowsHitTesting(false)
+                    .zIndex(2)
+                }
+            }
         }
         .frame(height: 52)
         .onAppear { appeared = true }
+        .onChange(of: points.map(\.id)) { _, ids in
+            if let hoveredPointID, !ids.contains(hoveredPointID) {
+                self.hoveredPointID = nil
+            }
+        }
+    }
+
+    private func barOpacity(for point: DailyTokenUsagePoint, isHovered: Bool) -> Double {
+        if isHovered { return 1 }
+        return Calendar.current.isDateInToday(point.date) ? 0.9 : 0.58
+    }
+}
+
+private struct DailyUsageTooltip: View {
+    let point: DailyTokenUsagePoint
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.appLanguage) private var language
+
+    private var copy: AppCopy { AppCopy(language: language) }
+
+    private var dateText: String {
+        point.date.formatted(
+            .dateTime
+                .month(.abbreviated)
+                .day()
+                .locale(language.locale)
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(dateText)
+                .font(.system(size: 10.5, weight: .bold, design: .rounded))
+
+            HStack(spacing: 8) {
+                Text(copy.text("总用量", "Total usage"))
+                Spacer(minLength: 8)
+                Text(compactTokenCount(point.usage.tokens, language: language))
+                    .monospacedDigit()
+            }
+            .font(.system(size: 10, weight: .bold, design: .rounded))
+
+            ForEach(point.providerBreakdown ?? []) { breakdown in
+                HStack(spacing: 6) {
+                    if let descriptor = ProviderCatalog.byID[breakdown.providerID] {
+                        ProviderIconView(provider: descriptor)
+                            .frame(width: 13, height: 13)
+                            .foregroundStyle(ProviderBrandColors.color(for: breakdown.providerID))
+                    }
+                    Text(providerName(for: breakdown.providerID))
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text(compactTokenCount(breakdown.usage.tokens, language: language))
+                        .monospacedDigit()
+                }
+                .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.72))
+            }
+        }
+        .foregroundStyle(AppTheme.primaryText(for: colorScheme))
+        .padding(.horizontal, 9)
+        .padding(.vertical, 8)
+        .background {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(
+                    colorScheme == .dark
+                        ? Color(red: 0.15, green: 0.15, blue: 0.17)
+                        : Color.white
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(AppTheme.primaryText(for: colorScheme).opacity(0.1), lineWidth: 0.5)
+                }
+                .shadow(color: Color.black.opacity(0.24), radius: 8, y: 3)
+        }
+    }
+
+    private func providerName(for id: ProviderID) -> String {
+        ProviderCatalog.byID[id]?.name ?? id.rawValue
     }
 }
 
