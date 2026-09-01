@@ -635,6 +635,7 @@ private struct ProviderRailItem: View {
     }
 
     private var remainingFraction: Double {
+        if descriptor.id == ProviderCatalog.overview.id { return 1 }
         guard let window = headlineWindow else { return 0 }
         return 1 - window.clampedFraction
     }
