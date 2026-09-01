@@ -355,7 +355,7 @@ struct IBMBobUsageTests {
         return URLSession(configuration: configuration)
     }
 
-    private static let profileData = Data(#"""
+    private nonisolated static let profileData = Data(#"""
     {
       "instances": [
         {
@@ -380,7 +380,7 @@ struct IBMBobUsageTests {
     }
     """#.utf8)
 
-    private static let singleTeamProfileData = Data(#"""
+    private nonisolated static let singleTeamProfileData = Data(#"""
     {
       "instances": [{
         "instance_id": "instance-one",
@@ -390,7 +390,7 @@ struct IBMBobUsageTests {
     }
     """#.utf8)
 
-    private static let liveProfileData = Data(#"""
+    private nonisolated static let liveProfileData = Data(#"""
     {
       "instances": [{
         "instance_id": "instance-one",
@@ -404,7 +404,7 @@ struct IBMBobUsageTests {
     }
     """#.utf8)
 
-    private static func regionalProfileData(regionDomain: String) -> Data {
+    private nonisolated static func regionalProfileData(regionDomain: String) -> Data {
         Data(#"""
         {
           "instances": [{
@@ -418,7 +418,7 @@ struct IBMBobUsageTests {
     }
 }
 
-private final class IBMBobRequestRecorder: @unchecked Sendable {
+private nonisolated final class IBMBobRequestRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [URLRequest] = []
 
@@ -429,7 +429,7 @@ private final class IBMBobRequestRecorder: @unchecked Sendable {
     }
 }
 
-private final class IBMBobTestURLProtocol: URLProtocol, @unchecked Sendable {
+private nonisolated final class IBMBobTestURLProtocol: URLProtocol {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var storedHandler: (@Sendable (URLRequest) throws -> (Int, Data))?
 

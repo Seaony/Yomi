@@ -1,7 +1,7 @@
 import Foundation
 import SweetCookieKit
 
-enum AlibabaCodingPlanFetcher {
+nonisolated enum AlibabaCodingPlanFetcher {
     enum Region: String {
         case international = "intl"
         case chinaMainland = "cn"

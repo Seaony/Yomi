@@ -205,7 +205,7 @@ struct SakanaUsageTests {
         ))
     }
 
-    private static let billingHTML = """
+    private nonisolated static let billingHTML = """
     <main>
       <div data-slot="card-title"><span>Standard</span><span>$20/mo</span></div>
       <div data-slot="card-title">Usage limit</div>
@@ -220,7 +220,7 @@ struct SakanaUsageTests {
     </main>
     """
 
-    private static let payAsYouGoHTML = """
+    private nonisolated static let payAsYouGoHTML = """
     <main>
       <h2 class="font-semibold text-base">Credit balance</h2>
       <button aria-label="Credit updates may be delayed."></button>
@@ -232,7 +232,7 @@ struct SakanaUsageTests {
     """
 }
 
-private final class SakanaRequestRecorder: @unchecked Sendable {
+private nonisolated final class SakanaRequestRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [URLRequest] = []
     var requests: [URLRequest] { lock.withLock { storage } }
@@ -240,7 +240,7 @@ private final class SakanaRequestRecorder: @unchecked Sendable {
     func removeAll() { lock.withLock { storage.removeAll() } }
 }
 
-private final class SakanaTestURLProtocol: URLProtocol, @unchecked Sendable {
+private nonisolated final class SakanaTestURLProtocol: URLProtocol {
     private static let lock = NSLock()
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
 

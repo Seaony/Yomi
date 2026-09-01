@@ -164,7 +164,7 @@ struct LiteLLMUsageTests {
     }
 }
 
-private final class LiteLLMTestURLProtocol: URLProtocol, @unchecked Sendable {
+private final class LiteLLMTestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> (Int, Data))?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }

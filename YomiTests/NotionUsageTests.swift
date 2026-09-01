@@ -393,7 +393,7 @@ struct NotionUsageTests {
     """
 }
 
-private final class NotionRequestRecorder: @unchecked Sendable {
+private nonisolated final class NotionRequestRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [URLRequest] = []
 
@@ -423,7 +423,7 @@ private final class NotionRequestRecorder: @unchecked Sendable {
     }
 }
 
-private final class NotionCacheUpdates: @unchecked Sendable {
+private nonisolated final class NotionCacheUpdates: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [String?] = []
 
@@ -440,7 +440,7 @@ private final class NotionCacheUpdates: @unchecked Sendable {
     }
 }
 
-private final class NotionURLProtocolStub: URLProtocol, @unchecked Sendable {
+private nonisolated final class NotionURLProtocolStub: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> (Int, Data))?
 
     override class func canInit(with _: URLRequest) -> Bool { true }

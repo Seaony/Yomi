@@ -65,8 +65,11 @@ nonisolated struct LongCatUsageSnapshot: Sendable, Equatable {
 
     func toProviderUsage() -> ProviderUsage {
         var windows: [UsageWindow] = []
-        if let totalQuota, totalQuota > 0 {
-            let used = resolvedUsed(total: totalQuota)
+        if let totalQuota,
+           totalQuota.isFinite,
+           totalQuota > 0,
+           totalQuota <= Double(Int.max) {
+            let used = min(totalQuota, resolvedUsed(total: totalQuota))
             windows.append(UsageWindow(
                 id: "longcat-quota",
                 label: "Quota",
@@ -75,8 +78,14 @@ nonisolated struct LongCatUsageSnapshot: Sendable, Equatable {
                 detail: "\(Int(used))/\(Int(totalQuota))"
             ))
         }
-        if let fuelPackTotal, fuelPackTotal > 0 {
-            let remaining = fuelPackRemaining ?? fuelPackTotal
+        if let fuelPackTotal,
+           fuelPackTotal.isFinite,
+           fuelPackTotal > 0,
+           fuelPackTotal <= Double(Int.max) {
+            let remaining = min(
+                fuelPackTotal,
+                fuelPackRemaining.flatMap { $0.isFinite ? max(0, $0) : nil } ?? fuelPackTotal
+            )
             let used = max(0, fuelPackTotal - remaining)
             windows.append(UsageWindow(
                 id: "longcat-fuel-pack",
@@ -97,8 +106,8 @@ nonisolated struct LongCatUsageSnapshot: Sendable, Equatable {
     }
 
     private func resolvedUsed(total: Double) -> Double {
-        if let usedQuota { return max(0, usedQuota) }
-        if let remainingQuota { return max(0, total - remainingQuota) }
+        if let usedQuota, usedQuota.isFinite { return max(0, usedQuota) }
+        if let remainingQuota, remainingQuota.isFinite { return max(0, total - remainingQuota) }
         return 0
     }
 }
@@ -514,23 +523,30 @@ nonisolated enum LongCatUsageFetcher {
     }
 
     private static func number(_ value: Any?) -> Double? {
-        switch value {
+        let parsed: Double? = switch value {
         case let value as Double: value
         case let value as Int: Double(value)
         case let value as String: Double(value)
         case let value as NSNumber: value.doubleValue
         default: nil
         }
+        return parsed.flatMap { $0.isFinite ? $0 : nil }
     }
 
     private static func integer(_ value: Any?) -> Int? {
-        switch value {
-        case let value as Int: value
-        case let value as Double: Int(value)
-        case let value as String: Int(value) ?? Double(value).map(Int.init)
-        case let value as NSNumber: value.intValue
+        let parsed: Double? = switch value {
+        case let value as Int: Double(value)
+        case let value as Double: value
+        case let value as String: Double(value)
+        case let value as NSNumber: value.doubleValue
         default: nil
         }
+        guard let parsed,
+              parsed.isFinite,
+              parsed >= Double(Int.min),
+              parsed <= Double(Int.max)
+        else { return nil }
+        return Int(parsed)
     }
 
     private static func string(_ value: Any?) -> String? {

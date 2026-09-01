@@ -307,6 +307,7 @@ nonisolated enum AugmentUsageFetcher {
 
     private static func number(_ raw: String) -> Double? {
         Double(raw.replacingOccurrences(of: ",", with: "").trimmingCharacters(in: .whitespacesAndNewlines))
+            .flatMap { $0.isFinite ? $0 : nil }
     }
 
     private static func parseDate(_ raw: String?) -> Date? {
@@ -315,7 +316,13 @@ nonisolated enum AugmentUsageFetcher {
     }
 
     private static func compact(_ value: Double) -> String {
-        value.rounded(.towardZero) == value ? String(Int(value)) : String(format: "%.2f", value)
+        guard value.isFinite else { return "—" }
+        if value.rounded(.towardZero) == value,
+           value >= Double(Int.min),
+           value <= Double(Int.max) {
+            return String(Int(value))
+        }
+        return String(format: "%.2f", value)
     }
 
     private static func cleaned(_ raw: String?) -> String? {

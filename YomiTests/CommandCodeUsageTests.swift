@@ -554,7 +554,7 @@ private actor CommandCodeCacheRecorder {
     func append(_ value: String?) { values.append(value) }
 }
 
-private final class CommandCodeTestURLProtocol: URLProtocol, @unchecked Sendable {
+private final class CommandCodeTestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) -> (HTTPURLResponse, Data))?
 
     override class func canInit(with request: URLRequest) -> Bool { true }

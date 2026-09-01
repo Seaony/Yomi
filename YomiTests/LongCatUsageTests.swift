@@ -70,6 +70,18 @@ struct LongCatUsageTests {
     }
 
     @Test
+    func snapshotRejectsNonFiniteAndOutOfRangeQuotas() {
+        let usage = LongCatUsageSnapshot(
+            totalQuota: .infinity,
+            usedQuota: .nan,
+            fuelPackTotal: Double.greatestFiniteMagnitude,
+            fuelPackRemaining: .infinity
+        ).toProviderUsage()
+
+        #expect(usage.windows.isEmpty)
+    }
+
+    @Test
     func buildSnapshotUsesCanonicalLegacyAggregateAndIgnoresPerModelExtData() {
         let snapshot = LongCatUsageFetcher.buildSnapshot(
             account: ["name": "LongCat User"],
@@ -166,9 +178,9 @@ struct LongCatUsageTests {
         #"{"code":0,"data":{"currentLot":{"totalToken":50000000,"status":"EXPIRED"}}}"#,
     ])
     func absentInactiveOrZeroTokenPackFallsBackToCanonicalLegacyUsage(summary: String) async throws {
-        var index = 0
+        let requestCount = TestLockedValue(0)
         LongCatTestURLProtocol.handler = { request in
-            index += 1
+            requestCount.withValue { $0 += 1 }
             switch request.url {
             case LongCatUsageFetcher.userCurrentURL: return (200, Self.envelope(["name": "Leo"]))
             case LongCatUsageFetcher.tokenPacksSummaryURL: return (200, Data(summary.utf8))
@@ -183,7 +195,7 @@ struct LongCatUsageTests {
         let snapshot = try await LongCatUsageFetcher.fetchUsage(cookieHeader: "session=x", session: Self.session())
         #expect(snapshot.totalQuota == 500_000)
         #expect(snapshot.usedQuota == 120_000)
-        #expect(index == 4)
+        #expect(requestCount.value == 4)
     }
 
     @Test
@@ -329,7 +341,7 @@ struct LongCatUsageTests {
         return URLSession(configuration: configuration)
     }
 
-    private static func envelope(_ data: [String: Any]) -> Data {
+    private nonisolated static func envelope(_ data: [String: Any]) -> Data {
         try! JSONSerialization.data(withJSONObject: ["code": 0, "data": data])
     }
 
@@ -353,7 +365,7 @@ struct LongCatUsageTests {
     }
 }
 
-private final class LongCatRequestRecorder: @unchecked Sendable {
+private nonisolated final class LongCatRequestRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [URLRequest] = []
     var requests: [URLRequest] { lock.withLock { storage } }
@@ -376,7 +388,7 @@ private final class LongCatRequestRecorder: @unchecked Sendable {
     }
 }
 
-private final class LongCatTestURLProtocol: URLProtocol, @unchecked Sendable {
+private nonisolated final class LongCatTestURLProtocol: URLProtocol {
     private static let lock = NSLock()
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
     nonisolated(unsafe) static var recorder: LongCatRequestRecorder?

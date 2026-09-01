@@ -546,7 +546,7 @@ struct WindsurfUsageTests {
     }
 }
 
-private final class WindsurfTestURLProtocol: URLProtocol, @unchecked Sendable {
+private final class WindsurfTestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var requests: [URLRequest] = []
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
 

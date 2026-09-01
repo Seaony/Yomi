@@ -561,8 +561,10 @@ private struct ProviderSettingsView: View {
                                 get: {
                                     store.preferences.configuration(for: descriptor.id).isEnabled
                                 },
-                                set: {
-                                    store.preferences.setEnabled($0, for: descriptor.id)
+                                set: { enabled in
+                                    store.preferences.setEnabled(enabled, for: descriptor.id)
+                                    guard enabled else { return }
+                                    Task { await store.refresh(providerID: descriptor.id) }
                                 }
                             )
                         )
@@ -687,6 +689,7 @@ private struct ProviderConfigurationView: View {
     init(store: UsageStore, descriptor: ProviderDescriptor) {
         self.store = store
         self.descriptor = descriptor
+        let providerID = descriptor.id.rawValue
         var configuration = store.preferences.configuration(for: descriptor.id)
         let secret = store.preferences.secret(for: descriptor.id)
         if descriptor.id.rawValue == "moonshot" {
@@ -711,41 +714,42 @@ private struct ProviderConfigurationView: View {
         }
         _configuration = State(initialValue: configuration)
         _secret = State(initialValue: secret)
-        _managementSecret = State(initialValue: store.preferences.auxiliarySecret(
-            for: descriptor.id,
-            key: "management-api-key"
-        ))
-        _secondarySecret = State(initialValue: store.preferences.auxiliarySecret(
-            for: descriptor.id,
-            key: "secret-access-key"
-        ))
-        let storedBedrockAuthMode = store.preferences.auxiliarySecret(for: descriptor.id, key: "aws-auth-mode")
-        _bedrockAuthMode = State(initialValue: storedBedrockAuthMode.isEmpty
-            ? BedrockCredentialResolver.inferredAuthMode(
+        _managementSecret = State(initialValue: providerID == "openrouter"
+            ? store.preferences.auxiliarySecret(for: descriptor.id, key: "management-api-key")
+            : "")
+        _secondarySecret = State(initialValue: providerID == "doubao" || providerID == "bedrock"
+            ? store.preferences.auxiliarySecret(for: descriptor.id, key: "secret-access-key")
+            : "")
+        let storedBedrockAuthMode = providerID == "bedrock"
+            ? store.preferences.auxiliarySecret(for: descriptor.id, key: "aws-auth-mode")
+            : ""
+        let initialBedrockAuthMode: String
+        if providerID != "bedrock" {
+            initialBedrockAuthMode = BedrockAuthMode.keys.rawValue
+        } else if storedBedrockAuthMode.isEmpty {
+            initialBedrockAuthMode = BedrockCredentialResolver.inferredAuthMode(
                 configured: nil,
                 environment: ProcessInfo.processInfo.environment
             ).rawValue
-            : storedBedrockAuthMode)
-        _bedrockProfile = State(initialValue: store.preferences.auxiliarySecret(
-            for: descriptor.id,
-            key: "aws-profile"
-        ))
-        _bedrockRegion = State(initialValue: store.preferences.auxiliarySecret(
-            for: descriptor.id,
-            key: "aws-region"
-        ))
-        let storedStepFunManualToken = store.preferences.auxiliarySecret(
-            for: descriptor.id,
-            key: "manual-token"
-        )
-        _stepFunManualToken = State(initialValue: descriptor.id.rawValue == "stepfun"
+        } else {
+            initialBedrockAuthMode = storedBedrockAuthMode
+        }
+        _bedrockAuthMode = State(initialValue: initialBedrockAuthMode)
+        _bedrockProfile = State(initialValue: providerID == "bedrock"
+            ? store.preferences.auxiliarySecret(for: descriptor.id, key: "aws-profile")
+            : "")
+        _bedrockRegion = State(initialValue: providerID == "bedrock"
+            ? store.preferences.auxiliarySecret(for: descriptor.id, key: "aws-region")
+            : "")
+        let storedStepFunManualToken = providerID == "stepfun"
+            ? store.preferences.auxiliarySecret(for: descriptor.id, key: "manual-token")
+            : ""
+        _stepFunManualToken = State(initialValue: providerID == "stepfun"
             && configuration.source == .token
             && storedStepFunManualToken.isEmpty
             ? secret
             : storedStepFunManualToken)
-        _deepSeekProfiles = State(initialValue: descriptor.id.rawValue == "deepseek"
-            ? DeepSeekPlatformTokenImporter.importTokens()
-            : [])
+        _deepSeekProfiles = State(initialValue: [])
     }
 
     var body: some View {
@@ -1042,8 +1046,7 @@ private struct ProviderConfigurationView: View {
                             .font(.system(size: 12.5, weight: .semibold))
                         Spacer()
                         Button(copy.text("刷新此 Provider", "Refresh provider")) {
-                            save()
-                            Task { await store.refresh(providerID: descriptor.id) }
+                            saveAndRefresh()
                         }
                         .buttonStyle(SettingsPressButtonStyle())
                         .font(.system(size: 11.5, weight: .semibold))
@@ -1063,7 +1066,7 @@ private struct ProviderConfigurationView: View {
                             .foregroundStyle(SettingsPalette.tertiary)
                     }
                     Spacer()
-                    Button(copy.text("保存", "Save")) { save() }
+                    Button(copy.text("保存", "Save")) { saveAndRefresh() }
                         .buttonStyle(SettingsPressButtonStyle())
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(.white)
@@ -1076,6 +1079,14 @@ private struct ProviderConfigurationView: View {
                 .padding(.horizontal, 2)
             }
             .padding(.bottom, 4)
+        }
+        .task(id: descriptor.id) {
+            guard descriptor.id.rawValue == "deepseek" else { return }
+            let profiles = await Task.detached(priority: .utility) {
+                DeepSeekPlatformTokenImporter.importTokens()
+            }.value
+            guard !Task.isCancelled else { return }
+            deepSeekProfiles = profiles
         }
     }
 
@@ -1388,12 +1399,17 @@ private struct ProviderConfigurationView: View {
         }
     }
 
-    private func save() {
+    private func saveAndRefresh() {
+        guard save() else { return }
+        Task { await store.refresh(providerID: descriptor.id) }
+    }
+
+    @discardableResult
+    private func save() -> Bool {
         do {
             if descriptor.id.rawValue == "moonshot" {
                 configuration.endpoint = secret.isEmpty ? "" : configuration.account
             }
-            store.preferences.update(configuration)
             try store.preferences.setSecret(secret, for: descriptor.id)
             if descriptor.id.rawValue == "openrouter" {
                 try store.preferences.setAuxiliarySecret(
@@ -1438,9 +1454,12 @@ private struct ProviderConfigurationView: View {
                     key: "manual-token"
                 )
             }
+            store.preferences.update(configuration)
             saveMessage = copy.text("已保存", "Saved")
+            return true
         } catch {
             saveMessage = error.localizedDescription
+            return false
         }
     }
 

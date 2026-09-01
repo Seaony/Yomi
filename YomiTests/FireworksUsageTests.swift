@@ -189,6 +189,27 @@ struct FireworksUsageTests {
     }
 
     @Test
+    func rejectsRepeatedAccountPageToken() async {
+        let session = makeSession { request in
+            response(
+                request,
+                status: 200,
+                body: #"{"accounts":[],"nextPageToken":"repeated"}"#
+            )
+        }
+
+        await #expect(throws: FireworksUsageError.parseFailed(
+            "Accounts API returned a repeated page token"
+        )) {
+            try await FireworksUsageFetcher.fetch(
+                apiKey: "fw-test-key",
+                accountSlug: nil,
+                session: session
+            )
+        }
+    }
+
+    @Test
     func configured404RecoversOnlyWhenOneAccountIsVisible() async throws {
         let session = makeSession { request in
             switch request.url?.path {

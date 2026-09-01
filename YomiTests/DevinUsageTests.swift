@@ -334,7 +334,7 @@ struct DevinUsageTests {
     }
 }
 
-private final class DevinURLProtocolStub: URLProtocol, @unchecked Sendable {
+private final class DevinURLProtocolStub: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> (Int, String))?
     nonisolated(unsafe) static var requests: [URLRequest] = []
 

@@ -3,7 +3,7 @@ import Testing
 @testable import Yomi
 
 struct ClaudeUsageTests {
-    private final class InvocationRecorder: @unchecked Sendable {
+    private nonisolated final class InvocationRecorder: @unchecked Sendable {
         struct Invocation: Sendable, Equatable {
             let binary: String
             let arguments: [String]
@@ -60,6 +60,15 @@ struct ClaudeUsageTests {
         #expect(usage.windows.map(\.label) == ["Session", "Weekly", "Sonnet"])
         #expect(usage.additionalWindows.map(\.label) == ["Daily Routines", "Fable"])
         #expect(usage.additionalWindows.last?.usedFraction == 0.67)
+    }
+
+    @Test
+    func labelsOpusSpecificWindowCorrectly() throws {
+        let data = Data(#"{"seven_day_opus":{"utilization":25}}"#.utf8)
+
+        let usage = try UsageParser.parse(data, descriptor: descriptor)
+
+        #expect(usage.windows.map(\.label) == ["Opus"])
     }
 
     @Test

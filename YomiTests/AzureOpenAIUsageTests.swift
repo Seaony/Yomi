@@ -86,7 +86,7 @@ struct AzureOpenAIUsageTests {
     }
 }
 
-private final class AzureOpenAITestURLProtocol: URLProtocol, @unchecked Sendable {
+private final class AzureOpenAITestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
 
     override class func canInit(with request: URLRequest) -> Bool { true }

@@ -210,7 +210,7 @@ struct AbacusUsageTests {
         return URLSession(configuration: configuration)
     }
 
-    private static func envelope(_ result: [String: Any]) -> Data {
+    private nonisolated static func envelope(_ result: [String: Any]) -> Data {
         try! JSONSerialization.data(withJSONObject: ["success": true, "result": result])
     }
 
@@ -221,7 +221,7 @@ struct AbacusUsageTests {
     }
 }
 
-private final class AbacusRequestRecorder: @unchecked Sendable {
+private nonisolated final class AbacusRequestRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [URLRequest] = []
     var requests: [URLRequest] { lock.withLock { storage } }
@@ -243,7 +243,7 @@ private final class AbacusRequestRecorder: @unchecked Sendable {
     }
 }
 
-private final class AbacusTestURLProtocol: URLProtocol, @unchecked Sendable {
+private nonisolated final class AbacusTestURLProtocol: URLProtocol {
     private static let lock = NSLock()
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
 

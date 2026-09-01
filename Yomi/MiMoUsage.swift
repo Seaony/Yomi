@@ -300,6 +300,7 @@ nonisolated enum MiMoUsageFetcher {
             throw MiMoUsageError.invalidEndpointOverride
         }
         let guardedSession = redirectGuardedSession(copying: session)
+        defer { guardedSession.finishTasksAndInvalidate() }
         return try await withThrowingTaskGroup(of: FetchPart.self) { group in
             group.addTask {
                 .balance(try await request(

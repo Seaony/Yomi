@@ -1,6 +1,6 @@
 import Foundation
 
-struct ProviderID: RawRepresentable, Codable, Hashable, Sendable, Identifiable {
+nonisolated struct ProviderID: RawRepresentable, Codable, Hashable, Sendable, Identifiable {
     let rawValue: String
 
     var id: String { rawValue }
@@ -10,7 +10,7 @@ struct ProviderID: RawRepresentable, Codable, Hashable, Sendable, Identifiable {
     }
 }
 
-enum ProviderSource: String, Codable, CaseIterable, Sendable {
+nonisolated enum ProviderSource: String, Codable, CaseIterable, Sendable {
     case automatic
     case account
     case token
@@ -31,7 +31,7 @@ enum ProviderSource: String, Codable, CaseIterable, Sendable {
     }
 }
 
-enum ProviderMetricKind: String, Codable, Sendable {
+nonisolated enum ProviderMetricKind: String, Codable, Sendable {
     case quota
     case balance
     case spend
@@ -40,7 +40,7 @@ enum ProviderMetricKind: String, Codable, Sendable {
     case credits
 }
 
-struct ProviderDescriptor: Identifiable, Hashable, Sendable {
+nonisolated struct ProviderDescriptor: Identifiable, Hashable, Sendable {
     let id: ProviderID
     let name: String
     let shortName: String
@@ -55,7 +55,7 @@ struct ProviderDescriptor: Identifiable, Hashable, Sendable {
     let defaultEnabled: Bool
 }
 
-struct ProviderConfiguration: Codable, Hashable, Sendable, Identifiable {
+nonisolated struct ProviderConfiguration: Codable, Hashable, Sendable, Identifiable {
     var id: ProviderID
     var isEnabled: Bool
     var source: ProviderSource
@@ -73,7 +73,7 @@ struct ProviderConfiguration: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
-struct UsageWindow: Codable, Hashable, Sendable, Identifiable {
+nonisolated struct UsageWindow: Codable, Hashable, Sendable, Identifiable {
     var id: String
     var label: String
     var usedFraction: Double
@@ -85,19 +85,19 @@ struct UsageWindow: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
-struct DailyTokenUsage: Codable, Hashable, Sendable {
+nonisolated struct DailyTokenUsage: Codable, Hashable, Sendable {
     var tokens: Int64
     var valueUSD: Double?
 }
 
-struct DailyTokenUsagePoint: Codable, Hashable, Sendable, Identifiable {
+nonisolated struct DailyTokenUsagePoint: Codable, Hashable, Sendable, Identifiable {
     var date: Date
     var usage: DailyTokenUsage
 
     var id: Date { date }
 }
 
-struct ProviderCostSummary: Codable, Hashable, Sendable {
+nonisolated struct ProviderCostSummary: Codable, Hashable, Sendable {
     var used: Double
     var limit: Double
     var currencyCode: String
@@ -105,20 +105,20 @@ struct ProviderCostSummary: Codable, Hashable, Sendable {
     var balance: Double?
 }
 
-struct UsageDetail: Codable, Hashable, Sendable, Identifiable {
+nonisolated struct UsageDetail: Codable, Hashable, Sendable, Identifiable {
     var id: String
     var label: String
     var value: String
 }
 
-struct LocalTokenUsageSummary: Sendable {
+nonisolated struct LocalTokenUsageSummary: Sendable {
     var today: DailyTokenUsage?
     var last30Days: DailyTokenUsage?
     var currentWeek: DailyTokenUsage?
     var last30DaysDaily: [DailyTokenUsagePoint]
 }
 
-struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
+nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
     enum State: String, Codable, Sendable {
         case ready
         case loading

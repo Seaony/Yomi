@@ -194,7 +194,7 @@ struct SyntheticUsageTests {
     }
 }
 
-private final class SyntheticRequestRecorder: @unchecked Sendable {
+private nonisolated final class SyntheticRequestRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private(set) var requests: [URLRequest] = []
 
@@ -205,7 +205,7 @@ private final class SyntheticRequestRecorder: @unchecked Sendable {
     }
 }
 
-private final class SyntheticTestURLProtocol: URLProtocol, @unchecked Sendable {
+private nonisolated final class SyntheticTestURLProtocol: URLProtocol {
     static let lock = NSLock()
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, String))?
 

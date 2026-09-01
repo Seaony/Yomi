@@ -14,6 +14,20 @@ final class UsageStore: ObservableObject {
     private let cacheKey = "usage-cache.v2"
     private var refreshLoop: Task<Void, Never>?
     private var preferenceObserver: AnyCancellable?
+    private var pendingFullRefresh = false
+    private var pendingProviderIDs: Set<ProviderID> = []
+
+    private enum RefreshRequest {
+        case all
+        case provider(ProviderID)
+
+        var providerID: ProviderID? {
+            switch self {
+            case .all: nil
+            case let .provider(id): id
+            }
+        }
+    }
 
     var enabledProviders: [ProviderDescriptor] {
         let enabled = Set(preferences.configurations.filter(\.isEnabled).map(\.id))
@@ -33,7 +47,6 @@ final class UsageStore: ObservableObject {
             .dropFirst()
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
-                Task { await self?.refresh() }
             }
     }
 
@@ -56,15 +69,45 @@ final class UsageStore: ObservableObject {
     }
 
     func refresh(providerID: ProviderID? = nil) async {
-        guard !isRefreshing else { return }
+        let request = providerID.map(RefreshRequest.provider) ?? .all
+        guard !isRefreshing else {
+            enqueue(request)
+            return
+        }
         isRefreshing = true
         defer { isRefreshing = false }
 
+        var nextRequest: RefreshRequest? = request
+        while let currentRequest = nextRequest {
+            await performRefresh(providerID: currentRequest.providerID)
+            nextRequest = dequeueRefresh()
+        }
+    }
+
+    private func enqueue(_ request: RefreshRequest) {
+        switch request {
+        case .all:
+            pendingFullRefresh = true
+        case let .provider(id):
+            pendingProviderIDs.insert(id)
+        }
+    }
+
+    private func dequeueRefresh() -> RefreshRequest? {
+        if pendingFullRefresh {
+            pendingFullRefresh = false
+            return .all
+        }
+        guard let id = pendingProviderIDs.first else { return nil }
+        pendingProviderIDs.remove(id)
+        return .provider(id)
+    }
+
+    private func performRefresh(providerID: ProviderID?) async {
         let providers = enabledProviders.filter { providerID == nil || $0.id == providerID }
+        let preferences = preferences
         let jobs = providers.map { descriptor in
-            let configuration = preferences.configuration(for: descriptor.id)
-            let secret = preferences.secret(for: descriptor.id)
-            return (descriptor, configuration, secret)
+            (descriptor, preferences.configuration(for: descriptor.id))
         }
         let allowVertexClaudeFallback = !enabledProviders.contains { $0.id.rawValue == "claude" }
 
@@ -100,10 +143,11 @@ final class UsageStore: ObservableObject {
             let concurrencyLimit = 6
             var nextJobIndex = 0
 
-            func submit(_ job: (ProviderDescriptor, ProviderConfiguration, String)) {
-                let (descriptor, configuration, secret) = job
+            func submit(_ job: (ProviderDescriptor, ProviderConfiguration)) {
+                let (descriptor, configuration) = job
                 group.addTask { [collector] in
                     do {
+                        let secret = preferences.secret(for: descriptor.id)
                         return try await collector.collect(
                             descriptor: descriptor,
                             configuration: configuration,
@@ -137,7 +181,7 @@ final class UsageStore: ObservableObject {
                 )
                 if resolvedUsage.state == .failed,
                    var cached = refreshedUsage[resolvedUsage.id],
-                   !cached.windows.isEmpty {
+                   Self.hasCacheableData(cached) {
                     if let descriptor = ProviderCatalog.byID[usage.id] {
                         cached = await collector.enrichLocalMetadata(
                             to: cached,
@@ -178,10 +222,10 @@ final class UsageStore: ObservableObject {
         let usages = enabledProviders.map { usage(for: $0.id) }
         let today = Self.combinedUsage(usages.compactMap(\.today))
         let daily = Self.overviewDailyUsage(usages: usages, today: today)
-        let last30Days = Self.combinedUsage(daily.map(\.usage))
+        let last30Days = Self.combinedLast30DaysUsage(usages)
         let isFullRefresh = !enabledProviders.isEmpty
             && enabledProviders.allSatisfy { usage(for: $0.id).state == .loading }
-        let hasUsage = today != nil || !daily.isEmpty
+        let hasUsage = today != nil || last30Days != nil || !daily.isEmpty
         return ProviderUsage(
             id: ProviderCatalog.overview.id,
             state: isFullRefresh ? .loading : (hasUsage ? .ready : .unavailable),
@@ -196,7 +240,7 @@ final class UsageStore: ObservableObject {
         )
     }
 
-    private static func combinedUsage(_ usages: [DailyTokenUsage]) -> DailyTokenUsage? {
+    private nonisolated static func combinedUsage(_ usages: [DailyTokenUsage]) -> DailyTokenUsage? {
         guard !usages.isEmpty else { return nil }
         let tokens = usages.reduce(Int64.zero) { $0 + $1.tokens }
         let hasUnpricedTokens = usages.contains { $0.tokens > 0 && $0.valueUSD == nil }
@@ -204,6 +248,14 @@ final class UsageStore: ObservableObject {
             ? nil
             : usages.reduce(0.0) { $0 + ($1.valueUSD ?? 0) }
         return DailyTokenUsage(tokens: tokens, valueUSD: valueUSD)
+    }
+
+    nonisolated static func combinedLast30DaysUsage(
+        _ usages: [ProviderUsage]
+    ) -> DailyTokenUsage? {
+        combinedUsage(usages.compactMap { usage in
+            usage.last30Days ?? combinedUsage(usage.last30DaysDaily.map(\.usage))
+        })
     }
 
     private static func overviewDailyUsage(
@@ -278,8 +330,21 @@ final class UsageStore: ObservableObject {
         return resolved
     }
 
+    nonisolated static func hasCacheableData(_ usage: ProviderUsage) -> Bool {
+        !usage.windows.isEmpty
+            || !usage.additionalWindows.isEmpty
+            || usage.balance != nil
+            || usage.plan != nil
+            || usage.today != nil
+            || usage.last30Days != nil
+            || !usage.last30DaysDaily.isEmpty
+            || usage.weeklyEstimate != nil
+            || usage.providerCost != nil
+            || !usage.details.isEmpty
+    }
+
     private func persistCache() {
-        let values = Array(usageByID.values).filter { !$0.windows.isEmpty }
+        let values = Array(usageByID.values).filter(Self.hasCacheableData)
         guard let data = try? JSONEncoder().encode(values) else { return }
         defaults.set(data, forKey: cacheKey)
     }

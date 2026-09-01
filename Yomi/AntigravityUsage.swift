@@ -1214,10 +1214,10 @@ nonisolated enum AntigravityUsageFetcher {
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.standardOutput = output
-        process.standardError = Pipe()
+        process.standardError = FileHandle.nullDevice
         try process.run()
-        process.waitUntilExit()
         let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
         guard process.terminationStatus == 0 || !data.isEmpty else {
             throw AntigravityUsageError.localServiceUnavailable
         }

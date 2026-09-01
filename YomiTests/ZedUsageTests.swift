@@ -203,7 +203,12 @@ struct ZedUsageTests {
         ZedTestURLProtocol.handler = nil
     }
 
-    private static func fixture(plan: String, used: Int, limit: String, overdue: Bool = false) -> Data {
+    private nonisolated static func fixture(
+        plan: String,
+        used: Int,
+        limit: String,
+        overdue: Bool = false
+    ) -> Data {
         Data("""
         {
           "user": {"id":4242,"github_login":"octocat","name":"The Octocat"},
@@ -227,19 +232,19 @@ struct ZedUsageTests {
     }
 }
 
-private final class ZedRequestRecorder: @unchecked Sendable {
+private nonisolated final class ZedRequestRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private(set) var requests: [URLRequest] = []
     func append(_ request: URLRequest) { lock.withLock { requests.append(request) } }
 }
 
-private final class ZedCredentialReadRecorder: @unchecked Sendable {
+private nonisolated final class ZedCredentialReadRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private(set) var values: [String] = []
     func append(_ value: String) { lock.withLock { values.append(value) } }
 }
 
-private final class ZedTestURLProtocol: URLProtocol, @unchecked Sendable {
+private nonisolated final class ZedTestURLProtocol: URLProtocol {
     static let lock = NSLock()
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
 

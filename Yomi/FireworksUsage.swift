@@ -312,7 +312,13 @@ nonisolated enum FireworksUsageFetcher {
     ) async throws -> [String] {
         var slugs: Set<String> = []
         var pageToken: String?
+        var seenPageTokens: Set<String> = []
+        var pageCount = 0
         repeat {
+            pageCount += 1
+            guard pageCount <= 100 else {
+                throw FireworksUsageError.parseFailed("Accounts API returned too many pages")
+            }
             var request = URLRequest(url: resolveAccountsURL(pageToken: pageToken))
             authorize(&request, apiKey: apiKey)
             let (data, response) = try await session.data(for: request)
@@ -343,6 +349,9 @@ nonisolated enum FireworksUsageFetcher {
             }
             pageToken = page.nextPageToken?.trimmingCharacters(in: .whitespacesAndNewlines)
             if pageToken?.isEmpty == true { pageToken = nil }
+            if let pageToken, !seenPageTokens.insert(pageToken).inserted {
+                throw FireworksUsageError.parseFailed("Accounts API returned a repeated page token")
+            }
         } while pageToken != nil
         return slugs.sorted()
     }

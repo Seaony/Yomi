@@ -165,14 +165,14 @@ struct ChutesUsageTests {
     }
 }
 
-private final class ChutesRequestRecorder: @unchecked Sendable {
+private nonisolated final class ChutesRequestRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [URLRequest] = []
     var requests: [URLRequest] { lock.withLock { storage } }
     func append(_ request: URLRequest) { lock.withLock { storage.append(request) } }
 }
 
-private final class ChutesTestURLProtocol: URLProtocol, @unchecked Sendable {
+private nonisolated final class ChutesTestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }

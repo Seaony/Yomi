@@ -127,19 +127,19 @@ struct ZoomMateUsageTests {
 
     @Test
     func statusFailsOverOnTransportAndNonAuthHTTPButNotAuthOrParse() async throws {
-        var attempts: [String] = []
+        let attempts = TestLockedValue<[String]>([])
         ZoomMateTestURLProtocol.handler = { request in
-            attempts.append(request.url!.host!)
+            attempts.withValue { $0.append(request.url!.host!) }
             if request.url?.host == "ai.zoom.us" { return (500, "{}") }
             return (200, #"{"data":{"credit_status":{"budget_cap":10,"used_credit":1}}}"#)
         }
         _ = try await ZoomMateUsageFetcher.fetchCreditsStatus(context: Self.context(), session: Self.session())
-        #expect(attempts == ["ai.zoom.us", "zoommate.zoom.us"])
+        #expect(attempts.value == ["ai.zoom.us", "zoommate.zoom.us"])
 
         for (status, body) in [(401, "{}"), (200, #"{"data":{}}"#)] {
-            attempts = []
+            attempts.withValue { $0.removeAll() }
             ZoomMateTestURLProtocol.handler = { request in
-                attempts.append(request.url!.host!)
+                attempts.withValue { $0.append(request.url!.host!) }
                 return (status, body)
             }
             await #expect(throws: ZoomMateUsageError.self) {
@@ -147,7 +147,7 @@ struct ZoomMateUsageTests {
                     context: Self.context(), session: Self.session()
                 )
             }
-            #expect(attempts == ["ai.zoom.us"])
+            #expect(attempts.value == ["ai.zoom.us"])
         }
         Self.resetProtocol()
     }
@@ -156,18 +156,18 @@ struct ZoomMateUsageTests {
     func manualCaptureStartsOnCapturedHostAndDropsLeafCookieDuringFailover() async throws {
         let raw = #"curl 'https://zoommate.zoom.us/ai-computer/api/v1/credits/status' -H 'Authorization: token' -H 'Cookie: leaf=1'"#
         let context = try #require(ZoomMateUsageFetcher.requestContext(from: raw))
-        var cookies: [String?] = []
+        let cookies = TestLockedValue<[String?]>([])
         ZoomMateTestURLProtocol.handler = { request in
-            cookies.append(request.value(forHTTPHeaderField: "Cookie"))
+            cookies.withValue { $0.append(request.value(forHTTPHeaderField: "Cookie")) }
             return request.url?.host == "zoommate.zoom.us"
                 ? (500, "{}")
                 : (200, #"{"data":{"credit_status":{"budget_cap":100,"used_credit":5}}}"#)
         }
         defer { Self.resetProtocol() }
         _ = try await ZoomMateUsageFetcher.fetchCreditsStatus(context: context, session: Self.session())
-        #expect(cookies.count == 2)
-        #expect(cookies[0] == "leaf=1")
-        #expect(cookies[1] == nil)
+        #expect(cookies.value.count == 2)
+        #expect(cookies.value[0] == "leaf=1")
+        #expect(cookies.value[1] == nil)
     }
 
     @Test
@@ -193,9 +193,9 @@ struct ZoomMateUsageTests {
         let headers = ZoomMateCookieHeaders(headersByHost: ["ai.zoom.us": "unique=session"])
         let firstNow = Date(timeIntervalSince1970: 1_800_000_000)
         let jwt = Self.jwt(exp: Int(firstNow.timeIntervalSince1970 + 3_600))
-        var mints = 0
+        let mints = TestLockedValue(0)
         ZoomMateTestURLProtocol.handler = { _ in
-            mints += 1
+            mints.withValue { $0 += 1 }
             return (200, "{\"data\":{\"nak\":\"\(jwt)\"}}")
         }
         defer { Self.resetProtocol() }
@@ -205,35 +205,35 @@ struct ZoomMateUsageTests {
         _ = try await ZoomMateUsageFetcher.requestContext(
             forCookieHeaders: headers, cache: cache, session: Self.session(), now: firstNow + 120
         )
-        #expect(mints == 1)
+        #expect(mints.value == 1)
         _ = try await ZoomMateUsageFetcher.requestContext(
             forCookieHeaders: headers, cache: cache, session: Self.session(), now: firstNow + 3_550
         )
-        #expect(mints == 2)
+        #expect(mints.value == 2)
     }
 
     @Test
     func tokenWithoutExpiryIsNeverCached() async throws {
         let cache = ZoomMateBearerTokenCache()
         let headers = ZoomMateCookieHeaders(headersByHost: ["ai.zoom.us": "uncached=session"])
-        var mints = 0
+        let mints = TestLockedValue(0)
         ZoomMateTestURLProtocol.handler = { _ in
-            mints += 1
+            mints.withValue { $0 += 1 }
             return (200, #"{"data":{"nak":"opaque-token"}}"#)
         }
         defer { Self.resetProtocol() }
         _ = try await ZoomMateUsageFetcher.requestContext(forCookieHeaders: headers, cache: cache, session: Self.session())
         _ = try await ZoomMateUsageFetcher.requestContext(forCookieHeaders: headers, cache: cache, session: Self.session())
-        #expect(mints == 2)
+        #expect(mints.value == 2)
     }
 
     @Test
     func historyUsesExactQueryAndPaginatesWithinOneHost() async throws {
-        var pages: [String] = []
+        let pages = TestLockedValue<[String]>([])
         ZoomMateTestURLProtocol.handler = { request in
             #expect(request.url?.host == "ai.zoom.us")
             let query = request.url!.query!
-            pages.append(query)
+            pages.withValue { $0.append(query) }
             #expect(query.contains("app_id=demo_app"))
             #expect(query.contains("limit=2"))
             #expect(query.contains("sort_by=time"))
@@ -257,21 +257,21 @@ struct ZoomMateUsageTests {
             now: Self.now
         )
         #expect(history.records.map(\.sessionID) == ["a", "b", "c"])
-        #expect(pages.count == 2)
+        #expect(pages.value.count == 2)
     }
 
     @Test
     func historyStopsOnFullyStalePageEvenWhenTotalIsLarge() async throws {
-        var calls = 0
+        let calls = TestLockedValue(0)
         ZoomMateTestURLProtocol.handler = { _ in
-            calls += 1
+            calls.withValue { $0 += 1 }
             return (200, #"{"data":{"records":[{"cost":1,"time":"2020-01-01T00:00:00Z"}],"total":999}}"#)
         }
         defer { Self.resetProtocol() }
         _ = try await ZoomMateUsageFetcher.fetchHistory(
             context: Self.context(), startTime: Self.now - 86_400, endTime: Self.now, session: Self.session()
         )
-        #expect(calls == 1)
+        #expect(calls.value == 1)
     }
 
     @Test
@@ -362,14 +362,14 @@ struct ZoomMateUsageTests {
     }
 }
 
-private final class ZoomMateRequestRecorder: @unchecked Sendable {
+private nonisolated final class ZoomMateRequestRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [URLRequest] = []
     var requests: [URLRequest] { lock.withLock { storage } }
     func append(_ request: URLRequest) { lock.withLock { storage.append(request) } }
 }
 
-private final class ZoomMateTestURLProtocol: URLProtocol, @unchecked Sendable {
+private nonisolated final class ZoomMateTestURLProtocol: URLProtocol {
     private static let lock = NSLock()
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, String))?
     nonisolated(unsafe) static var recorder: ZoomMateRequestRecorder?

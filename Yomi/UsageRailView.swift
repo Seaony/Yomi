@@ -266,8 +266,6 @@ private struct SettingsHoverControl: View {
         }
         .buttonStyle(.plain)
         .help(copy.text("设置", "Settings"))
-        .allowsHitTesting(isHovering)
-        .accessibilityHidden(!isHovering)
         .scaleEffect(isControlHovering ? 1.08 : 1)
         .background {
             PointingHandCursorRegion()

@@ -47,7 +47,7 @@ nonisolated enum AppLocalization {
     }
 }
 
-struct AppCopy {
+nonisolated struct AppCopy {
     let language: AppLanguage
 
     func text(_ chinese: String, _ english: String) -> String {

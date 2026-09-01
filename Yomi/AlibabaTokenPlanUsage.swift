@@ -293,8 +293,16 @@ nonisolated enum AlibabaTokenPlanFetcher {
             process.standardOutput = output
             process.standardError = errors
             try process.run()
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errors.fileHandleForReading.readDataToEndOfFile()
+            try? output.fileHandleForWriting.close()
+            try? errors.fileHandleForWriting.close()
+            let outputTask = Task.detached {
+                output.fileHandleForReading.readDataToEndOfFile()
+            }
+            let errorTask = Task.detached {
+                errors.fileHandleForReading.readDataToEndOfFile()
+            }
+            let data = await outputTask.value
+            let errorData = await errorTask.value
             process.waitUntilExit()
             guard process.terminationStatus == 0 else {
                 let message = String(data: errorData, encoding: .utf8) ?? "bl"
@@ -599,7 +607,13 @@ nonisolated enum AlibabaTokenPlanFetcher {
 
     private static func findInt(keys: [String], in value: Any) -> Int? {
         if let dictionary = value as? [String: Any] {
-            for key in keys { if let value = number(dictionary[key]) { return Int(value) } }
+            for key in keys {
+                if let value = number(dictionary[key]),
+                   value >= Double(Int.min),
+                   value <= Double(Int.max) {
+                    return Int(value)
+                }
+            }
             for child in dictionary.values { if let found = findInt(keys: keys, in: child) { return found } }
         } else if let array = value as? [Any] {
             for child in array { if let found = findInt(keys: keys, in: child) { return found } }
@@ -649,6 +663,7 @@ nonisolated enum AlibabaTokenPlanFetcher {
         }
         if let string = value as? String {
             return Double(string.replacingOccurrences(of: ",", with: ""))
+                .flatMap { $0.isFinite ? $0 : nil }
         }
         return nil
     }

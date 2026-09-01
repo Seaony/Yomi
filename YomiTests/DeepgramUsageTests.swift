@@ -51,8 +51,11 @@ struct DeepgramUsageTests {
         #expect(usage.details.first { $0.label == "Audio" }?.value == "5 hours · 7 billable hours")
         #expect(!usage.details.contains { $0.label == "Period" })
         #expect(!usage.details.contains { $0.id == "deepgram-project" })
-        #expect(recorder.requests.map { $0.url?.path } == [
-            "/v1/projects", "/v1/projects/project-a/usage/breakdown", "/v1/projects/project-b/usage/breakdown",
+        let paths = recorder.requests.compactMap { $0.url?.path }
+        #expect(paths.first == "/v1/projects")
+        #expect(Set(paths.dropFirst()) == [
+            "/v1/projects/project-a/usage/breakdown",
+            "/v1/projects/project-b/usage/breakdown",
         ])
         #expect(recorder.requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Token dg-test" })
     }
@@ -115,14 +118,14 @@ struct DeepgramUsageTests {
     }
 }
 
-private final class DeepgramRequestRecorder: @unchecked Sendable {
+private nonisolated final class DeepgramRequestRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [URLRequest] = []
     var requests: [URLRequest] { lock.withLock { storage } }
     func append(_ request: URLRequest) { lock.withLock { storage.append(request) } }
 }
 
-private final class DeepgramTestURLProtocol: URLProtocol, @unchecked Sendable {
+private nonisolated final class DeepgramTestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }

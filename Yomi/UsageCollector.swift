@@ -105,6 +105,7 @@ actor UsageCollector {
         secret: String,
         allowBrowserCookieImport: Bool
     ) async throws -> ProviderUsage {
+        let secret = secret.trimmingCharacters(in: .whitespacesAndNewlines)
         if descriptor.id.rawValue == "codex" {
             let cachedCookie = await MainActor.run {
                 ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie")
@@ -1013,9 +1014,9 @@ actor UsageCollector {
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             guard process.terminationStatus == 0 else { return nil }
-            let data = output.fileHandleForReading.readDataToEndOfFile()
             let token = String(data: data, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return token?.isEmpty == false ? token : nil
@@ -1055,7 +1056,7 @@ actor UsageCollector {
         let now = Date()
         let weeklyReset = weeklyWindow?.resetsAt.flatMap { $0 > now ? $0 : nil }
         let weekStart = weeklyReset
-            .flatMap { Calendar.current.date(byAdding: .day, value: -7, to: $0) }
+            .map { $0.addingTimeInterval(-7 * 24 * 60 * 60) }
             ?? now.addingTimeInterval(-7 * 24 * 60 * 60)
         let localUsage = await localUsageScanner.scan(
             providerID: descriptor.id,

@@ -82,7 +82,7 @@ struct LLMProxyUsageTests {
         }
     }
 
-    private static let fixture = #"{"providers":{"openai":{"credential_count":3,"active_count":2,"exhausted_count":1,"total_requests":120,"tokens":{"input_cached":1000,"input_uncached":2000,"output":3000},"approx_cost":12.5,"quota_groups":{"default":{"remaining_percent":42,"reset_time":"2026-05-18T12:00:00.123Z"}}},"anthropic":{"credential_count":1,"active_count":1,"exhausted_count":0,"total_requests":40,"tokens":{"input_cached":0,"input_uncached":500,"output":500},"approx_cost":3.0,"quota_groups":[{"remaining_percent":80}]}},"summary":{"total_requests":160,"total_tokens":7000,"approx_cost":15.5}}"#
+    private nonisolated static let fixture = #"{"providers":{"openai":{"credential_count":3,"active_count":2,"exhausted_count":1,"total_requests":120,"tokens":{"input_cached":1000,"input_uncached":2000,"output":3000},"approx_cost":12.5,"quota_groups":{"default":{"remaining_percent":42,"reset_time":"2026-05-18T12:00:00.123Z"}}},"anthropic":{"credential_count":1,"active_count":1,"exhausted_count":0,"total_requests":40,"tokens":{"input_cached":0,"input_uncached":500,"output":500},"approx_cost":3.0,"quota_groups":[{"remaining_percent":80}]}},"summary":{"total_requests":160,"total_tokens":7000,"approx_cost":15.5}}"#
 
     private static func session() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
@@ -91,7 +91,7 @@ struct LLMProxyUsageTests {
     }
 }
 
-private final class LLMProxyTestURLProtocol: URLProtocol, @unchecked Sendable {
+private final class LLMProxyTestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }

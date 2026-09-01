@@ -348,7 +348,7 @@ struct AntigravityUsageTests {
     }
 }
 
-private final class AntigravityTestURLProtocol: URLProtocol, @unchecked Sendable {
+private final class AntigravityTestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var requests: [URLRequest] = []
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
 

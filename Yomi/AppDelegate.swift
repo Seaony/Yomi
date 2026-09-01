@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
@@ -16,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var selectedProviderID: ProviderID?
     private var selectedProviderLocalY: CGFloat?
     private var providerDetailCloseTask: Task<Void, Never>?
+    private var providerDetailSizeObserver: AnyCancellable?
     private var settingsWindow: NSWindow?
     private var verticalPosition: CGFloat = 0.5
     private var railSide = UsageRailSide.right
@@ -25,6 +27,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         restorePanelPosition()
         createPanel()
         store.start()
+        providerDetailSizeObserver = store.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                self?.updateProviderDetailFrame(animated: true)
+            }
+        }
 
         NotificationCenter.default.addObserver(
             self,
@@ -42,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         providerDetailCloseTask?.cancel()
+        providerDetailSizeObserver = nil
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -89,6 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func screenLayoutChanged() {
         positionPanel(animated: false)
+        updateProviderDetailFrame(animated: false)
     }
 
     @objc private func languageChanged() {
@@ -276,6 +286,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             width: fittingSize.width,
             height: fittingSize.height
         )
+    }
+
+    private func updateProviderDetailFrame(animated: Bool) {
+        guard let panel,
+              let detailPanel = providerDetailPanel,
+              detailPanel.isVisible,
+              let hostingView = providerDetailHostingView,
+              let localY = selectedProviderLocalY
+        else { return }
+        hostingView.layoutSubtreeIfNeeded()
+        let frame = providerDetailFrame(
+            fittingSize: hostingView.fittingSize,
+            localY: localY,
+            panel: panel
+        )
+        guard !detailPanel.frame.equalTo(frame) else { return }
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = animationDuration(0.14)
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                detailPanel.animator().setFrame(frame, display: true)
+            }
+        } else {
+            detailPanel.setFrame(frame, display: true)
+        }
     }
 
     private func closeProviderDetail() {

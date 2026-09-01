@@ -52,7 +52,7 @@ nonisolated enum UsageParser {
         guard let object = value as? [String: Any],
               let usedPercent = numericValue(object["used_percent"])
         else { return nil }
-        let seconds = numericValue(object["limit_window_seconds"]).map(Int.init)
+        let seconds = numericValue(object["limit_window_seconds"]).flatMap(integerValue)
         let role: CodexWindowRole
         let label: String
         switch seconds {
@@ -118,7 +118,7 @@ nonisolated enum UsageParser {
         let sevenDay = window("seven_day", label: "Weekly")
         let oauthApps = window("seven_day_oauth_apps", label: "OAuth apps")
         let sonnet = window("seven_day_sonnet", label: "Sonnet")
-        let opus = window("seven_day_opus", label: "Sonnet")
+        let opus = window("seven_day_opus", label: "Opus")
         var windows: [UsageWindow] = []
         if let primary = fiveHour ?? sevenDay ?? oauthApps ?? sonnet ?? opus {
             windows.append(primary)
@@ -321,6 +321,11 @@ nonisolated enum UsageParser {
             return value
         }
         return nil
+    }
+
+    private static func integerValue(_ value: Double) -> Int? {
+        guard value >= Double(Int.min), value <= Double(Int.max) else { return nil }
+        return Int(value)
     }
 
     static func displayPlan(_ value: String, descriptor: ProviderDescriptor) -> String? {

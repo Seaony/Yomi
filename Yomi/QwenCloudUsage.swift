@@ -700,12 +700,17 @@ nonisolated enum QwenCloudUsageFetcher {
         }
         if let string = value as? String {
             return Double(string.trimmingCharacters(in: .whitespacesAndNewlines))
+                .flatMap { $0.isFinite ? $0 : nil }
         }
         return nil
     }
 
     private static func integer(_ value: Any?) -> Int? {
-        number(value).map(Int.init)
+        guard let number = number(value),
+              number >= Double(Int.min),
+              number <= Double(Int.max)
+        else { return nil }
+        return Int(number)
     }
 
     private static func string(_ value: Any?) -> String? {

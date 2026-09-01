@@ -101,7 +101,9 @@ nonisolated enum MiniMaxUsageFetcher {
                     detail: quota.detail
                 )
             }
-            let providerCost: ProviderCostSummary? = if let pointsBalance, pointsBalance >= 0 {
+            let providerCost: ProviderCostSummary? = if let pointsBalance,
+                                                        pointsBalance.isFinite,
+                                                        pointsBalance >= 0 {
                 ProviderCostSummary(
                     used: pointsBalance,
                     limit: 0,
@@ -112,7 +114,9 @@ nonisolated enum MiniMaxUsageFetcher {
             } else {
                 nil
             }
-            let pointsText = pointsBalance.map { "\(Self.number($0)) points" }
+            let pointsText = pointsBalance.flatMap { value in
+                value.isFinite ? "\(Self.number(value)) points" : nil
+            }
             return ProviderUsage(
                 id: ProviderID(rawValue: "minimax"),
                 state: .ready,
@@ -139,7 +143,10 @@ nonisolated enum MiniMaxUsageFetcher {
         }
 
         private static func number(_ value: Double) -> String {
-            if value == value.rounded() { return String(Int(value)) }
+            guard value.isFinite else { return "—" }
+            if value == value.rounded(), value >= Double(Int.min), value <= Double(Int.max) {
+                return String(Int(value))
+            }
             return String(format: "%.2f", value)
         }
 
@@ -883,6 +890,9 @@ nonisolated enum MiniMaxUsageFetcher {
         var totalCount: Int?
         var receivedCount = 0
         while true {
+            guard page <= 100 else {
+                throw MiniMaxUsageError.parseFailed("Billing history returned too many pages")
+            }
             let base = try endpoint(
                 overrideKey: "MINIMAX_BILLING_HISTORY_URL",
                 hostKey: "MINIMAX_HOST",
@@ -1341,15 +1351,24 @@ nonisolated enum MiniMaxUsageFetcher {
     }
     private static func integer(_ value: Any?) -> Int? {
         if let value = value as? Int { return value }
-        if let value = value as? NSNumber { return value.intValue }
+        if let value = value as? NSNumber {
+            let number = value.doubleValue
+            guard number.isFinite,
+                  number >= Double(Int.min),
+                  number <= Double(Int.max)
+            else { return nil }
+            return Int(number)
+        }
         if let value = value as? String { return Int(clean(value)) }
         return nil
     }
     private static func number(_ value: Any?) -> Double? {
-        if let value = value as? Double { return value }
-        if let value = value as? NSNumber { return value.doubleValue }
-        if let value = value as? String { return Double(clean(value)) }
-        return nil
+        let number: Double?
+        if let value = value as? Double { number = value }
+        else if let value = value as? NSNumber { number = value.doubleValue }
+        else if let value = value as? String { number = Double(clean(value)) }
+        else { number = nil }
+        return number.flatMap { $0.isFinite ? $0 : nil }
     }
 
     private static func firstString(_ root: [String: Any], keys: [String]) -> String? {

@@ -425,13 +425,14 @@ nonisolated enum KiloUsageFetcher {
     }
 
     private static func number(_ raw: Any?) -> Double? {
-        switch raw {
+        let value: Double? = switch raw {
         case let value as Double: value
         case let value as Int: Double(value)
         case let value as NSNumber: value.doubleValue
         case let value as String: Double(value.trimmingCharacters(in: .whitespacesAndNewlines))
         default: nil
         }
+        return value.flatMap { $0.isFinite ? $0 : nil }
     }
 
     private static func bool(_ raw: Any?) -> Bool? {
@@ -460,7 +461,13 @@ nonisolated enum KiloUsageFetcher {
     }
 
     private static func compact(_ value: Double) -> String {
-        value.rounded(.towardZero) == value ? String(Int(value)) : String(format: "%.2f", value)
+        guard value.isFinite else { return "—" }
+        if value.rounded(.towardZero) == value,
+           value >= Double(Int.min),
+           value <= Double(Int.max) {
+            return String(Int(value))
+        }
+        return String(format: "%.2f", value)
     }
 
     private static func currency(_ value: Double) -> String { String(format: "%.2f", max(0, value)) }

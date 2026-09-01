@@ -197,9 +197,9 @@ struct AmpUsageTests {
         #expect(!AmpUsageFetcher.shouldAttachCookie(to: URL(string: "http://ampcode.com/settings")))
         #expect(!AmpUsageFetcher.shouldAttachCookie(to: URL(string: "https://ampcode.com.evil.test")))
         #expect(AmpUsageFetcher.isLoginRedirect(
-            try #require(URL(string: "https://ampcode.com/auth/sign-in?returnTo=%2Fsettings"))
+            URL(string: "https://ampcode.com/auth/sign-in?returnTo=%2Fsettings")
         ))
-        #expect(!AmpUsageFetcher.isLoginRedirect(try #require(URL(string: "https://ampcode.com/settings"))))
+        #expect(!AmpUsageFetcher.isLoginRedirect(URL(string: "https://ampcode.com/settings")))
     }
 
     @Test func environmentTokenIsTrimmedAndUnquotedAndCLIOverrideIsResolved() {

@@ -357,7 +357,12 @@ nonisolated enum SyntheticUsageFetcher {
     }
 
     private static func number(_ value: Double) -> String {
-        value.rounded() == value ? String(Int(value)) : String(format: "%.2f", value)
+        if value.rounded() == value,
+           value >= Double(Int.min),
+           value <= Double(Int.max) {
+            return String(Int(value))
+        }
+        return String(format: "%.2f", value)
     }
 
     private static func cleanQuoted(_ value: String?) -> String? {

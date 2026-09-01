@@ -2,7 +2,10 @@ import Foundation
 
 enum OpenCodeGoLocalUsageReader {
     nonisolated static func enrich(_ usage: ProviderUsage, now: Date = Date()) -> ProviderUsage {
-        guard let rows = readRows(), !rows.isEmpty else { return usage }
+        let calendar = Calendar.current
+        let todayStart = calendar.startOfDay(for: now)
+        let start = calendar.date(byAdding: .day, value: -29, to: todayStart) ?? todayStart
+        guard let rows = readRows(since: start), !rows.isEmpty else { return usage }
         return enrich(usage, rows: rows, now: now)
     }
 
@@ -48,7 +51,7 @@ enum OpenCodeGoLocalUsageReader {
         }
     }
 
-    private nonisolated static func readRows() -> [OpenCodeGoLocalRow]? {
+    private nonisolated static func readRows(since start: Date) -> [OpenCodeGoLocalRow]? {
         let database = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: ".local/share/opencode/opencode.db")
         guard FileManager.default.fileExists(atPath: database.path),
@@ -57,7 +60,10 @@ enum OpenCodeGoLocalUsageReader {
             database: database,
             sql: "SELECT 1 FROM sqlite_master WHERE type='table' AND name='part' LIMIT 1;"
         )?.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
-        let sql = hasPart ? messageAndPartSQL : messageSQL
+        let minimumMilliseconds = Int64((start.timeIntervalSince1970 * 1_000).rounded(.down))
+        let sql = hasPart
+            ? messageAndPartSQL(since: minimumMilliseconds)
+            : messageSQL(since: minimumMilliseconds)
         guard let output = run(database: database, sql: sql) else { return nil }
         return parseRows(output)
     }
@@ -71,15 +77,17 @@ enum OpenCodeGoLocalUsageReader {
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             guard process.terminationStatus == 0 else { return nil }
-            return String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+            return String(data: data, encoding: .utf8)
         } catch {
             return nil
         }
     }
 
-    private static let messageSQL = """
+    private nonisolated static func messageSQL(since minimumMilliseconds: Int64) -> String {
+        """
         SELECT
           CAST(COALESCE(json_extract(data, '$.time.created'), time_created) AS INTEGER),
           CAST(json_extract(data, '$.cost') AS REAL),
@@ -88,10 +96,14 @@ enum OpenCodeGoLocalUsageReader {
         WHERE json_valid(data)
           AND json_extract(data, '$.providerID') = 'opencode-go'
           AND json_extract(data, '$.role') = 'assistant'
-          AND json_type(data, '$.cost') IN ('integer', 'real');
+          AND json_type(data, '$.cost') IN ('integer', 'real')
+          AND CAST(COALESCE(json_extract(data, '$.time.created'), time_created) AS INTEGER)
+            >= \(minimumMilliseconds);
         """
+    }
 
-    private static let messageAndPartSQL = """
+    private nonisolated static func messageAndPartSQL(since minimumMilliseconds: Int64) -> String {
+        """
         WITH provider_messages AS (
           SELECT id AS messageID,
             CAST(COALESCE(json_extract(data, '$.time.created'), time_created) AS INTEGER) AS createdMs,
@@ -112,7 +124,7 @@ enum OpenCodeGoLocalUsageReader {
         SELECT m.createdMs, m.cost, COALESCE(p.requestCount, 1)
         FROM provider_messages m
         LEFT JOIN part_counts p ON p.messageID = m.messageID
-        WHERE m.hasCost
+        WHERE m.hasCost AND m.createdMs >= \(minimumMilliseconds)
         UNION ALL
         SELECT
           CAST(COALESCE(json_extract(p.data, '$.time.created'), p.time_created, m.createdMs) AS INTEGER),
@@ -123,8 +135,11 @@ enum OpenCodeGoLocalUsageReader {
         WHERE NOT m.hasCost
           AND json_valid(p.data)
           AND json_extract(p.data, '$.type') = 'step-finish'
-          AND json_type(p.data, '$.cost') IN ('integer', 'real');
+          AND json_type(p.data, '$.cost') IN ('integer', 'real')
+          AND CAST(COALESCE(json_extract(p.data, '$.time.created'), p.time_created, m.createdMs) AS INTEGER)
+            >= \(minimumMilliseconds);
         """
+    }
 }
 
 struct OpenCodeGoLocalRow: Equatable {

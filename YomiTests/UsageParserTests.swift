@@ -183,6 +183,60 @@ final class UsageParserTests: XCTestCase {
         XCTAssertEqual(store.usage(for: ProviderID(rawValue: "codex")).windows.map(\.id), ["codex-primary"])
     }
 
+    func testCacheabilityIncludesNonWindowProviderData() {
+        let balanceOnly = ProviderUsage(
+            id: ProviderID(rawValue: "poe"),
+            state: .ready,
+            windows: [],
+            balance: "42 points"
+        )
+        let costOnly = ProviderUsage(
+            id: ProviderID(rawValue: "fireworks"),
+            state: .ready,
+            windows: [],
+            providerCost: ProviderCostSummary(
+                used: 3.5,
+                limit: 0,
+                currencyCode: "USD",
+                period: "Last 30 days",
+                balance: nil
+            )
+        )
+        let empty = ProviderUsage(
+            id: ProviderID(rawValue: "test"),
+            state: .unavailable,
+            windows: []
+        )
+
+        XCTAssertTrue(UsageStore.hasCacheableData(balanceOnly))
+        XCTAssertTrue(UsageStore.hasCacheableData(costOnly))
+        XCTAssertFalse(UsageStore.hasCacheableData(empty))
+    }
+
+    func testOverviewCombinesAggregateAndDailyThirtyDayUsage() throws {
+        let aggregate = ProviderUsage(
+            id: ProviderID(rawValue: "aggregate"),
+            state: .ready,
+            windows: [],
+            last30Days: DailyTokenUsage(tokens: 100, valueUSD: 2)
+        )
+        let daily = ProviderUsage(
+            id: ProviderID(rawValue: "daily"),
+            state: .ready,
+            windows: [],
+            last30DaysDaily: [
+                DailyTokenUsagePoint(
+                    date: Date(),
+                    usage: DailyTokenUsage(tokens: 50, valueUSD: 1)
+                ),
+            ]
+        )
+
+        let combined = try XCTUnwrap(UsageStore.combinedLast30DaysUsage([aggregate, daily]))
+        XCTAssertEqual(combined.tokens, 150)
+        XCTAssertEqual(combined.valueUSD, 3)
+    }
+
     private func parseCodex(_ json: String) throws -> ProviderUsage {
         let descriptor = try XCTUnwrap(ProviderCatalog.byID[ProviderID(rawValue: "codex")])
         return try UsageParser.parse(Data(json.utf8), descriptor: descriptor)

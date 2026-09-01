@@ -124,7 +124,7 @@ struct XAIUsageTests {
         return URLSession(configuration: configuration)
     }
 
-    private static let usageFixture = #"""
+    private nonisolated static let usageFixture = #"""
     {"timeSeries":[
       {"dataPoints":[
         {"timestamp":"2027-01-13T00:00:00Z","values":[0.75973725]},
@@ -140,14 +140,14 @@ struct XAIUsageTests {
     """#
 }
 
-private final class XAIRequestRecorder: @unchecked Sendable {
+private nonisolated final class XAIRequestRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [URLRequest] = []
     var requests: [URLRequest] { lock.withLock { storage } }
     func append(_ request: URLRequest) { lock.withLock { storage.append(request) } }
 }
 
-private final class XAITestURLProtocol: URLProtocol, @unchecked Sendable {
+private nonisolated final class XAITestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }

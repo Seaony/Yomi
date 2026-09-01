@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 nonisolated struct VertexAICredentials: Sendable, Equatable {
@@ -26,6 +27,7 @@ nonisolated enum VertexAIUsageError: LocalizedError, Equatable {
     case refreshExpired
     case refreshRevoked
     case networkError(String)
+    case invalidResponse(String)
     case noData
     case requestFailed(Int, String)
     case commandFailed(String)
@@ -70,6 +72,8 @@ nonisolated enum VertexAIUsageError: LocalizedError, Equatable {
             )
         case let .networkError(message):
             AppLocalization.text("Vertex AI 网络错误：\(message)", "Vertex AI network error: \(message)")
+        case let .invalidResponse(message):
+            AppLocalization.text("Vertex AI 返回的数据无效：\(message)", "Vertex AI returned invalid data: \(message)")
         case .noData:
             AppLocalization.text(
                 "当前项目没有 Vertex AI 用量数据。",
@@ -242,8 +246,8 @@ nonisolated enum VertexAICredentialsStore {
     }
 
     private static func printAccessToken(environment: [String: String]) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
+        try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask(priority: .utility) {
                 let process = Process()
                 let output = Pipe()
                 let errors = Pipe()
@@ -256,21 +260,58 @@ nonisolated enum VertexAICredentialsStore {
                 process.environment = commandEnvironment
                 process.standardOutput = output
                 process.standardError = errors
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-                    let stdout = output.fileHandleForReading.readDataToEndOfFile()
-                    let stderr = errors.fileHandleForReading.readDataToEndOfFile()
-                    guard process.terminationStatus == 0 else {
-                        let message = String(data: stderr, encoding: .utf8)?
-                            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                        throw VertexAIUsageError.commandFailed(message)
-                    }
-                    continuation.resume(returning: String(data: stdout, encoding: .utf8) ?? "")
-                } catch {
-                    continuation.resume(throwing: error)
+                let stdout = VertexProcessOutputCapture(limit: 64 * 1024)
+                let stderr = VertexProcessOutputCapture(limit: 64 * 1024)
+                output.fileHandleForReading.readabilityHandler = { handle in
+                    stdout.append(handle.availableData)
                 }
+                errors.fileHandleForReading.readabilityHandler = { handle in
+                    stderr.append(handle.availableData)
+                }
+                defer {
+                    output.fileHandleForReading.readabilityHandler = nil
+                    errors.fileHandleForReading.readabilityHandler = nil
+                    if process.isRunning {
+                        process.terminate()
+                        usleep(100_000)
+                        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                        process.waitUntilExit()
+                    }
+                }
+
+                try process.run()
+                try? output.fileHandleForWriting.close()
+                try? errors.fileHandleForWriting.close()
+                let deadline = Date().addingTimeInterval(20)
+                while process.isRunning {
+                    try Task.checkCancellation()
+                    if stdout.exceeded || stderr.exceeded {
+                        throw VertexAIUsageError.commandFailed("gcloud output exceeded 64 KiB")
+                    }
+                    guard Date() < deadline else {
+                        throw VertexAIUsageError.commandFailed("gcloud timed out after 20 seconds")
+                    }
+                    try await Task.sleep(for: .milliseconds(50))
+                }
+                process.waitUntilExit()
+                output.fileHandleForReading.readabilityHandler = nil
+                errors.fileHandleForReading.readabilityHandler = nil
+                stdout.append(output.fileHandleForReading.readDataToEndOfFile())
+                stderr.append(errors.fileHandleForReading.readDataToEndOfFile())
+                if stdout.exceeded || stderr.exceeded {
+                    throw VertexAIUsageError.commandFailed("gcloud output exceeded 64 KiB")
+                }
+                guard process.terminationStatus == 0 else {
+                    let message = String(decoding: stderr.data, as: UTF8.self)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    throw VertexAIUsageError.commandFailed(message)
+                }
+                return String(decoding: stdout.data, as: UTF8.self)
             }
+            guard let output = try await group.next() else {
+                throw VertexAIUsageError.commandFailed("gcloud did not return output")
+            }
+            return output
         }
     }
 
@@ -284,6 +325,29 @@ nonisolated enum VertexAICredentialsStore {
         let cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return cleaned.isEmpty ? nil : cleaned
     }
+}
+
+private nonisolated final class VertexProcessOutputCapture: @unchecked Sendable {
+    private let limit: Int
+    private let lock = NSLock()
+    private var storage = Data()
+    private var didExceedLimit = false
+
+    init(limit: Int) {
+        self.limit = limit
+    }
+
+    func append(_ chunk: Data) {
+        guard !chunk.isEmpty else { return }
+        lock.withLock {
+            let remaining = max(0, limit - storage.count)
+            storage.append(chunk.prefix(remaining))
+            if chunk.count > remaining { didExceedLimit = true }
+        }
+    }
+
+    var data: Data { lock.withLock { storage } }
+    var exceeded: Bool { lock.withLock { didExceedLimit } }
 }
 
 nonisolated struct VertexAIQuotaUsage: Sendable, Equatable {
@@ -497,7 +561,13 @@ nonisolated enum VertexAIUsageFetcher {
     ) async throws -> [TimeSeries] {
         var pageToken: String?
         var allSeries: [TimeSeries] = []
+        var seenPageTokens: Set<String> = []
+        var pageCount = 0
         repeat {
+            pageCount += 1
+            guard pageCount <= 100 else {
+                throw VertexAIUsageError.invalidResponse("Cloud Monitoring returned too many pages")
+            }
             guard var components = URLComponents(
                 string: "\(monitoringEndpoint)/\(projectID)/timeSeries"
             ) else { throw VertexAIUsageError.invalidCredentials("Invalid Monitoring URL") }
@@ -539,6 +609,9 @@ nonisolated enum VertexAIUsageFetcher {
             let decoded = try JSONDecoder().decode(TimeSeriesResponse.self, from: data)
             allSeries.append(contentsOf: decoded.timeSeries ?? [])
             pageToken = decoded.nextPageToken?.isEmpty == false ? decoded.nextPageToken : nil
+            if let pageToken, !seenPageTokens.insert(pageToken).inserted {
+                throw VertexAIUsageError.invalidResponse("Cloud Monitoring returned a repeated page token")
+            }
         } while pageToken != nil
         return allSeries
     }

@@ -82,15 +82,34 @@ nonisolated enum DeepgramUsageFetcher {
         }
         guard !projects.isEmpty else { throw DeepgramUsageError.noProjects }
 
-        var totals = Totals()
-        for project in projects {
-            let projectTotals = try await fetchUsage(
-                projectID: project.id,
-                baseURL: baseURL,
-                apiKey: apiKey,
-                session: session
-            )
-            merge(projectTotals, into: &totals)
+        let totals = try await withThrowingTaskGroup(of: Totals.self) { group in
+            let concurrencyLimit = 6
+            var nextProjectIndex = 0
+            var totals = Totals()
+
+            func submit(_ project: Project) {
+                group.addTask {
+                    try await fetchUsage(
+                        projectID: project.id,
+                        baseURL: baseURL,
+                        apiKey: apiKey,
+                        session: session
+                    )
+                }
+            }
+
+            while nextProjectIndex < min(concurrencyLimit, projects.count) {
+                submit(projects[nextProjectIndex])
+                nextProjectIndex += 1
+            }
+            while let projectTotals = try await group.next() {
+                merge(projectTotals, into: &totals)
+                if nextProjectIndex < projects.count {
+                    submit(projects[nextProjectIndex])
+                    nextProjectIndex += 1
+                }
+            }
+            return totals
         }
         return providerUsage(totals: totals, projects: projects, now: now)
     }

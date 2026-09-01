@@ -133,7 +133,9 @@ nonisolated enum PoeUsageFetcher {
         let cutoff = now.addingTimeInterval(-30 * 86_400)
         var entries: [Entry] = []
         var cursor: String?
-        for _ in 0..<5 {
+        var seenCursors: Set<String> = []
+        for _ in 0..<100 {
+            if let cursor, !seenCursors.insert(cursor).inserted { break }
             var components = URLComponents(url: historyURL, resolvingAgainstBaseURL: false)!
             var items = [URLQueryItem(name: "limit", value: "100")]
             if let cursor { items.append(URLQueryItem(name: "starting_after", value: cursor)) }

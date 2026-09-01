@@ -43,7 +43,7 @@ final class ProviderPreferences: ObservableObject {
         persist()
     }
 
-    func secret(for id: ProviderID) -> String {
+    nonisolated func secret(for id: ProviderID) -> String {
         SecretVault.read(account: id.rawValue) ?? ""
     }
 
@@ -55,7 +55,7 @@ final class ProviderPreferences: ObservableObject {
         }
     }
 
-    func auxiliarySecret(for id: ProviderID, key: String) -> String {
+    nonisolated func auxiliarySecret(for id: ProviderID, key: String) -> String {
         SecretVault.read(account: "\(id.rawValue).\(key)") ?? ""
     }
 
@@ -74,7 +74,7 @@ final class ProviderPreferences: ObservableObject {
     }
 }
 
-private enum SecretVault {
+private nonisolated enum SecretVault {
     private static let service = "com.seaony.Yomi.providers"
 
     static func read(account: String) -> String? {

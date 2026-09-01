@@ -573,7 +573,12 @@ nonisolated enum BedrockUsageFetcher {
         var pages: [Data] = []
         var nextPageToken: String?
         var seenTokens: Set<String> = []
+        var pageCount = 0
         repeat {
+            pageCount += 1
+            guard pageCount <= 100 else {
+                throw BedrockUsageError.parseFailed("Cost Explorer returned too many pages")
+            }
             let page = try await costExplorerPage(
                 startDate: startDate,
                 endDate: endDate,

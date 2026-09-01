@@ -129,7 +129,7 @@ struct DeepInfraUsageTests {
         }
     }
 
-    private static func checklist(
+    private nonisolated static func checklist(
         stripeBalance: Double,
         recent: Double,
         limit: Double?,
@@ -149,7 +149,7 @@ struct DeepInfraUsageTests {
         """.utf8)
     }
 
-    private static func usage(totalCostCents: Double) -> Data {
+    private nonisolated static func usage(totalCostCents: Double) -> Data {
         Data("""
         {
           "months": [{"period":"2026.07","items":[],"total_cost":\(totalCostCents)}],
@@ -165,14 +165,14 @@ struct DeepInfraUsageTests {
     }
 }
 
-private final class DeepInfraRequestRecorder: @unchecked Sendable {
+private nonisolated final class DeepInfraRequestRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [URLRequest] = []
     var requests: [URLRequest] { lock.withLock { storage } }
     func append(_ request: URLRequest) { lock.withLock { storage.append(request) } }
 }
 
-private final class DeepInfraTestURLProtocol: URLProtocol, @unchecked Sendable {
+private nonisolated final class DeepInfraTestURLProtocol: URLProtocol {
     private static let lock = NSLock()
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
     override class func canInit(with request: URLRequest) -> Bool { true }

@@ -569,7 +569,7 @@ struct GroqUsageTests {
     }
 }
 
-private final class GroqRequestRecorder: @unchecked Sendable {
+private nonisolated final class GroqRequestRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [URLRequest] = []
     var requests: [URLRequest] { lock.withLock { storage } }
@@ -592,28 +592,28 @@ private final class GroqRequestRecorder: @unchecked Sendable {
     func removeAll() { lock.withLock { storage.removeAll() } }
 }
 
-private final class GroqStringBox: @unchecked Sendable {
+private nonisolated final class GroqStringBox: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: String?
     var value: String? { lock.withLock { storage } }
     func set(_ value: String?) { lock.withLock { storage = value } }
 }
 
-private final class GroqStringArrayBox: @unchecked Sendable {
+private nonisolated final class GroqStringArrayBox: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [String?] = []
     var values: [String?] { lock.withLock { storage } }
     func append(_ value: String?) { lock.withLock { storage.append(value) } }
 }
 
-private final class GroqIntBox: @unchecked Sendable {
+private nonisolated final class GroqIntBox: @unchecked Sendable {
     private let lock = NSLock()
     private var storage = 0
     var value: Int { lock.withLock { storage } }
     func increment() { lock.withLock { storage += 1 } }
 }
 
-private final class GroqTestURLProtocol: URLProtocol {
+private nonisolated final class GroqTestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
 
     override class func canInit(with request: URLRequest) -> Bool { true }

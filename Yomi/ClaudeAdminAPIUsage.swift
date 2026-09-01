@@ -48,19 +48,20 @@ enum ClaudeAdminAPIUsageFetcher {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw ClaudeAdminAPIUsageError.missingCredential }
         let range = dailyRange(now: now)
-        let costsData = try await request(
+        async let costsData = request(
             url: reportURL(base: costURL, range: range, groupBy: "description"),
             apiKey: key,
             endpoint: "cost_report",
             session: session
         )
-        let messagesData = try await request(
+        async let messagesData = request(
             url: reportURL(base: messagesURL, range: range, groupBy: "model"),
             apiKey: key,
             endpoint: "messages",
             session: session
         )
-        return try parse(costsData: costsData, messagesData: messagesData, now: now)
+        let (resolvedCosts, resolvedMessages) = try await (costsData, messagesData)
+        return try parse(costsData: resolvedCosts, messagesData: resolvedMessages, now: now)
     }
 
     static func parse(

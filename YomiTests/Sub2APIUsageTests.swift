@@ -317,7 +317,7 @@ struct Sub2APIUsageTests {
     """#
 }
 
-private final class Sub2APITestURLProtocol: URLProtocol, @unchecked Sendable {
+private final class Sub2APITestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
 
     override class func canInit(with request: URLRequest) -> Bool { true }

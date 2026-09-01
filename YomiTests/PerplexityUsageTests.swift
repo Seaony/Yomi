@@ -382,7 +382,7 @@ struct PerplexityUsageTests {
     }
 }
 
-private final class PerplexityTestURLProtocol: URLProtocol, @unchecked Sendable {
+private final class PerplexityTestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> (Int, String))?
 
     override class func canInit(with request: URLRequest) -> Bool { true }

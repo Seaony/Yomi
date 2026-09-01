@@ -273,7 +273,7 @@ struct FactoryUsageTests {
     }
 }
 
-private final class FactoryURLProtocolStub: URLProtocol, @unchecked Sendable {
+private final class FactoryURLProtocolStub: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
     nonisolated(unsafe) static var requests: [URLRequest] = []
 

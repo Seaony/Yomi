@@ -180,7 +180,7 @@ struct ProviderDetailCard: View {
             overviewChart
                 .transition(sectionTransition)
         } else if displayedWindows.isEmpty,
-                  usage.providerCost != nil || !usage.details.isEmpty {
+                  usage.balance != nil || usage.providerCost != nil || !usage.details.isEmpty {
             providerSummaryContent
         } else if displayedWindows.isEmpty {
             emptyState
@@ -192,7 +192,7 @@ struct ProviderDetailCard: View {
                 }
             }
 
-            if usage.providerCost != nil || !usage.details.isEmpty {
+            if usage.balance != nil || usage.providerCost != nil || !usage.details.isEmpty {
                 providerSummaryContent
             }
 
@@ -336,6 +336,23 @@ struct ProviderDetailCard: View {
 
     private var providerSummaryContent: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if let balance = usage.balance,
+               !usage.details.contains(where: {
+                   let label = $0.label.lowercased()
+                   return label.contains("balance") || label.contains("余额")
+               }) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(copy.usageLabel("Balance"))
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.42))
+                    Spacer(minLength: 8)
+                    Text(balance)
+                        .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .contentTransition(.numericText())
+                }
+            }
             if let cost = usage.providerCost {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
                     Text(formattedProviderCost(cost))
@@ -614,13 +631,15 @@ private struct UsageWindowRow: View {
                     .monospacedDigit()
                     .fixedSize(horizontal: true, vertical: false)
                     .contentTransition(.numericText(value: remainingFraction))
-                if !resetText.isEmpty {
-                    Text(resetText)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.3))
-                        .monospacedDigit()
-                        .fixedSize(horizontal: true, vertical: false)
-                        .contentTransition(.numericText())
+                if let resetsAt = window.resetsAt {
+                    TimelineView(.periodic(from: .now, by: 60)) { context in
+                        Text(compactDuration(from: context.date, until: resetsAt, language: language))
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.3))
+                            .monospacedDigit()
+                            .fixedSize(horizontal: true, vertical: false)
+                            .contentTransition(.numericText())
+                    }
                 }
             }
 
@@ -644,14 +663,10 @@ private struct UsageWindowRow: View {
         }
     }
 
-    private var resetText: String {
-        guard let date = window.resetsAt else { return "" }
-        return compactDuration(until: date, language: language)
-    }
 }
 
-private func compactDuration(until date: Date, language: AppLanguage) -> String {
-    let seconds = max(0, Int(date.timeIntervalSinceNow))
+private func compactDuration(from now: Date, until date: Date, language: AppLanguage) -> String {
+    let seconds = max(0, Int(date.timeIntervalSince(now)))
     let days = seconds / 86_400
     let hours = (seconds % 86_400) / 3_600
     let minutes = (seconds % 3_600) / 60

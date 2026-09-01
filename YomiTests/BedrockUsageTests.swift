@@ -754,7 +754,7 @@ private nonisolated final class BedrockCounter: @unchecked Sendable {
     }
 }
 
-private final class BedrockTestURLProtocol: URLProtocol, @unchecked Sendable {
+private final class BedrockTestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
 
     override class func canInit(with request: URLRequest) -> Bool { true }

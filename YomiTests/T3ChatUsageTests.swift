@@ -218,7 +218,7 @@ struct T3ChatUsageTests {
     }
 }
 
-private final class T3ChatURLProtocolStub: URLProtocol, @unchecked Sendable {
+private final class T3ChatURLProtocolStub: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> (Int, [String: String], String))?
 
     override class func canInit(with request: URLRequest) -> Bool { true }

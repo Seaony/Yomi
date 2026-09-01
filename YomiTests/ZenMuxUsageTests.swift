@@ -88,7 +88,7 @@ struct ZenMuxUsageTests {
         }
     }
 
-    private static let subscription = #"{"success":true,"data":{"plan":{"tier":"ultra","expires_at":"2026-04-12T08:26:56.000Z"},"account_status":"healthy","quota_5_hour":{"usage_percentage":0.0715,"resets_at":"2026-03-24T08:35:09.000Z","max_flows":800,"used_flows":57.2,"remaining_flows":742.8},"quota_7_day":{"usage_percentage":0.0673,"resets_at":"2026-03-26T02:15:05.000Z","max_flows":6182,"used_flows":416.11,"remaining_flows":5765.89}}}"#
+    private nonisolated static let subscription = #"{"success":true,"data":{"plan":{"tier":"ultra","expires_at":"2026-04-12T08:26:56.000Z"},"account_status":"healthy","quota_5_hour":{"usage_percentage":0.0715,"resets_at":"2026-03-24T08:35:09.000Z","max_flows":800,"used_flows":57.2,"remaining_flows":742.8},"quota_7_day":{"usage_percentage":0.0673,"resets_at":"2026-03-26T02:15:05.000Z","max_flows":6182,"used_flows":416.11,"remaining_flows":5765.89}}}"#
 
     private static func session() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
@@ -97,7 +97,7 @@ struct ZenMuxUsageTests {
     }
 }
 
-private final class ZenMuxTestURLProtocol: URLProtocol, @unchecked Sendable {
+private final class ZenMuxTestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }

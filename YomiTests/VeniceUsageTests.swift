@@ -118,7 +118,7 @@ struct VeniceUsageTests {
     }
 }
 
-private final class VeniceTestURLProtocol: URLProtocol, @unchecked Sendable {
+private final class VeniceTestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }

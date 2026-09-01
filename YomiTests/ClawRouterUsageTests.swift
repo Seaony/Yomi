@@ -108,7 +108,7 @@ struct ClawRouterUsageTests {
         return URLSession(configuration: configuration)
     }
 
-    private static let budgeted = #"""
+    private nonisolated static let budgeted = #"""
     {
       "budget":{"configured":true,"ledger":"durable_object","windowKey":"openclaw/policy/2026-07","limitMicros":25000000,"spentMicros":6000,"remainingMicros":24994000},
       "usage":{"summary":{"requestCount":6,"successCount":5,"errorCount":1,"inputTokens":50000,"outputTokens":4191,"totalTokens":54191,"actualCostMicros":6000},
@@ -131,7 +131,7 @@ struct ClawRouterUsageTests {
     """#
 }
 
-private final class ClawRouterTestURLProtocol: URLProtocol, @unchecked Sendable {
+private final class ClawRouterTestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }

@@ -371,7 +371,7 @@ struct WarpUsageTests {
     }
 }
 
-private final class WarpRequestRecorder: @unchecked Sendable {
+private nonisolated final class WarpRequestRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [URLRequest] = []
 
@@ -388,7 +388,7 @@ private final class WarpRequestRecorder: @unchecked Sendable {
     }
 }
 
-private final class WarpTestURLProtocol: URLProtocol, @unchecked Sendable {
+private nonisolated final class WarpTestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (HTTPURLResponse, Data))?
 
     override class func canInit(with _: URLRequest) -> Bool { true }
