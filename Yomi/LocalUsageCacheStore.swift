@@ -17,7 +17,10 @@ nonisolated final class LocalUsageCacheStore {
         let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
             .appending(path: "Yomi/local-usage", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let url = root.appending(path: "usage-v1.sqlite")
+        for stale in ["usage-v1.sqlite", "usage-v1.sqlite-wal", "usage-v1.sqlite-shm"] {
+            try? FileManager.default.removeItem(at: root.appending(path: stale))
+        }
+        let url = root.appending(path: "usage-v2.sqlite")
 
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX

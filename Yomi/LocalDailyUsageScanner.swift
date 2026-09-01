@@ -39,6 +39,7 @@ actor LocalDailyUsageScanner {
         let model: String?
         let tokens: Tokens
         let eventKey: CodexEventKey?
+        let turnID: String?
     }
 
     private struct JSONLResumeState: Codable {
@@ -89,6 +90,8 @@ actor LocalDailyUsageScanner {
             let id: String?
             let sessionID: String?
             let sessionId: String?
+            let turnID: String?
+            let turnId: String?
             let forkedFromID: String?
             let parentThreadID: String?
             let parentSessionID: String?
@@ -102,6 +105,8 @@ actor LocalDailyUsageScanner {
                 case id
                 case sessionID = "session_id"
                 case sessionId
+                case turnID = "turn_id"
+                case turnId
                 case forkedFromID = "forked_from_id"
                 case parentThreadID = "parent_thread_id"
                 case parentSessionID = "parent_session_id"
@@ -383,6 +388,7 @@ actor LocalDailyUsageScanner {
         var sessionID: String?
         var parentID: String?
         var currentModel: String?
+        var currentTurnID: String?
         var accumulator = CodexAccumulator()
         var samples: [CodexSample] = []
     }
@@ -401,6 +407,7 @@ actor LocalDailyUsageScanner {
     private var claudeFileStates: [String: ClaudeFileState] = [:]
     private var loadedProviders: Set<String> = []
     private let cacheStore = LocalUsageCacheStore()
+    private let priorityTurnStore = CodexPriorityTurnStore()
     private let cacheEncoder = JSONEncoder()
     private let cacheDecoder = JSONDecoder()
     private let fractionalDateFormatter: ISO8601DateFormatter = {
@@ -455,8 +462,22 @@ actor LocalDailyUsageScanner {
         )
         let currentPaths = Set(files.map { $0.url.path })
         let deletedPaths = Set(codexFileStates.keys).subtracting(currentPaths)
-        codexFileStates = codexFileStates.filter { currentPaths.contains($0.key) }
         var changedPaths: Set<String> = []
+        for file in files where codexFileStates[file.url.path] == nil {
+            guard let renamedPath = deletedPaths.first(where: { path in
+                guard let state = codexFileStates[path] else { return false }
+                return state.fileID == file.fileID
+                    && state.size <= file.size
+                    && !state.resumeFingerprint.isEmpty
+                    && Self.resumeFingerprint(
+                        for: file.url,
+                        endingAt: state.resumeState.offset
+                    ) == state.resumeFingerprint
+            }), let state = codexFileStates[renamedPath] else { continue }
+            codexFileStates[file.url.path] = state
+            changedPaths.insert(file.url.path)
+        }
+        codexFileStates = codexFileStates.filter { currentPaths.contains($0.key) }
 
         for file in files {
             let path = file.url.path
@@ -492,6 +513,7 @@ actor LocalDailyUsageScanner {
                 matchingAny: [
                     #""type":"session_meta""#,
                     #""type":"turn_context""#,
+                    #""type":"task_started""#,
                     #""type":"token_count""#,
                 ],
                 as: CodexLogLine.self
@@ -506,6 +528,11 @@ actor LocalDailyUsageScanner {
                 }
                 if line.type == "turn_context", let payload = line.payload {
                     state.currentModel = payload.model ?? payload.modelName
+                    return
+                }
+                if line.type == "event_msg", let payload = line.payload,
+                   payload.type == "task_started" {
+                    state.currentTurnID = payload.turnID ?? payload.turnId ?? payload.id
                     return
                 }
                 guard line.type == "event_msg",
@@ -535,7 +562,8 @@ actor LocalDailyUsageScanner {
                     tokens: delta,
                     eventKey: cumulative == nil && last == nil
                         ? nil
-                        : CodexEventKey(total: cumulative, last: last)
+                        : CodexEventKey(total: cumulative, last: last),
+                    turnID: payload.turnID ?? payload.turnId ?? state.currentTurnID
                 ))
             }
             state.resumeState = readResult.resumeState
@@ -552,6 +580,11 @@ actor LocalDailyUsageScanner {
         }
         persistCodexStates(changedPaths: changedPaths, deletedPaths: deletedPaths)
 
+        let priorityTurns = priorityTurnStore.turnsByID(
+            databaseURL: Self.codexHomeDirectory(homeDirectory: homeDirectory)
+                .appending(path: "logs_2.sqlite"),
+            since: periods.last30DaysStart
+        )
         let sessions = Self.canonicalCodexSessions(codexFileStates)
         let droppedPrefixes = Self.replayedCodexPrefixes(sessions)
         var accumulated = periods
@@ -559,7 +592,9 @@ actor LocalDailyUsageScanner {
         for (path, state) in sessions {
             let droppedCount = droppedPrefixes[path] ?? 0
             for sample in state.samples.dropFirst(droppedCount) {
-                let rates = sample.model.flatMap { model -> ModelTokenRates? in
+                let priorityTurn = sample.turnID.flatMap { priorityTurns[$0] }
+                let pricedModel = Self.codexPricedModel(sample: sample, priorityTurn: priorityTurn)
+                let rates = pricedModel.flatMap { model -> ModelTokenRates? in
                     let era: String
                     if sample.timestamp < Self.codexGPT56PricingCutoff {
                         era = "pre-family-reduction"
@@ -584,7 +619,14 @@ actor LocalDailyUsageScanner {
                     rateCache[key] = .priced(rates)
                     return rates
                 }
-                let valueUSD = rates.map { Self.codexCost(tokens: sample.tokens, rates: $0) }
+                let valueUSD = rates.map { rates -> Double in
+                    let base = Self.codexCost(tokens: sample.tokens, rates: rates)
+                    guard priorityTurn != nil,
+                          sample.tokens.input <= Self.codexFastInputTokenLimit,
+                          let multiplier = pricedModel.flatMap(Self.codexFastMultiplier)
+                    else { return base }
+                    return base * multiplier
+                }
                 accumulated.add(
                     timestamp: sample.timestamp,
                     tokens: sample.tokens.codexTotal,
@@ -845,14 +887,17 @@ actor LocalDailyUsageScanner {
         return filesByPath.values.sorted { $0.url.path < $1.url.path }
     }
 
-    private static func codexSessionRoots(homeDirectory: URL) -> [URL] {
+    private static func codexHomeDirectory(homeDirectory: URL) -> URL {
         let environment = ProcessInfo.processInfo.environment
         let configured = environment["CODEX_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let codexHome = if let configured, !configured.isEmpty {
-            URL(fileURLWithPath: configured, isDirectory: true)
-        } else {
-            homeDirectory.appending(path: ".codex", directoryHint: .isDirectory)
+        if let configured, !configured.isEmpty {
+            return URL(fileURLWithPath: configured, isDirectory: true)
         }
+        return homeDirectory.appending(path: ".codex", directoryHint: .isDirectory)
+    }
+
+    private static func codexSessionRoots(homeDirectory: URL) -> [URL] {
+        let codexHome = codexHomeDirectory(homeDirectory: homeDirectory)
         return [
             codexHome.appending(path: "sessions", directoryHint: .isDirectory),
             codexHome.appending(path: "archived_sessions", directoryHint: .isDirectory),
@@ -1317,6 +1362,27 @@ actor LocalDailyUsageScanner {
         if previousTotal <= 0 || currentTotal <= 0 || lastTotal <= 0 { return false }
         return currentTotal * 100 >= previousTotal * 98
             || currentTotal + lastTotal * 2 >= previousTotal
+    }
+
+    private static let codexFastInputTokenLimit = 272_000
+
+    private static func codexPricedModel(
+        sample: CodexSample,
+        priorityTurn: CodexPriorityTurn?
+    ) -> String? {
+        guard let priorityTurn,
+              let model = priorityTurn.model,
+              codexFastMultiplier(for: model) != nil
+        else { return sample.model }
+        return model
+    }
+
+    private static func codexFastMultiplier(for model: String) -> Double? {
+        switch normalizedCodexModel(model.lowercased()) {
+        case "gpt-5.4", "gpt-5.4-mini", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna": 2
+        case "gpt-5.5": 2.5
+        default: nil
+        }
     }
 
     private static func codexCost(tokens: Tokens, rates: ModelTokenRates) -> Double {
