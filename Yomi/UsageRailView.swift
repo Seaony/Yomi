@@ -154,6 +154,7 @@ struct UsageRailView: View {
             reportContentHeight(providerRows: providerRowHeights)
         }
         .onPreferenceChange(ProviderAnchorYKey.self) { providerAnchorY = $0 }
+        .fontDesign(.rounded)
         .environment(\.appLanguage, appPreferences.language)
         .environment(\.locale, appPreferences.language.locale)
         .preferredColorScheme(appPreferences.appearance.colorScheme)

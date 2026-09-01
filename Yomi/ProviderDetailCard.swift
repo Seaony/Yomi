@@ -97,6 +97,7 @@ struct ProviderDetailCard: View {
         }
         .padding(14)
         .frame(width: 300)
+        .fontDesign(.rounded)
         .foregroundStyle(AppTheme.primaryText(for: colorScheme))
     }
 
