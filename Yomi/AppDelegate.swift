@@ -146,7 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.32
+            context.duration = animationDuration(0.32)
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 1
         }
@@ -217,7 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         installDetailClickMonitor()
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
+            context.duration = animationDuration(0.2)
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             detailPanel.animator().alphaValue = 1
             detailPanel.animator().setFrameOrigin(finalOrigin)
@@ -236,17 +236,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 + ProviderDetailLayout.transitionOffset * transitionDirection,
             y: detailPanel.frame.origin.y
         )
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.16
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = animationDuration(0.16)
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             detailPanel.animator().alphaValue = 0
             detailPanel.animator().setFrameOrigin(targetOrigin)
-        }
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(0.16))
-            self?.panel?.removeChildWindow(detailPanel)
-            detailPanel.orderOut(nil)
-        }
+        }, completionHandler: { [self] in
+            Task { @MainActor in
+                panel?.removeChildWindow(detailPanel)
+                detailPanel.orderOut(nil)
+            }
+        })
     }
 
     private func installDetailClickMonitor() {
@@ -275,7 +275,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         var frame = panel.frame
         frame.size.height = newHeight
         frame = pinnedFrame(frame)
-        panel.setFrame(frame, display: true, animate: animated)
+        panel.setFrame(
+            frame,
+            display: true,
+            animate: animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        )
     }
 
     private func constrainedPanelOrigin(_ origin: NSPoint, size: NSSize) -> NSPoint {
@@ -366,6 +370,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         case .right:
             visible.maxX - panelWidth + UsageRailLayout.screenEdgeOverlap
         }
+    }
+
+    private func animationDuration(_ duration: TimeInterval) -> TimeInterval {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : duration
     }
 
 }

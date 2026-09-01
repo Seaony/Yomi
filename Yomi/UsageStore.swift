@@ -55,12 +55,13 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    func refresh() async {
+    func refresh(providerID: ProviderID? = nil) async {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
 
-        let jobs = enabledProviders.map { descriptor in
+        let providers = enabledProviders.filter { providerID == nil || $0.id == providerID }
+        let jobs = providers.map { descriptor in
             let configuration = preferences.configuration(for: descriptor.id)
             let secret = preferences.secret(for: descriptor.id)
             return (descriptor, configuration, secret)

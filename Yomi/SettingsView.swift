@@ -136,6 +136,7 @@ private struct SettingsToggleRow: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(SettingsPalette.tertiary)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .toggleStyle(.switch)
         .tint(SettingsPalette.blue)
@@ -183,7 +184,7 @@ struct SettingsView: View {
             Group {
                 switch selection {
                 case .general:
-                    GeneralSettingsView(store: store)
+                    GeneralSettingsView()
                 case .providers:
                     ProviderSettingsView(
                         store: store,
@@ -242,38 +243,8 @@ struct SettingsView: View {
             }
 
             Spacer()
-
-            HStack(spacing: 10) {
-                Image(nsImage: NSApp.applicationIconImage)
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: 32, height: 32)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Yomi \(appVersion)")
-                        .font(.system(size: 11.5, weight: .medium))
-                    Text(copy.text(
-                        "已启用 \(store.enabledProviders.count) 个 Provider",
-                        "\(store.enabledProviders.count) providers enabled"
-                    ))
-                        .font(.system(size: 11))
-                        .foregroundStyle(SettingsPalette.tertiary)
-                }
-            }
-            .padding(13)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(SettingsPalette.card)
-            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .strokeBorder(SettingsPalette.line, lineWidth: 1)
-            }
         }
         .frame(width: 184)
-    }
-
-    private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
     }
 
     private func title(for section: Section) -> String {
@@ -294,7 +265,6 @@ struct SettingsView: View {
 }
 
 private struct GeneralSettingsView: View {
-    @ObservedObject var store: UsageStore
     @ObservedObject private var appPreferences = AppPreferences.shared
     @AppStorage("refresh-interval") private var refreshInterval = 300.0
     @AppStorage("show-provider-names") private var showProviderNames = true
@@ -422,40 +392,6 @@ private struct GeneralSettingsView: View {
                     }
                 }
 
-                SettingsCard(copy.text("本机数据", "Local data")) {
-                    HStack(spacing: 10) {
-                        SettingsMetric(
-                            title: copy.text("Provider 总数", "Providers"),
-                            value: "\(ProviderCatalog.all.count)"
-                        )
-                        SettingsMetric(
-                            title: copy.text("已启用", "Enabled"),
-                            value: "\(store.enabledProviders.count)"
-                        )
-                        Spacer(minLength: 10)
-                        Button {
-                            Task { await store.refresh() }
-                        } label: {
-                            Label(
-                                copy.text("立即刷新", "Refresh now"),
-                                systemImage: "arrow.clockwise"
-                            )
-                            .font(.system(size: 12, weight: .semibold))
-                            .padding(.horizontal, 13)
-                            .padding(.vertical, 8)
-                            .background(SettingsPalette.control)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        }
-                        .buttonStyle(SettingsPressButtonStyle())
-                        .disabled(store.isRefreshing)
-                    }
-                    Text(copy.text(
-                        "认证信息保存在系统钥匙串；用量缓存仅保存在本机。",
-                        "Credentials are stored in the system Keychain; usage cache stays on this Mac."
-                    ))
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(SettingsPalette.tertiary)
-                }
             }
             .padding(.bottom, 4)
         }
@@ -479,27 +415,6 @@ private struct GeneralSettingsView: View {
             launchAtLogin = SMAppService.mainApp.status == .enabled
             loginError = error.localizedDescription
         }
-    }
-}
-
-private struct SettingsMetric: View {
-    let title: String
-    let value: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(SettingsPalette.tertiary)
-            Text(value)
-                .font(.system(size: 19, weight: .bold, design: .rounded))
-                .monospacedDigit()
-        }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 9)
-        .frame(minWidth: 94, alignment: .leading)
-        .background(SettingsPalette.inset)
-        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
     }
 }
 
@@ -793,7 +708,7 @@ private struct ProviderConfigurationView: View {
                         Spacer()
                         Button(copy.text("刷新此 Provider", "Refresh provider")) {
                             save()
-                            Task { await store.refresh() }
+                            Task { await store.refresh(providerID: descriptor.id) }
                         }
                         .buttonStyle(SettingsPressButtonStyle())
                         .font(.system(size: 11.5, weight: .semibold))

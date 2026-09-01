@@ -194,7 +194,7 @@ struct ProviderDetailPanelView: View {
             usage: store.usage(for: descriptor.id),
             isRefreshing: store.isRefreshing,
             refresh: {
-                Task { await store.refresh() }
+                Task { await store.refresh(providerID: descriptor.id) }
             }
         )
         .padding(

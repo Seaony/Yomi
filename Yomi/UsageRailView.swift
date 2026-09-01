@@ -49,6 +49,7 @@ struct UsageRailView: View {
     @State private var providerRowHeights: [ProviderID: CGFloat] = [:]
     @AppStorage(UsageRailSide.storageKey) private var railSideValue = UsageRailSide.right.rawValue
     @AppStorage("show-provider-names") private var showProviderNames = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
     private var railSide: UsageRailSide {
@@ -135,11 +136,15 @@ struct UsageRailView: View {
         )
         .opacity(appeared ? 1 : 0)
         .onAppear {
-            withAnimation(.spring(response: 0.48, dampingFraction: 0.82)) { appeared = true }
+            withAnimation(reduceMotion ? nil : .spring(response: 0.48, dampingFraction: 0.82)) {
+                appeared = true
+            }
             reportContentHeight(providerRows: providerRowHeights)
         }
         .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.18)) { isHovering = hovering }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                isHovering = hovering
+            }
         }
         .onPreferenceChange(ProviderRowHeightKey.self) { heights in
             providerRowHeights = heights
@@ -178,6 +183,7 @@ private struct SettingsHoverControl: View {
     let action: () -> Void
 
     @State private var isControlHovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.appLanguage) private var language
 
@@ -228,14 +234,17 @@ private struct SettingsHoverControl: View {
         .onHover { hovering in
             if hovering { NSCursor.pointingHand.set() }
             else { NSCursor.arrow.set() }
-            withAnimation(.spring(response: 0.22, dampingFraction: 0.72)) {
+            withAnimation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.72)) {
                 isControlHovering = hovering
             }
         }
         .onDisappear {
             if isControlHovering { NSCursor.arrow.set() }
         }
-        .animation(.spring(response: 0.34, dampingFraction: 0.78), value: isHovering)
+        .animation(
+            reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.78),
+            value: isHovering
+        )
     }
 }
 
@@ -492,6 +501,7 @@ private struct ProviderRailItem: View {
 
     @State private var animatedFraction = 0.0
     @State private var hovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
     private var tint: Color {
@@ -578,7 +588,9 @@ private struct ProviderRailItem: View {
         .onHover { value in
             if value { NSCursor.pointingHand.set() }
             else { NSCursor.arrow.set() }
-            withAnimation(.spring(response: 0.25, dampingFraction: 0.78)) { hovered = value }
+            withAnimation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.78)) {
+                hovered = value
+            }
         }
         .onDisappear {
             if hovered { NSCursor.arrow.set() }
@@ -588,7 +600,10 @@ private struct ProviderRailItem: View {
     }
 
     private func animate(to value: Double) {
-        withAnimation(.spring(response: 0.72, dampingFraction: 0.84).delay(animationDelay)) {
+        let animation = reduceMotion
+            ? nil
+            : Animation.spring(response: 0.72, dampingFraction: 0.84).delay(animationDelay)
+        withAnimation(animation) {
             animatedFraction = min(max(value, 0), 1)
         }
     }
