@@ -739,7 +739,7 @@ private struct ProviderRailItem: View {
                     .font(
                         .system(
                             size: UsageRailLayout.scaled(19),
-                            weight: .regular,
+                            weight: .bold,
                             design: .rounded
                         )
                     )
@@ -747,6 +747,7 @@ private struct ProviderRailItem: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
                     .foregroundStyle(AppTheme.primaryText(for: colorScheme))
+                    .padding(.top, UsageRailLayout.scaled(4))
             }
 
             if showName {
