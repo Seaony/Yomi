@@ -666,7 +666,7 @@ private func compactDuration(until date: Date, language: AppLanguage) -> String 
     return "\(minutes)m"
 }
 
-private func compactTokenCount(_ value: Int64, language: AppLanguage) -> String {
+func compactTokenCount(_ value: Int64, language: AppLanguage) -> String {
     if language == .simplifiedChinese {
         if value >= 100_000_000 {
             return String(format: "%.1f亿", Double(value) / 100_000_000)

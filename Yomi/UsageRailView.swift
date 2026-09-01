@@ -628,6 +628,7 @@ private struct ProviderRailItem: View {
     @State private var hovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.appLanguage) private var language
 
     private var tint: Color {
         ProviderBrandColors.color(for: descriptor.id)
@@ -638,8 +639,12 @@ private struct ProviderRailItem: View {
         return 1 - window.clampedFraction
     }
 
-    private var percentage: String {
-        guard headlineWindow != nil else { return "—" }
+    private var railValue: String? {
+        if descriptor.id == ProviderCatalog.overview.id {
+            guard let tokens = usage.today?.tokens else { return "—" }
+            return compactTokenCount(tokens, language: language)
+        }
+        guard headlineWindow != nil else { return nil }
         return "\(Int((remainingFraction * 100).rounded()))%"
     }
 
@@ -728,8 +733,8 @@ private struct ProviderRailItem: View {
                 radius: UsageRailLayout.scaled(12)
             )
 
-            if headlineWindow != nil {
-                Text(percentage)
+            if let railValue {
+                Text(railValue)
                     .font(
                         .system(
                             size: UsageRailLayout.scaled(19),
@@ -738,6 +743,8 @@ private struct ProviderRailItem: View {
                         )
                     )
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
                     .foregroundStyle(AppTheme.primaryText(for: colorScheme))
             }
 
