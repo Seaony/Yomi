@@ -299,6 +299,9 @@ struct VertexAIUsageTests {
         #expect(claude?.today?.tokens == 220)
         #expect(vertex?.today?.tokens == 15)
         #expect(fallback?.today?.tokens == 235)
+        #expect(claude?.last30DaysDaily.map(\.usage.tokens) == [220])
+        #expect(vertex?.last30DaysDaily.map(\.usage.tokens) == [15])
+        #expect(fallback?.last30DaysDaily.map(\.usage.tokens) == [235])
     }
 
     @Test

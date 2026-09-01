@@ -61,6 +61,10 @@ struct UsageRailView: View {
         appPreferences.railBackgroundColor ?? AppTheme.railBackground(for: colorScheme)
     }
 
+    private var railProviders: [ProviderDescriptor] {
+        [ProviderCatalog.overview] + store.enabledProviders
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Color.clear
@@ -68,13 +72,21 @@ struct UsageRailView: View {
 
             ScrollView(.vertical) {
                 VStack(spacing: UsageRailLayout.providerSpacing) {
-                    ForEach(Array(store.enabledProviders.enumerated()), id: \.element.id) { index, descriptor in
+                    ForEach(Array(railProviders.enumerated()), id: \.element.id) { index, descriptor in
                         Button {
-                            Task { await store.refresh(providerID: descriptor.id) }
+                            Task {
+                                await store.refresh(
+                                    providerID: descriptor.id == ProviderCatalog.overview.id
+                                        ? nil
+                                        : descriptor.id
+                                )
+                            }
                         } label: {
                             ProviderRailItem(
                                 descriptor: descriptor,
-                                usage: store.usage(for: descriptor.id),
+                                usage: descriptor.id == ProviderCatalog.overview.id
+                                    ? store.overviewUsage
+                                    : store.usage(for: descriptor.id),
                                 animationDelay: Double(index) * 0.045,
                                 showName: showProviderNames,
                                 hoverChanged: { hovering in
@@ -174,7 +186,7 @@ struct UsageRailView: View {
             providerRowHeights = heights
             reportContentHeight(providerRows: heights)
         }
-        .onChange(of: store.enabledProviders.map(\.id)) { _, _ in
+        .onChange(of: railProviders.map(\.id)) { _, _ in
             reportContentHeight(providerRows: providerRowHeights)
         }
         .onPreferenceChange(ProviderAnchorYKey.self) { providerAnchorY = $0 }
@@ -185,7 +197,7 @@ struct UsageRailView: View {
     }
 
     private func reportContentHeight(providerRows: [ProviderID: CGFloat]) {
-        let providers = store.enabledProviders
+        let providers = railProviders
         guard providers.allSatisfy({ providerRows[$0.id] != nil }) else { return }
         let rowsHeight = providers.reduce(CGFloat.zero) { result, provider in
             result + (providerRows[provider.id] ?? 0)
@@ -589,6 +601,7 @@ enum ProviderBrandColors {
         "zed": 0x084EFF,
         "zenmux": 0x6C5CE7,
         "zoommate": 0x0B5CFF,
+        "yomi-overview": 0x20A7F5,
     ]
 
     static func color(for id: ProviderID) -> Color {
@@ -609,6 +622,9 @@ private struct ProviderRailItem: View {
     let hoverChanged: (Bool) -> Void
 
     @State private var animatedFraction = 0.0
+    @State private var refreshProgress = 0.0
+    @State private var showsRefreshProgress = false
+    @State private var refreshCompletionTask: Task<Void, Never>?
     @State private var hovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
@@ -664,16 +680,31 @@ private struct ProviderRailItem: View {
                             lineCap: .round
                         )
                     )
-                Circle()
-                    .trim(from: 0, to: animatedFraction)
-                    .stroke(
-                        tint,
-                        style: StrokeStyle(
-                            lineWidth: UsageRailLayout.scaled(4),
-                            lineCap: .round
+                if showsRefreshProgress {
+                    Circle()
+                        .trim(from: 0, to: refreshProgress)
+                        .stroke(
+                            tint,
+                            style: StrokeStyle(
+                                lineWidth: UsageRailLayout.scaled(4),
+                                lineCap: .round
+                            )
                         )
-                    )
-                    .rotationEffect(.degrees(-90))
+                        .rotationEffect(.degrees(-90))
+                        .transition(.opacity)
+                } else {
+                    Circle()
+                        .trim(from: 0, to: animatedFraction)
+                        .stroke(
+                            tint,
+                            style: StrokeStyle(
+                                lineWidth: UsageRailLayout.scaled(4),
+                                lineCap: .round
+                            )
+                        )
+                        .rotationEffect(.degrees(-90))
+                        .transition(.opacity)
+                }
                 Circle()
                     .stroke(
                         AppTheme.primaryText(for: colorScheme).opacity(0.08),
@@ -727,20 +758,66 @@ private struct ProviderRailItem: View {
             }
         }
         .onDisappear {
+            refreshCompletionTask?.cancel()
             if hovered {
                 hoverChanged(false)
             }
         }
-        .onAppear { animate(to: remainingFraction) }
-        .onChange(of: remainingFraction) { _, value in animate(to: value) }
+        .onAppear {
+            animate(to: remainingFraction, delay: animationDelay)
+            updateRefreshProgress(for: usage.state)
+        }
+        .onChange(of: remainingFraction) { _, value in
+            animate(to: value, delay: 0)
+        }
+        .onChange(of: usage.state) { _, state in
+            updateRefreshProgress(for: state)
+        }
+        .animation(
+            reduceMotion ? nil : .easeOut(duration: 0.12),
+            value: usage.state
+        )
     }
 
-    private func animate(to value: Double) {
+    private func animate(to value: Double, delay: Double) {
         let animation = reduceMotion
             ? nil
-            : Animation.spring(response: 0.72, dampingFraction: 0.84).delay(animationDelay)
+            : Animation.spring(response: 0.72, dampingFraction: 0.84).delay(delay)
         withAnimation(animation) {
             animatedFraction = min(max(value, 0), 1)
+        }
+    }
+
+    private func updateRefreshProgress(for state: ProviderUsage.State) {
+        refreshCompletionTask?.cancel()
+        refreshCompletionTask = nil
+
+        if state == .loading {
+            var transaction = Transaction()
+            transaction.animation = nil
+            withTransaction(transaction) {
+                refreshProgress = 0
+                showsRefreshProgress = true
+            }
+
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.7)) {
+                refreshProgress = 0.9
+            }
+            return
+        }
+
+        guard showsRefreshProgress else { return }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) {
+            refreshProgress = 1
+        }
+
+        refreshCompletionTask = Task {
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled else { return }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.1)) {
+                showsRefreshProgress = false
+            }
+            refreshCompletionTask = nil
         }
     }
 }

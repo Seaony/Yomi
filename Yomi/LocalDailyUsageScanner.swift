@@ -233,6 +233,7 @@ actor LocalDailyUsageScanner {
         var today = PeriodAccumulator()
         var last30Days = PeriodAccumulator()
         var currentWeek = PeriodAccumulator()
+        var last30DaysDaily: [Date: PeriodAccumulator] = [:]
 
         mutating func add(timestamp: Date, tokens: Int, valueUSD: Double?) {
             guard timestamp < end else { return }
@@ -241,6 +242,11 @@ actor LocalDailyUsageScanner {
             }
             if timestamp >= last30DaysStart {
                 last30Days.add(tokens: tokens, valueUSD: valueUSD)
+                let day = Calendar.current.startOfDay(for: timestamp)
+                last30DaysDaily[day, default: PeriodAccumulator()].add(
+                    tokens: tokens,
+                    valueUSD: valueUSD
+                )
             }
             if timestamp >= currentWeekStart {
                 currentWeek.add(tokens: tokens, valueUSD: valueUSD)
@@ -257,7 +263,10 @@ actor LocalDailyUsageScanner {
             return LocalTokenUsageSummary(
                 today: todayUsage ?? DailyTokenUsage(tokens: 0, valueUSD: 0),
                 last30Days: last30DaysUsage,
-                currentWeek: currentWeekUsage
+                currentWeek: currentWeekUsage,
+                last30DaysDaily: last30DaysDaily.compactMap { date, accumulator in
+                    accumulator.usage.map { DailyTokenUsagePoint(date: date, usage: $0) }
+                }.sorted { $0.date < $1.date }
             )
         }
     }

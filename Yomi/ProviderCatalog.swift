@@ -4,6 +4,18 @@ enum ProviderCatalog {
     private static let letterPair = String(UnicodeScalar(65)!) + String(UnicodeScalar(73)!)
     private static let lowerLetterPair = letterPair.lowercased()
 
+    static let overview = item(
+        "yomi-overview",
+        "Yomi",
+        "Today",
+        "30 days",
+        .tokens,
+        [],
+        [],
+        "chart.bar.fill",
+        0.58
+    )
+
     static let all: [ProviderDescriptor] = [
         item("codex", "Codex", "Session", "Weekly", .quota, [.cookie, .command, .account, .token], [], "terminal", 0.03, true),
         item("open" + lowerLetterPair, "Open" + letterPair, "Spend", "Requests", .spend, [.token], ["OPEN" + letterPair + "_ADMIN_KEY", "OPEN" + letterPair + "_API_KEY"], "network", 0.42),

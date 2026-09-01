@@ -1066,6 +1066,7 @@ actor UsageCollector {
         )
         enriched.today = localUsage?.today
         enriched.last30Days = localUsage?.last30Days
+        enriched.last30DaysDaily = localUsage?.last30DaysDaily ?? []
         enriched.weeklyEstimate = weeklyEstimate(
             localUsage: localUsage?.currentWeek,
             usedFraction: weeklyReset == nil ? nil : weeklyWindow?.clampedFraction

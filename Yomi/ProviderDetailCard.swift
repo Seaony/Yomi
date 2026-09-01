@@ -66,6 +66,7 @@ struct ProviderDetailCard: View {
     @State private var isRefreshHovering = false
 
     private var copy: AppCopy { AppCopy(language: language) }
+    private var isOverview: Bool { descriptor.id == ProviderCatalog.overview.id }
 
     private var tint: Color {
         ProviderBrandColors.color(for: descriptor.id)
@@ -79,6 +80,17 @@ struct ProviderDetailCard: View {
     private var headlineCaption: String {
         let value = usage.today?.valueUSD.map { String(format: "$%.2f", $0) } ?? "$—"
         return copy.text("今日 Token", "Tokens today") + " · \(value)"
+    }
+
+    private var overviewCaption: String {
+        let cost = usage.today?.valueUSD.map { "≈ " + compactDollarValue($0) } ?? "$—"
+        let tokens = usage.last30Days.map {
+            compactTokenCount($0.tokens, language: language)
+        } ?? "—"
+        return copy.text(
+            "\(cost) 今日 · \(tokens) Token · 30 天",
+            "\(cost) Today · \(tokens) Tokens · 30d"
+        )
     }
 
     private var last30DaysValue: String {
@@ -148,26 +160,11 @@ struct ProviderDetailCard: View {
         VStack(alignment: .leading, spacing: 12) {
             header
 
-            if displayedWindows.isEmpty, usage.providerCost != nil || !usage.details.isEmpty {
-                providerSummaryContent
-            } else if displayedWindows.isEmpty {
-                emptyState
-            } else {
-                headline
-
-                VStack(spacing: 11) {
-                    ForEach(displayedWindows) { window in
-                        UsageWindowRow(window: window, tint: tint)
-                            .transition(sectionTransition)
-                    }
-                }
-
-                if usage.providerCost != nil || !usage.details.isEmpty {
-                    providerSummaryContent
-                }
-
-                footer
+            if isOverview || !displayedWindows.isEmpty {
+                usageHeadline
             }
+
+            detailContent
         }
         .padding(14)
         .frame(width: 300)
@@ -175,6 +172,76 @@ struct ProviderDetailCard: View {
         .foregroundStyle(AppTheme.primaryText(for: colorScheme))
         .animation(detailAnimation, value: descriptor.id)
         .animation(detailAnimation, value: usage)
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        if isOverview {
+            overviewChart
+                .transition(sectionTransition)
+        } else if displayedWindows.isEmpty,
+                  usage.providerCost != nil || !usage.details.isEmpty {
+            providerSummaryContent
+        } else if displayedWindows.isEmpty {
+            emptyState
+        } else {
+            VStack(spacing: 11) {
+                ForEach(displayedWindows) { window in
+                    UsageWindowRow(window: window, tint: tint)
+                        .transition(sectionTransition)
+                }
+            }
+
+            if usage.providerCost != nil || !usage.details.isEmpty {
+                providerSummaryContent
+            }
+
+            footer
+        }
+    }
+
+    private var usageHeadline: some View {
+        let layout = isOverview
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 7))
+
+        return layout {
+            Text(headlineValue)
+                .font(
+                    .system(
+                        size: isOverview ? 30 : 26,
+                        weight: .bold,
+                        design: .rounded
+                    )
+                )
+                .monospacedDigit()
+                .contentTransition(.numericText(value: Double(usage.today?.tokens ?? 0)))
+
+            Text(isOverview ? overviewCaption : headlineCaption)
+                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.48))
+                .monospacedDigit()
+                .lineLimit(1)
+                .contentTransition(
+                    .numericText(
+                        value: isOverview
+                            ? Double(usage.last30Days?.tokens ?? 0)
+                            : usage.today?.valueUSD ?? 0
+                    )
+                )
+        }
+    }
+
+    @ViewBuilder
+    private var overviewChart: some View {
+        if usage.last30DaysDaily.isEmpty {
+            Text(copy.text("暂无 30 天用量", "No 30-day usage yet"))
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.38))
+                .frame(maxWidth: .infinity, minHeight: 52, alignment: .center)
+        } else {
+            DailyUsageBarChart(points: usage.last30DaysDaily, tint: tint)
+        }
     }
 
     private var header: some View {
@@ -229,7 +296,11 @@ struct ProviderDetailCard: View {
             .disabled(isRefreshing)
             .opacity(isRefreshing ? 0.45 : 1)
             .scaleEffect(isRefreshHovering ? 1.06 : 1)
-            .help(copy.text("立即刷新", "Refresh now"))
+            .help(
+                isOverview
+                    ? copy.text("立即刷新全部 Provider", "Refresh all providers")
+                    : copy.text("立即刷新", "Refresh now")
+            )
             .onHover { hovering in
                 if hovering { NSCursor.pointingHand.set() }
                 else { NSCursor.arrow.set() }
@@ -240,20 +311,6 @@ struct ProviderDetailCard: View {
             .onDisappear {
                 if isRefreshHovering { NSCursor.arrow.set() }
             }
-        }
-    }
-
-    private var headline: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 7) {
-            Text(headlineValue)
-                .font(.system(size: 26, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .contentTransition(.numericText(value: Double(usage.today?.tokens ?? 0)))
-            Text(headlineCaption)
-                .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.48))
-                .lineLimit(1)
-                .contentTransition(.numericText(value: usage.today?.valueUSD ?? 0))
         }
     }
 
@@ -345,15 +402,25 @@ struct ProviderDetailPanelView: View {
     let railSide: UsageRailSide
     let hoverChanged: (Bool) -> Void
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ProviderDetailCard(
             descriptor: presentation.descriptor,
-            usage: store.usage(for: presentation.descriptor.id),
+            usage: presentation.descriptor.id == ProviderCatalog.overview.id
+                ? store.overviewUsage
+                : store.usage(for: presentation.descriptor.id),
             transitionDirection: presentation.direction,
             isRefreshing: store.isRefreshing,
             refresh: {
-                Task { await store.refresh(providerID: presentation.descriptor.id) }
+                let providerID = presentation.descriptor.id
+                Task {
+                    await store.refresh(
+                        providerID: providerID == ProviderCatalog.overview.id
+                            ? nil
+                            : providerID
+                    )
+                }
             }
         )
         .padding(
@@ -366,10 +433,123 @@ struct ProviderDetailPanelView: View {
         }
         .padding(ProviderDetailLayout.outerPadding)
         .contentShape(Rectangle())
-        .onHover(perform: hoverChanged)
+        .background {
+            ProviderDetailHoverRegion(hoverChanged: hoverChanged)
+        }
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: 0.18),
+            value: presentation.descriptor.id
+        )
         .environment(\.appLanguage, appPreferences.language)
         .environment(\.locale, appPreferences.language.locale)
         .preferredColorScheme(appPreferences.appearance.colorScheme)
+    }
+}
+
+private struct ProviderDetailHoverRegion: NSViewRepresentable {
+    let hoverChanged: (Bool) -> Void
+
+    func makeNSView(context: Context) -> ProviderDetailHoverTrackingView {
+        let view = ProviderDetailHoverTrackingView()
+        view.hoverChanged = hoverChanged
+        return view
+    }
+
+    func updateNSView(_ nsView: ProviderDetailHoverTrackingView, context: Context) {
+        nsView.hoverChanged = hoverChanged
+    }
+}
+
+private final class ProviderDetailHoverTrackingView: NSView {
+    var hoverChanged: ((Bool) -> Void)?
+    private var trackingArea: NSTrackingArea?
+    private var isHovering = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.acceptsMouseMovedEvents = true
+        updateTrackingAreas()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        self.trackingArea = trackingArea
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        guard !isHovering else { return }
+        isHovering = true
+        hoverChanged?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        guard isHovering else { return }
+        isHovering = false
+        hoverChanged?(false)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+}
+
+private struct DailyUsageBarChart: View {
+    let points: [DailyTokenUsagePoint]
+    let tint: Color
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var appeared = false
+
+    private var maximumTokens: Double {
+        max(1, Double(points.map(\.usage.tokens).max() ?? 0))
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let spacing: CGFloat = 2.5
+            let availableWidth = proxy.size.width - spacing * CGFloat(max(points.count - 1, 0))
+            let barWidth = max(2, availableWidth / CGFloat(max(points.count, 1)))
+
+            HStack(alignment: .bottom, spacing: spacing) {
+                ForEach(Array(points.enumerated()), id: \.element.id) { index, point in
+                    let fraction = Double(point.usage.tokens) / maximumTokens
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(
+                            tint.opacity(Calendar.current.isDateInToday(point.date) ? 1 : 0.58)
+                        )
+                        .frame(
+                            width: barWidth,
+                            height: max(2, proxy.size.height * fraction)
+                        )
+                        .opacity(point.usage.tokens > 0 ? 1 : 0.2)
+                        .scaleEffect(y: appeared ? 1 : 0.05, anchor: .bottom)
+                        .animation(
+                            reduceMotion
+                                ? nil
+                                : .spring(response: 0.32, dampingFraction: 0.82)
+                                    .delay(Double(index) * 0.006),
+                            value: appeared
+                        )
+                        .animation(
+                            reduceMotion ? nil : .easeInOut(duration: 0.18),
+                            value: point.usage.tokens
+                        )
+                }
+            }
+            .frame(maxHeight: .infinity, alignment: .bottom)
+        }
+        .frame(height: 52)
+        .onAppear { appeared = true }
     }
 }
 

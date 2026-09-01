@@ -90,6 +90,13 @@ struct DailyTokenUsage: Codable, Hashable, Sendable {
     var valueUSD: Double?
 }
 
+struct DailyTokenUsagePoint: Codable, Hashable, Sendable, Identifiable {
+    var date: Date
+    var usage: DailyTokenUsage
+
+    var id: Date { date }
+}
+
 struct ProviderCostSummary: Codable, Hashable, Sendable {
     var used: Double
     var limit: Double
@@ -108,6 +115,7 @@ struct LocalTokenUsageSummary: Sendable {
     var today: DailyTokenUsage?
     var last30Days: DailyTokenUsage?
     var currentWeek: DailyTokenUsage?
+    var last30DaysDaily: [DailyTokenUsagePoint]
 }
 
 struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
@@ -126,6 +134,7 @@ struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
     var plan: String?
     var today: DailyTokenUsage? = nil
     var last30Days: DailyTokenUsage? = nil
+    var last30DaysDaily: [DailyTokenUsagePoint] = []
     var weeklyEstimate: DailyTokenUsage? = nil
     var providerCost: ProviderCostSummary? = nil
     var details: [UsageDetail] = []
@@ -144,6 +153,7 @@ struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         plan: String? = nil,
         today: DailyTokenUsage? = nil,
         last30Days: DailyTokenUsage? = nil,
+        last30DaysDaily: [DailyTokenUsagePoint] = [],
         weeklyEstimate: DailyTokenUsage? = nil,
         providerCost: ProviderCostSummary? = nil,
         details: [UsageDetail] = [],
@@ -161,6 +171,7 @@ struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         self.plan = plan
         self.today = today
         self.last30Days = last30Days
+        self.last30DaysDaily = last30DaysDaily
         self.weeklyEstimate = weeklyEstimate
         self.providerCost = providerCost
         self.details = details
@@ -177,6 +188,7 @@ struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, state, windows, additionalWindows, balance, plan, today, last30Days
+        case last30DaysDaily
         case weeklyEstimate, providerCost, details, updatedAt, message
     }
 
@@ -190,6 +202,10 @@ struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         plan = try values.decodeIfPresent(String.self, forKey: .plan)
         today = try values.decodeIfPresent(DailyTokenUsage.self, forKey: .today)
         last30Days = try values.decodeIfPresent(DailyTokenUsage.self, forKey: .last30Days)
+        last30DaysDaily = try values.decodeIfPresent(
+            [DailyTokenUsagePoint].self,
+            forKey: .last30DaysDaily
+        ) ?? []
         weeklyEstimate = try values.decodeIfPresent(DailyTokenUsage.self, forKey: .weeklyEstimate)
         providerCost = try values.decodeIfPresent(ProviderCostSummary.self, forKey: .providerCost)
         details = try values.decodeIfPresent([UsageDetail].self, forKey: .details) ?? []
@@ -210,6 +226,7 @@ struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         try values.encodeIfPresent(plan, forKey: .plan)
         try values.encodeIfPresent(today, forKey: .today)
         try values.encodeIfPresent(last30Days, forKey: .last30Days)
+        try values.encode(last30DaysDaily, forKey: .last30DaysDaily)
         try values.encodeIfPresent(weeklyEstimate, forKey: .weeklyEstimate)
         try values.encodeIfPresent(providerCost, forKey: .providerCost)
         try values.encode(details, forKey: .details)

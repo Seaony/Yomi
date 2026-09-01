@@ -43,7 +43,13 @@ struct ProviderIconView: View {
     let provider: ProviderDescriptor
 
     var body: some View {
-        if let image = ProviderIconLibrary.image(for: provider) {
+        if provider.id == ProviderCatalog.overview.id {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .accessibilityLabel(Text(provider.name))
+        } else if let image = ProviderIconLibrary.image(for: provider) {
             Image(nsImage: image)
                 .resizable()
                 .renderingMode(.template)

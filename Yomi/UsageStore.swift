@@ -79,6 +79,7 @@ final class UsageStore: ObservableObject {
                 plan: loadingUsage[job.0.id]?.plan,
                 today: loadingUsage[job.0.id]?.today,
                 last30Days: loadingUsage[job.0.id]?.last30Days,
+                last30DaysDaily: loadingUsage[job.0.id]?.last30DaysDaily ?? [],
                 weeklyEstimate: loadingUsage[job.0.id]?.weeklyEstimate,
                 providerCost: loadingUsage[job.0.id]?.providerCost,
                 details: loadingUsage[job.0.id]?.details ?? [],
@@ -171,6 +172,69 @@ final class UsageStore: ObservableObject {
             updatedAt: nil,
             message: AppLocalization.text("等待首次刷新", "Waiting for the first refresh")
         )
+    }
+
+    var overviewUsage: ProviderUsage {
+        let usages = enabledProviders.map { usage(for: $0.id) }
+        let today = Self.combinedUsage(usages.compactMap(\.today))
+        let daily = Self.overviewDailyUsage(usages: usages, today: today)
+        let last30Days = Self.combinedUsage(daily.map(\.usage))
+        let isFullRefresh = !enabledProviders.isEmpty
+            && enabledProviders.allSatisfy { usage(for: $0.id).state == .loading }
+        let hasUsage = today != nil || !daily.isEmpty
+        return ProviderUsage(
+            id: ProviderCatalog.overview.id,
+            state: isFullRefresh ? .loading : (hasUsage ? .ready : .unavailable),
+            windows: [],
+            today: today,
+            last30Days: last30Days,
+            last30DaysDaily: daily,
+            updatedAt: usages.compactMap(\.updatedAt).max(),
+            message: hasUsage
+                ? nil
+                : AppLocalization.text("等待首次用量数据", "Waiting for usage data")
+        )
+    }
+
+    private static func combinedUsage(_ usages: [DailyTokenUsage]) -> DailyTokenUsage? {
+        guard !usages.isEmpty else { return nil }
+        let tokens = usages.reduce(Int64.zero) { $0 + $1.tokens }
+        let hasUnpricedTokens = usages.contains { $0.tokens > 0 && $0.valueUSD == nil }
+        let valueUSD = hasUnpricedTokens
+            ? nil
+            : usages.reduce(0.0) { $0 + ($1.valueUSD ?? 0) }
+        return DailyTokenUsage(tokens: tokens, valueUSD: valueUSD)
+    }
+
+    private static func overviewDailyUsage(
+        usages: [ProviderUsage],
+        today: DailyTokenUsage?
+    ) -> [DailyTokenUsagePoint] {
+        let calendar = Calendar.current
+        let todayStart = calendar.startOfDay(for: Date())
+        guard let start = calendar.date(byAdding: .day, value: -29, to: todayStart) else {
+            return []
+        }
+        var valuesByDay: [Date: [DailyTokenUsage]] = [:]
+        for point in usages.flatMap(\.last30DaysDaily) {
+            let day = calendar.startOfDay(for: point.date)
+            guard day >= start, day <= todayStart else { continue }
+            valuesByDay[day, default: []].append(point.usage)
+        }
+        if let today {
+            valuesByDay[todayStart] = [today]
+        }
+        guard !valuesByDay.isEmpty else { return [] }
+        return (0..<30).compactMap { offset in
+            guard let date = calendar.date(byAdding: .day, value: offset, to: start) else {
+                return nil
+            }
+            return DailyTokenUsagePoint(
+                date: date,
+                usage: combinedUsage(valuesByDay[date] ?? [])
+                    ?? DailyTokenUsage(tokens: 0, valueUSD: 0)
+            )
+        }
     }
 
     private func restoreCache() {
