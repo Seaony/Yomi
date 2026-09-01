@@ -4,14 +4,16 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private static let panelVerticalPositionKey = "panel-vertical-position"
+    private static let providerDetailDismissDelay: Duration = .milliseconds(110)
 
     let store = UsageStore.shared
     let updates = UpdateController()
 
     private var panel: FloatingPanel?
     private var providerDetailPanel: ProviderDetailPanel?
+    private var providerDetailHostingView: NSHostingView<ProviderDetailPanelView>?
     private var selectedProviderID: ProviderID?
-    private var globalClickMonitor: Any?
+    private var providerDetailCloseTask: Task<Void, Never>?
     private var settingsWindow: NSWindow?
     private var verticalPosition: CGFloat = 0.5
     private var railSide = UsageRailSide.right
@@ -37,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        removeDetailClickMonitor()
+        providerDetailCloseTask?.cancel()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -133,8 +135,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.contentView = NSHostingView(rootView: UsageRailView(
             store: store,
             openSettings: { [weak self] providerID in self?.openSettings(providerID: providerID) },
-            toggleProviderDetail: { [weak self] descriptor, localY in
-                self?.toggleProviderDetail(descriptor, localY: localY)
+            showProviderDetail: { [weak self] descriptor, localY in
+                self?.showProviderDetail(descriptor, localY: localY)
+            },
+            hideProviderDetail: { [weak self] providerID in
+                self?.closeProviderDetail(for: providerID)
             },
             contentHeightChanged: { [weak self] height in
                 guard let self else { return }
@@ -152,13 +157,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    private func toggleProviderDetail(_ descriptor: ProviderDescriptor, localY: CGFloat) {
+    private func showProviderDetail(_ descriptor: ProviderDescriptor, localY: CGFloat) {
+        providerDetailCloseTask?.cancel()
+        providerDetailCloseTask = nil
+
         if selectedProviderID == descriptor.id, providerDetailPanel?.isVisible == true {
-            closeProviderDetail()
             return
         }
 
-        closeProviderDetail()
         guard let panel else { return }
 
         let root = ProviderDetailPanelView(
@@ -166,8 +172,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             descriptor: descriptor,
             railSide: railSide
         )
+
+        if let detailPanel = providerDetailPanel,
+           let hostingView = providerDetailHostingView,
+           detailPanel.isVisible {
+            let transitionDuration = animationDuration(0.08)
+            if transitionDuration > 0 {
+                hostingView.wantsLayer = true
+                let transition = CATransition()
+                transition.type = .fade
+                transition.duration = transitionDuration
+                transition.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                hostingView.layer?.add(transition, forKey: "provider-detail-content")
+            }
+            hostingView.rootView = root
+            hostingView.layoutSubtreeIfNeeded()
+            let finalFrame = providerDetailFrame(
+                fittingSize: hostingView.fittingSize,
+                localY: localY,
+                panel: panel
+            )
+            selectedProviderID = descriptor.id
+
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = animationDuration(0.14)
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                detailPanel.animator().setFrame(finalFrame, display: true)
+            }
+            return
+        }
+
+        closeProviderDetail()
         let hostingView = NSHostingView(rootView: root)
         let fittingSize = hostingView.fittingSize
+        let finalFrame = providerDetailFrame(
+            fittingSize: fittingSize,
+            localY: localY,
+            panel: panel
+        )
         let detailPanel = ProviderDetailPanel(
             contentRect: NSRect(origin: .zero, size: fittingSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -183,12 +225,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         detailPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         detailPanel.isReleasedWhenClosed = false
 
+        detailPanel.alphaValue = 0
+        detailPanel.setFrame(finalFrame, display: false)
+
+        self.providerDetailPanel = detailPanel
+        providerDetailHostingView = hostingView
+        selectedProviderID = descriptor.id
+        panel.addChildWindow(detailPanel, ordered: .above)
+        detailPanel.orderFrontRegardless()
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = animationDuration(0.2)
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            detailPanel.animator().alphaValue = 1
+        }
+    }
+
+    private func providerDetailFrame(
+        fittingSize: NSSize,
+        localY: CGFloat,
+        panel: FloatingPanel
+    ) -> NSRect {
         let visibleFrame = targetScreen()?.visibleFrame ?? panel.frame
         let minimumY = visibleFrame.minY + 8
         let maximumY = max(minimumY, visibleFrame.maxY - fittingSize.height - 8)
         let anchorY = panel.frame.maxY - localY
         let proposedY = anchorY - fittingSize.height / 2
-        let finalX = switch railSide {
+        let x = switch railSide {
         case .left:
             panel.frame.maxX
                 + ProviderDetailLayout.railGap
@@ -199,36 +262,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 + ProviderDetailLayout.outerPadding
                 - ProviderDetailLayout.railGap
         }
-        let transitionDirection: CGFloat = railSide == .right ? 1 : -1
-        let finalOrigin = NSPoint(
-            x: finalX,
-            y: min(max(proposedY, minimumY), maximumY)
+        return NSRect(
+            x: x,
+            y: min(max(proposedY, minimumY), maximumY),
+            width: fittingSize.width,
+            height: fittingSize.height
         )
-        detailPanel.alphaValue = 0
-        detailPanel.setFrameOrigin(NSPoint(
-            x: finalOrigin.x + ProviderDetailLayout.transitionOffset * transitionDirection,
-            y: finalOrigin.y
-        ))
-
-        self.providerDetailPanel = detailPanel
-        selectedProviderID = descriptor.id
-        panel.addChildWindow(detailPanel, ordered: .above)
-        detailPanel.orderFrontRegardless()
-        installDetailClickMonitor()
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = animationDuration(0.2)
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            detailPanel.animator().alphaValue = 1
-            detailPanel.animator().setFrameOrigin(finalOrigin)
-        }
     }
 
     private func closeProviderDetail() {
+        providerDetailCloseTask?.cancel()
+        providerDetailCloseTask = nil
         guard let detailPanel = providerDetailPanel else { return }
         providerDetailPanel = nil
+        providerDetailHostingView = nil
         selectedProviderID = nil
-        removeDetailClickMonitor()
 
         let transitionDirection: CGFloat = railSide == .right ? 1 : -1
         let targetOrigin = NSPoint(
@@ -249,18 +297,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         })
     }
 
-    private func installDetailClickMonitor() {
-        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown]
-        ) { [weak self] _ in
-            Task { @MainActor in self?.closeProviderDetail() }
-        }
-    }
-
-    private func removeDetailClickMonitor() {
-        if let globalClickMonitor {
-            NSEvent.removeMonitor(globalClickMonitor)
-            self.globalClickMonitor = nil
+    private func closeProviderDetail(for providerID: ProviderID) {
+        guard selectedProviderID == providerID else { return }
+        providerDetailCloseTask?.cancel()
+        providerDetailCloseTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.providerDetailDismissDelay)
+            guard !Task.isCancelled,
+                  let self,
+                  self.selectedProviderID == providerID
+            else { return }
+            self.providerDetailCloseTask = nil
+            self.closeProviderDetail()
         }
     }
 

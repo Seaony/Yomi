@@ -40,7 +40,8 @@ struct UsageRailView: View {
     @ObservedObject var store: UsageStore
     @ObservedObject private var appPreferences = AppPreferences.shared
     let openSettings: (ProviderID?) -> Void
-    let toggleProviderDetail: (ProviderDescriptor, CGFloat) -> Void
+    let showProviderDetail: (ProviderDescriptor, CGFloat) -> Void
+    let hideProviderDetail: (ProviderID) -> Void
     let contentHeightChanged: (CGFloat) -> Void
 
     @State private var appeared = false
@@ -69,22 +70,37 @@ struct UsageRailView: View {
                 VStack(spacing: UsageRailLayout.providerSpacing) {
                     ForEach(Array(store.enabledProviders.enumerated()), id: \.element.id) { index, descriptor in
                         Button {
-                            let rowHeight = UsageRailLayout.scaled(showProviderNames ? 101 : 84)
-                            let fallbackY = UsageRailLayout.contentInset
-                                + UsageRailLayout.providerSectionVerticalPadding
-                                + UsageRailLayout.providerRingDiameter / 2
-                                + CGFloat(index) * (rowHeight + UsageRailLayout.providerSpacing)
-                            let anchorY = providerAnchorY[descriptor.id] ?? fallbackY
-                            toggleProviderDetail(descriptor, anchorY)
+                            Task { await store.refresh(providerID: descriptor.id) }
                         } label: {
                             ProviderRailItem(
                                 descriptor: descriptor,
                                 usage: store.usage(for: descriptor.id),
                                 animationDelay: Double(index) * 0.045,
-                                showName: showProviderNames
+                                showName: showProviderNames,
+                                hoverChanged: { hovering in
+                                    guard hovering else {
+                                        hideProviderDetail(descriptor.id)
+                                        return
+                                    }
+                                    let rowHeight = UsageRailLayout.scaled(
+                                        showProviderNames ? 101 : 84
+                                    )
+                                    let fallbackY = UsageRailLayout.contentInset
+                                        + UsageRailLayout.providerSectionVerticalPadding
+                                        + UsageRailLayout.providerRingDiameter / 2
+                                        + CGFloat(index)
+                                            * (rowHeight + UsageRailLayout.providerSpacing)
+                                    showProviderDetail(
+                                        descriptor,
+                                        providerAnchorY[descriptor.id] ?? fallbackY
+                                    )
+                                }
                             )
                         }
                         .buttonStyle(.plain)
+                        .background {
+                            PointingHandCursorRegion()
+                        }
                         .background {
                             GeometryReader { proxy in
                                 Color.clear.preference(
@@ -241,21 +257,103 @@ private struct SettingsHoverControl: View {
         .allowsHitTesting(isHovering)
         .accessibilityHidden(!isHovering)
         .scaleEffect(isControlHovering ? 1.08 : 1)
+        .background {
+            PointingHandCursorRegion()
+        }
         .onHover { hovering in
-            if hovering { NSCursor.pointingHand.set() }
-            else { NSCursor.arrow.set() }
             withAnimation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.72)) {
                 isControlHovering = hovering
             }
-        }
-        .onDisappear {
-            if isControlHovering { NSCursor.arrow.set() }
         }
         .animation(
             reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.78),
             value: isHovering
         )
     }
+}
+
+private struct PointingHandCursorRegion: NSViewRepresentable {
+    func makeNSView(context: Context) -> PointingHandCursorView {
+        PointingHandCursorView()
+    }
+
+    func updateNSView(_ nsView: PointingHandCursorView, context: Context) {}
+}
+
+private final class PointingHandCursorView: NSView {
+    private var trackingArea: NSTrackingArea?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.acceptsMouseMovedEvents = true
+        _ = BackgroundCursorSupport.isEnabled
+        updateTrackingAreas()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.cursorUpdate, .mouseEnteredAndExited, .mouseMoved, .activeAlways],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        self.trackingArea = trackingArea
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        showPointingHandCursor()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        showPointingHandCursor()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        showPointingHandCursor()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        NSCursor.arrow.set()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    private func showPointingHandCursor() {
+        NSCursor.pointingHand.set()
+    }
+}
+
+private enum BackgroundCursorSupport {
+    // WindowServer 默认忽略非活动应用设置的 cursor；悬浮栏常驻且不激活应用，
+    // 必须先打开连接属性 SetsCursorInBackground，未激活时手型才会真正显示。
+    static let isEnabled: Bool = {
+        typealias MainConnectionID = @convention(c) () -> Int32
+        typealias SetConnectionProperty = @convention(c) (Int32, Int32, CFString, CFTypeRef) -> Int32
+        guard
+            let handle = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_NOW),
+            let mainSymbol = dlsym(handle, "CGSMainConnectionID"),
+            let setSymbol = dlsym(handle, "CGSSetConnectionProperty")
+        else { return false }
+        let connectionID = unsafeBitCast(mainSymbol, to: MainConnectionID.self)()
+        let setProperty = unsafeBitCast(setSymbol, to: SetConnectionProperty.self)
+        return setProperty(
+            connectionID,
+            connectionID,
+            "SetsCursorInBackground" as CFString,
+            kCFBooleanTrue
+        ) == 0
+    }()
 }
 
 private struct ProviderAnchorYKey: PreferenceKey {
@@ -508,6 +606,7 @@ private struct ProviderRailItem: View {
     let usage: ProviderUsage
     let animationDelay: Double
     let showName: Bool
+    let hoverChanged: (Bool) -> Void
 
     @State private var animatedFraction = 0.0
     @State private var hovered = false
@@ -622,14 +721,15 @@ private struct ProviderRailItem: View {
         .contentShape(Rectangle())
         .scaleEffect(hovered ? 1.045 : 1)
         .onHover { value in
-            if value { NSCursor.pointingHand.set() }
-            else { NSCursor.arrow.set() }
+            hoverChanged(value)
             withAnimation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.78)) {
                 hovered = value
             }
         }
         .onDisappear {
-            if hovered { NSCursor.arrow.set() }
+            if hovered {
+                hoverChanged(false)
+            }
         }
         .onAppear { animate(to: remainingFraction) }
         .onChange(of: remainingFraction) { _, value in animate(to: value) }
