@@ -727,6 +727,14 @@ private struct ProviderRailItem: View {
                 width: UsageRailLayout.providerRingDiameter,
                 height: UsageRailLayout.providerRingDiameter
             )
+            .overlay(alignment: .bottomTrailing) {
+                if let status = cachedUsageStatus(usage, language: language) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: UsageRailLayout.scaled(11), weight: .semibold))
+                        .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.65))
+                        .help(status)
+                }
+            }
             .shadow(
                 color: tint.opacity(hovered ? 0.35 : 0),
                 radius: UsageRailLayout.scaled(12)

@@ -73,13 +73,20 @@ struct ProviderDetailCard: View {
     }
 
     private var headlineValue: String {
+        if let requests = usage.todayRequests?.requests {
+            return compactTokenCount(requests, language: language)
+        }
         guard let tokens = usage.today?.tokens else { return "—" }
         return compactTokenCount(tokens, language: language)
     }
 
     private var headlineCaption: String {
-        let value = usage.today?.valueUSD.map { String(format: "$%.2f", $0) } ?? "$—"
-        return copy.text("今日 Token", "Tokens today") + " · \(value)"
+        let cost = usage.todayRequests?.valueUSD ?? usage.today?.valueUSD
+        let value = cost.map { String(format: "$%.2f", $0) } ?? "$—"
+        let label = descriptor.id.rawValue == "opencodego"
+            ? copy.text("今日请求", "Requests today")
+            : copy.text("今日 Token", "Tokens today")
+        return label + " · \(value)"
     }
 
     private var overviewCaption: String {
@@ -94,12 +101,17 @@ struct ProviderDetailCard: View {
     }
 
     private var last30DaysValue: String {
+        if let requests = usage.last30DaysRequests?.requests {
+            return compactTokenCount(requests, language: language)
+                + " " + copy.text("次请求", "requests")
+        }
         guard let tokens = usage.last30Days?.tokens else { return "—" }
         return compactTokenCount(tokens, language: language)
     }
 
     private var last30DaysCostValue: String {
-        usage.last30Days?.valueUSD.map { String(format: "$%.2f", $0) } ?? "$—"
+        (usage.last30DaysRequests?.valueUSD ?? usage.last30Days?.valueUSD)
+            .map { String(format: "$%.2f", $0) } ?? "$—"
     }
 
     private var weeklyEstimateValue: String {
@@ -160,6 +172,13 @@ struct ProviderDetailCard: View {
         VStack(alignment: .leading, spacing: 12) {
             header
 
+            if let status = cachedUsageStatus(usage, language: language) {
+                Label(status, systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if isOverview || !displayedWindows.isEmpty {
                 usageHeadline
             }
@@ -215,7 +234,7 @@ struct ProviderDetailCard: View {
                     )
                 )
                 .monospacedDigit()
-                .contentTransition(.numericText(value: Double(usage.today?.tokens ?? 0)))
+                .contentTransition(.numericText(value: Double(usage.todayRequests?.requests ?? usage.today?.tokens ?? 0)))
 
             Text(isOverview ? overviewCaption : headlineCaption)
                 .font(.system(size: 11.5, weight: .semibold, design: .rounded))
@@ -225,7 +244,7 @@ struct ProviderDetailCard: View {
                 .contentTransition(
                     .numericText(
                         value: isOverview
-                            ? Double(usage.last30Days?.tokens ?? 0)
+                            ? Double(usage.last30DaysRequests?.requests ?? usage.last30Days?.tokens ?? 0)
                             : usage.today?.valueUSD ?? 0
                     )
                 )
@@ -385,18 +404,24 @@ struct ProviderDetailCard: View {
             Text("\(last30DaysValue) · \(last30DaysCostValue)")
                 .font(.system(size: 10.5, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-                .fixedSize(horizontal: true, vertical: false)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentTransition(
-                    .numericText(value: Double(usage.last30Days?.tokens ?? 0))
+                    .numericText(value: Double(usage.last30DaysRequests?.requests ?? usage.last30Days?.tokens ?? 0))
                 )
 
-            Text("\(weeklyEstimateValue) Weekly")
+            Text("\(weeklyEstimateValue) " + copy.text("每周估算", "Weekly estimate"))
                 .font(.system(size: 10.5, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-                .fixedSize(horizontal: true, vertical: false)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .contentTransition(.numericText(value: usage.weeklyEstimate?.valueUSD ?? 0))
+                .help(copy.text(
+                    "根据本地用量、模型价格和官方已用比例推算的每周金额，不是官方金额额度。",
+                    "Estimated weekly amount from local usage, model prices, and the reported usage fraction; not an official monetary allowance."
+                ))
         }
         .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.42))
         .padding(.top, 2)
@@ -748,6 +773,23 @@ private func compactDuration(from now: Date, until date: Date, language: AppLang
     if days > 0 { return "\(days)d \(hours)h" }
     if hours > 0 { return "\(hours)h \(minutes)m" }
     return "\(minutes)m"
+}
+
+func cachedUsageStatus(_ usage: ProviderUsage, language: AppLanguage) -> String? {
+    guard usage.state == .unavailable || usage.state == .failed,
+          UsageStore.hasCacheableData(usage) else { return nil }
+    let copy = AppCopy(language: language)
+    var status = copy.text("数据未更新", "Data is out of date")
+    if let updatedAt = usage.updatedAt {
+        let timestamp = updatedAt.formatted(
+            Date.FormatStyle(date: .abbreviated, time: .shortened).locale(language.locale)
+        )
+        status += " · " + copy.text("数据时间：", "Last updated: ") + timestamp
+    }
+    if let message = usage.message, !message.isEmpty {
+        status += "\n" + copy.usageMessage(message)
+    }
+    return status
 }
 
 func compactTokenCount(_ value: Int64, language: AppLanguage) -> String {

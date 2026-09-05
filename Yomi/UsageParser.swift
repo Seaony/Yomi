@@ -1,13 +1,13 @@
 import Foundation
 
 nonisolated enum UsageParser {
-    static func parse(_ data: Data, descriptor: ProviderDescriptor) throws -> ProviderUsage {
+    static func parse(_ data: Data, descriptor: ProviderDescriptor, claudeWeb: Bool = false) throws -> ProviderUsage {
         guard let object = try? JSONSerialization.jsonObject(with: data) else {
             throw UsageCollectionError.unreadableResponse
         }
         let parsed: ProviderUsage? = switch descriptor.id.rawValue {
         case "codex": parseCodex(object, descriptor: descriptor)
-        case "claude": parseClaude(object, descriptor: descriptor)
+        case "claude": parseClaude(object, descriptor: descriptor, isWeb: claudeWeb)
         case "clinepass": parseClinePass(object, descriptor: descriptor)
         case "gemini": parseGemini(object, descriptor: descriptor)
         default: nil
@@ -99,7 +99,7 @@ nonisolated enum UsageParser {
         case unknown
     }
 
-    private static func parseClaude(_ root: Any, descriptor: ProviderDescriptor) -> ProviderUsage? {
+    private static func parseClaude(_ root: Any, descriptor: ProviderDescriptor, isWeb: Bool) -> ProviderUsage? {
         guard let response = root as? [String: Any] else { return nil }
         func window(_ key: String, label: String) -> UsageWindow? {
             guard let object = response[key] as? [String: Any],
@@ -173,7 +173,7 @@ nonisolated enum UsageParser {
 
         let providerCost: ProviderCostSummary? = {
             guard let extra = response["extra_usage"] as? [String: Any],
-                  (extra["is_enabled"] as? Bool) == true,
+                  isWeb || (extra["is_enabled"] as? Bool) == true,
                   let used = numericValue(extra["used_credits"]),
                   let limit = numericValue(extra["monthly_limit"] ?? extra["monthly_credit_limit"])
             else { return nil }

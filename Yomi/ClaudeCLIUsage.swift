@@ -86,11 +86,12 @@ nonisolated struct ClaudeCLIUsageSnapshot: Sendable, Equatable {
 
     let sessionPercentLeft: Int
     let weeklyPercentLeft: Int?
-    let sonnetPercentLeft: Int?
+    let modelName: String?
+    let modelPercentLeft: Int?
     let scopedWeekly: [ScopedWeekly]
     let sessionResetDescription: String?
     let weeklyResetDescription: String?
-    let sonnetResetDescription: String?
+    let modelResetDescription: String?
     let accountEmail: String?
     let organization: String?
     let loginMethod: String?
@@ -279,41 +280,34 @@ nonisolated enum ClaudeCLIUsageFetcher {
         }
 
         let context = LabelContext(panel)
-        var sessionLeft = extractPercent(label: "Current session", context: context)
+        let sessionLeft = extractPercent(label: "Current session", context: context)
         let weeklyLeft = extractPercent(label: "Current week (all models)", context: context)
-        let sonnetLabels = [
+        let modelLabels = [
             "Current week (Opus)",
             "Current week (Sonnet only)",
             "Current week (Sonnet)",
         ]
-        let sonnetLeft = sonnetLabels.lazy.compactMap { extractPercent(label: $0, context: context) }.first
-
-        if sessionLeft == nil, context.normalizedLines.contains(where: { $0.contains("currentsession") }) {
-            sessionLeft = allPercents(panel).first
-        }
+        let modelLabel = modelLabels.first { extractPercent(label: $0, context: context) != nil }
         guard let sessionLeft else {
             throw ClaudeCLIUsageError.parseFailed("Missing Current session.")
         }
 
         let weeklyModels = Set(context.lines.compactMap(weeklyModelName).map(normalizeLabel))
         let hasWeekly = weeklyModels.contains(where: isAllModels)
-        let sonnetModels = Set(sonnetLabels.compactMap(weeklyModelName).map(normalizeLabel))
-        let hasSonnet = !weeklyModels.isDisjoint(with: sonnetModels)
         let status = stripANSI(statusText ?? "")
         let identityText = clean + "\n" + status
 
         return ClaudeCLIUsageSnapshot(
             sessionPercentLeft: sessionLeft,
             weeklyPercentLeft: weeklyLeft,
-            sonnetPercentLeft: sonnetLeft,
+            modelName: modelLabel.flatMap(weeklyModelName).map { $0 == "Sonnet only" ? "Sonnet" : $0 },
+            modelPercentLeft: modelLabel.flatMap { extractPercent(label: $0, context: context) },
             scopedWeekly: scopedWeekly(context),
             sessionResetDescription: extractReset(label: "Current session", context: context),
             weeklyResetDescription: hasWeekly
                 ? extractReset(label: "Current week (all models)", context: context)
                 : nil,
-            sonnetResetDescription: hasSonnet
-                ? sonnetLabels.lazy.compactMap { extractReset(label: $0, context: context) }.first
-                : nil,
+            modelResetDescription: modelLabel.flatMap { extractReset(label: $0, context: context) },
             accountEmail: firstMatch(#"(?i)(?:Account|Email):\s+([^\s@]+@[^\s@]+)"#, in: identityText),
             organization: firstMatch(#"(?i)(?:Org|Organization):\s*([^\r\n]+)"#, in: identityText),
             loginMethod: firstMatch(#"(?i)Login\s+method:\s*([^\r\n]+)"#, in: identityText)
@@ -339,7 +333,7 @@ nonisolated enum ClaudeCLIUsageFetcher {
 
         var windows = [window(
             id: "claude-session",
-            label: AppLocalization.text("会话", "Session"),
+            label: "Session",
             percentLeft: snapshot.sessionPercentLeft,
             reset: snapshot.sessionResetDescription,
             expectedWindow: 5 * 60 * 60
@@ -347,18 +341,18 @@ nonisolated enum ClaudeCLIUsageFetcher {
         if let left = snapshot.weeklyPercentLeft {
             windows.append(window(
                 id: "claude-weekly",
-                label: AppLocalization.text("每周", "Weekly"),
+                label: "Weekly",
                 percentLeft: left,
                 reset: snapshot.weeklyResetDescription,
                 expectedWindow: 7 * 24 * 60 * 60
             ))
         }
-        if let left = snapshot.sonnetPercentLeft {
+        if let left = snapshot.modelPercentLeft, let model = snapshot.modelName {
             windows.append(window(
-                id: "claude-sonnet",
-                label: "Sonnet",
+                id: "claude-\(slug(model))",
+                label: model,
                 percentLeft: left,
-                reset: snapshot.sonnetResetDescription,
+                reset: snapshot.modelResetDescription,
                 expectedWindow: 7 * 24 * 60 * 60
             ))
         }
@@ -729,14 +723,6 @@ nonisolated enum ClaudeCLIUsageFetcher {
             return Int(clamped.rounded())
         }
         return nil
-    }
-
-    private static func allPercents(_ text: String) -> [Int] {
-        let normalized = normalizeLabel(text)
-        guard normalized.contains("currentsession") || normalized.contains("currentweek"),
-              ["used", "left", "remaining", "available"].contains(where: normalized.contains)
-        else { return [] }
-        return text.components(separatedBy: .newlines).compactMap(percentLeft)
     }
 
     private static func weeklyModelName(_ text: String) -> String? {

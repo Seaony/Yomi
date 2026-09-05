@@ -33,13 +33,35 @@ enum ClaudeWebUsageFetcher {
             string: "https://claude.ai/api/organizations/\(organization.uuid)/usage"
         )!
         let usageData = try await get(usageURL, sessionKey: sessionKey, session: session)
-        var usage = try UsageParser.parse(usageData, descriptor: descriptor)
-        if usage.plan == nil,
-           let name = organization.name?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !name.isEmpty {
-            usage.plan = name
+        var usage = try UsageParser.parse(usageData, descriptor: descriptor, claudeWeb: true)
+        do {
+            let accountData = try await get(
+                URL(string: "https://claude.ai/api/account")!,
+                sessionKey: sessionKey,
+                session: session
+            )
+            usage.plan = accountPlan(from: accountData, organizationID: organization.uuid)
+        } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                throw error
+            }
         }
         return usage
+    }
+
+    static func accountPlan(from data: Data, organizationID: String) -> String? {
+        guard let account = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let memberships = account["memberships"] as? [[String: Any]],
+              let membership = memberships.first(where: {
+                  ($0["organization"] as? [String: Any])?["uuid"] as? String == organizationID
+              }),
+              let organization = membership["organization"] as? [String: Any]
+        else { return nil }
+        return UsageParser.displayClaudeWebPlan(
+            rateLimitTier: organization["rate_limit_tier"] as? String,
+            billingType: organization["billing_type"] as? String,
+            seatTier: membership["seat_tier"] as? String
+        )
     }
 
     static func normalizedSessionKey(_ raw: String) -> String {
@@ -76,6 +98,5 @@ enum ClaudeWebUsageFetcher {
 
 private struct ClaudeWebOrganization: Decodable {
     var uuid: String
-    var name: String?
     var capabilities: [String]?
 }

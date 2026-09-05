@@ -250,6 +250,7 @@ final class UsageParserTests: XCTestCase {
                 state: .ready,
                 windows: [],
                 today: DailyTokenUsage(tokens: 12, valueUSD: 1.2),
+                todayDate: now,
                 last30DaysDaily: [
                     DailyTokenUsagePoint(
                         date: today,
@@ -266,6 +267,7 @@ final class UsageParserTests: XCTestCase {
                 state: .ready,
                 windows: [],
                 today: DailyTokenUsage(tokens: 5, valueUSD: 0.5),
+                todayDate: now,
                 last30DaysDaily: [
                     DailyTokenUsagePoint(
                         date: yesterday,
@@ -286,6 +288,64 @@ final class UsageParserTests: XCTestCase {
         XCTAssertEqual(todayPoint.providerBreakdown?.map(\.usage.tokens), [12, 5])
         XCTAssertEqual(yesterdayPoint.usage.tokens, 50)
         XCTAssertEqual(yesterdayPoint.providerBreakdown?.map(\.usage.tokens), [30, 20])
+    }
+
+    func testYesterdayCacheDoesNotBecomeTodaysUsage() throws {
+        let now = Date(timeIntervalSince1970: 1_788_000_000)
+        let calendar = Calendar.current
+        let yesterday = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: now))
+        let cached = ProviderUsage(
+            id: ProviderID(rawValue: "groq"),
+            state: .unavailable,
+            windows: [],
+            today: DailyTokenUsage(tokens: 100, valueUSD: 1),
+            last30Days: DailyTokenUsage(tokens: 100, valueUSD: 1),
+            last30DaysDaily: [DailyTokenUsagePoint(
+                date: yesterday,
+                usage: DailyTokenUsage(tokens: 100, valueUSD: 1)
+            )],
+            updatedAt: yesterday
+        )
+        let current = UsageStore.usageForCurrentDay(cached, now: now)
+        XCTAssertNil(current.today)
+        XCTAssertEqual(current.last30Days?.tokens, 100)
+        let points = UsageStore.overviewDailyUsage(usages: [cached], now: now)
+        XCTAssertEqual(points.last?.usage.tokens, 0)
+        XCTAssertEqual(points.reduce(Int64.zero) { $0 + $1.usage.tokens }, 100)
+    }
+
+    func testFreshLocalUsageKeepsItsDateWhenQuotaRefreshFailed() throws {
+        let now = Date(timeIntervalSince1970: 1_788_000_000)
+        let yesterday = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: -1, to: now))
+        let usage = ProviderUsage(
+            id: ProviderID(rawValue: "claude"),
+            state: .unavailable,
+            windows: [],
+            today: DailyTokenUsage(tokens: 75, valueUSD: 1),
+            todayDate: now,
+            updatedAt: yesterday
+        )
+        let restored = try JSONDecoder().decode(ProviderUsage.self, from: JSONEncoder().encode(usage))
+        XCTAssertEqual(UsageStore.usageForCurrentDay(restored, now: now).today?.tokens, 75)
+        XCTAssertEqual(restored.updatedAt, yesterday)
+    }
+
+    @MainActor
+    func testRestoringOldOpenCodeGoCacheRemovesRequestCountsFromTokenTotals() throws {
+        let suiteName = "UsageParserTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let legacy = Data(#"[{"id":"opencodego","state":"ready","windows":[],"balance":"$12","today":{"tokens":2,"valueUSD":1},"last30Days":{"tokens":3,"valueUSD":2}}]"#.utf8)
+        defaults.set(legacy, forKey: "usage-cache.v2")
+        let store = UsageStore(preferences: ProviderPreferences(defaults: defaults), defaults: defaults)
+        let usage = store.usage(for: ProviderID(rawValue: "opencodego"))
+        XCTAssertNil(usage.today)
+        XCTAssertNil(usage.last30Days)
+        XCTAssertEqual(usage.balance, "$12")
+        XCTAssertEqual(usage.last30DaysRequests?.requests, 3)
+        XCTAssertEqual(UsageStore.combinedLast30DaysUsage([usage])?.tokens, 0)
+        XCTAssertEqual(UsageStore.combinedLast30DaysUsage([usage])?.valueUSD, 2)
+        XCTAssertEqual(usage.state, .unavailable)
     }
 
     private func parseCodex(_ json: String) throws -> ProviderUsage {

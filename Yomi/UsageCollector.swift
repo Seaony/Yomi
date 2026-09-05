@@ -26,11 +26,14 @@ enum UsageCollectionError: LocalizedError {
 }
 
 actor UsageCollector {
+    private static let claudeWeeklyAmountEstimatorKey = "claude-weekly-amount-estimator.v1"
+
     private let session: URLSession
     private var pricingCatalog: ModelPricingCatalog?
     private var pricingCatalogLoadTask: Task<ModelPricingCatalogLoadResult, Never>?
     private var pricingCatalogReloadAt = Date.distantPast
     private let localUsageScanner = LocalDailyUsageScanner()
+    private var claudeWeeklyAmountEstimator: ClaudeWeeklyAmountEstimator
 
     init() {
         let configuration = URLSessionConfiguration.ephemeral
@@ -39,6 +42,10 @@ actor UsageCollector {
         configuration.waitsForConnectivity = false
         configuration.urlCache = nil
         session = URLSession(configuration: configuration)
+        claudeWeeklyAmountEstimator = UserDefaults.standard.data(
+            forKey: Self.claudeWeeklyAmountEstimatorKey
+        ).flatMap { try? JSONDecoder().decode(ClaudeWeeklyAmountEstimator.self, from: $0) }
+            ?? ClaudeWeeklyAmountEstimator()
     }
 
     func collect(
@@ -1052,7 +1059,7 @@ actor UsageCollector {
         if enriched.plan == nil {
             enriched.plan = localPlan(for: descriptor)
         }
-        let weeklyWindow = weeklyWindow(in: enriched, descriptor: descriptor)
+        let weeklyWindow = Self.weeklyWindow(in: enriched, descriptor: descriptor)
         let now = Date()
         let weeklyReset = weeklyWindow?.resetsAt.flatMap { $0 > now ? $0 : nil }
         let weekStart = weeklyReset
@@ -1066,19 +1073,49 @@ actor UsageCollector {
             allowVertexClaudeFallback: allowVertexClaudeFallback
         )
         enriched.today = localUsage?.today
+        enriched.todayDate = localUsage?.today == nil ? nil : now
         enriched.last30Days = localUsage?.last30Days
         enriched.last30DaysDaily = localUsage?.last30DaysDaily ?? []
-        enriched.weeklyEstimate = weeklyEstimate(
-            localUsage: localUsage?.currentWeek,
-            usedFraction: weeklyReset == nil ? nil : weeklyWindow?.clampedFraction
-        )
+        if descriptor.id.rawValue == "claude",
+           let localWeeklyUsage = localUsage?.currentWeek,
+           let localWeeklyCost = localWeeklyUsage.valueUSD,
+           let weeklyReset,
+           let usedFraction = weeklyWindow?.clampedFraction,
+           usedFraction >= 0.01,
+           usedFraction <= 1 {
+            let estimatedAmountUSD = claudeWeeklyAmountEstimator.estimate(
+                currentCostUSD: localWeeklyCost,
+                usedFraction: usedFraction,
+                resetAt: weeklyReset,
+                plan: enriched.plan
+            )
+            enriched.weeklyEstimate = DailyTokenUsage(
+                tokens: estimatedTokens(
+                    localTokens: localWeeklyUsage.tokens,
+                    usedFraction: usedFraction
+                ),
+                valueUSD: estimatedAmountUSD
+            )
+            persistClaudeWeeklyAmountEstimator()
+        } else {
+            enriched.weeklyEstimate = weeklyEstimate(
+                localUsage: localUsage?.currentWeek,
+                usedFraction: weeklyReset == nil ? nil : weeklyWindow?.clampedFraction
+            )
+        }
         return enriched
     }
 
-    private func weeklyWindow(
+    nonisolated static func weeklyWindow(
         in usage: ProviderUsage,
         descriptor: ProviderDescriptor
     ) -> UsageWindow? {
+        if descriptor.id.rawValue == "claude",
+           let weekly = usage.windows.first(where: {
+               $0.id == "claude-weekly" || $0.id == "claude-seven_day"
+           }) {
+            return weekly
+        }
         let secondary = descriptor.secondaryLabel.lowercased()
         return usage.windows.first { $0.label.lowercased() == secondary }
             ?? usage.windows.first {
@@ -1100,9 +1137,18 @@ actor UsageCollector {
               usedFraction <= 1
         else { return nil }
         return DailyTokenUsage(
-            tokens: Int64((Double(localUsage.tokens) / usedFraction).rounded()),
+            tokens: estimatedTokens(localTokens: localUsage.tokens, usedFraction: usedFraction),
             valueUSD: localUsage.valueUSD.map { $0 / usedFraction }
         )
+    }
+
+    private func estimatedTokens(localTokens: Int64, usedFraction: Double) -> Int64 {
+        Int64((Double(localTokens) / usedFraction).rounded())
+    }
+
+    private func persistClaudeWeeklyAmountEstimator() {
+        guard let data = try? JSONEncoder().encode(claudeWeeklyAmountEstimator) else { return }
+        UserDefaults.standard.set(data, forKey: Self.claudeWeeklyAmountEstimatorKey)
     }
 
     private func resolvedPricingCatalog() async -> ModelPricingCatalog? {

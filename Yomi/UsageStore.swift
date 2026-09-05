@@ -121,6 +121,9 @@ final class UsageStore: ObservableObject {
                 balance: loadingUsage[job.0.id]?.balance,
                 plan: loadingUsage[job.0.id]?.plan,
                 today: loadingUsage[job.0.id]?.today,
+                todayDate: loadingUsage[job.0.id]?.todayDate,
+                todayRequests: loadingUsage[job.0.id]?.todayRequests,
+                last30DaysRequests: loadingUsage[job.0.id]?.last30DaysRequests,
                 last30Days: loadingUsage[job.0.id]?.last30Days,
                 last30DaysDaily: loadingUsage[job.0.id]?.last30DaysDaily ?? [],
                 weeklyEstimate: loadingUsage[job.0.id]?.weeklyEstimate,
@@ -196,18 +199,19 @@ final class UsageStore: ObservableObject {
                     refreshedUsage[resolvedUsage.id] = resolvedUsage
                 }
 
+                usageByID[usage.id] = refreshedUsage[usage.id]
+
                 if nextJobIndex < jobs.count {
                     submit(jobs[nextJobIndex])
                     nextJobIndex += 1
                 }
             }
         }
-        usageByID = refreshedUsage
         persistCache()
     }
 
     func usage(for id: ProviderID) -> ProviderUsage {
-        usageByID[id] ?? ProviderUsage(
+        Self.usageForCurrentDay(usageByID[id] ?? ProviderUsage(
             id: id,
             state: .unavailable,
             windows: [],
@@ -215,27 +219,46 @@ final class UsageStore: ObservableObject {
             plan: nil,
             updatedAt: nil,
             message: AppLocalization.text("等待首次刷新", "Waiting for the first refresh")
-        )
+        ))
+    }
+
+    nonisolated static func usageForCurrentDay(
+        _ usage: ProviderUsage,
+        now: Date = Date()
+    ) -> ProviderUsage {
+        guard let todayDate = usage.todayDate ?? usage.updatedAt,
+              Calendar.current.isDate(todayDate, inSameDayAs: now) else {
+            var resolved = usage
+            resolved.today = nil
+            resolved.todayRequests = nil
+            return resolved
+        }
+        return usage
     }
 
     var overviewUsage: ProviderUsage {
         let usages = enabledProviders.map { usage(for: $0.id) }
-        let today = Self.combinedUsage(usages.compactMap(\.today))
+        let today = Self.combinedUsage(usages.compactMap {
+            $0.today ?? $0.todayRequests.map { DailyTokenUsage(tokens: 0, valueUSD: $0.valueUSD) }
+        })
         let daily = Self.overviewDailyUsage(usages: usages)
         let last30Days = Self.combinedLast30DaysUsage(usages)
         let isFullRefresh = !enabledProviders.isEmpty
             && enabledProviders.allSatisfy { usage(for: $0.id).state == .loading }
         let hasUsage = today != nil || last30Days != nil || !daily.isEmpty
+        let hasStaleUsage = usages.contains { $0.state == .unavailable || $0.state == .failed }
         return ProviderUsage(
             id: ProviderCatalog.overview.id,
-            state: isFullRefresh ? .loading : (hasUsage ? .ready : .unavailable),
+            state: isFullRefresh ? .loading : (hasUsage && !hasStaleUsage ? .ready : .unavailable),
             windows: [],
             today: today,
             last30Days: last30Days,
             last30DaysDaily: daily,
-            updatedAt: usages.compactMap(\.updatedAt).max(),
+            updatedAt: hasStaleUsage
+                ? usages.compactMap(\.updatedAt).min()
+                : usages.compactMap(\.updatedAt).max(),
             message: hasUsage
-                ? nil
+                ? (hasStaleUsage ? AppLocalization.text("部分 Provider 数据未能刷新", "Some provider data could not be refreshed") : nil)
                 : AppLocalization.text("等待首次用量数据", "Waiting for usage data")
         )
     }
@@ -254,7 +277,9 @@ final class UsageStore: ObservableObject {
         _ usages: [ProviderUsage]
     ) -> DailyTokenUsage? {
         combinedUsage(usages.compactMap { usage in
-            usage.last30Days ?? combinedUsage(usage.last30DaysDaily.map(\.usage))
+            usage.last30Days
+                ?? usage.last30DaysRequests.map { DailyTokenUsage(tokens: 0, valueUSD: $0.valueUSD) }
+                ?? combinedUsage(usage.last30DaysDaily.map(\.usage))
         })
     }
 
@@ -274,7 +299,9 @@ final class UsageStore: ObservableObject {
                 guard day >= start, day <= todayStart else { continue }
                 valuesByDay[day, default: [:]][usage.id, default: []].append(point.usage)
             }
-            if let today = usage.today {
+            let current = usageForCurrentDay(usage, now: now)
+            if let today = current.today
+                ?? current.todayRequests.map({ DailyTokenUsage(tokens: 0, valueUSD: $0.valueUSD) }) {
                 valuesByDay[todayStart, default: [:]][usage.id] = [today]
             }
         }
@@ -312,8 +339,21 @@ final class UsageStore: ObservableObject {
     }
 
     private static func sanitizeCachedUsage(_ usage: ProviderUsage) -> ProviderUsage {
-        guard usage.id.rawValue == "codex" else { return usage }
         var sanitized = usage
+        sanitized.state = .unavailable
+        if sanitized.id.rawValue == "opencodego" {
+            if sanitized.todayRequests == nil,
+               let today = sanitized.today, let cost = today.valueUSD {
+                sanitized.todayRequests = DailyRequestUsage(requests: today.tokens, valueUSD: cost)
+            }
+            if sanitized.last30DaysRequests == nil,
+               let last30Days = sanitized.last30Days, let cost = last30Days.valueUSD {
+                sanitized.last30DaysRequests = DailyRequestUsage(requests: last30Days.tokens, valueUSD: cost)
+            }
+            sanitized.today = nil
+            sanitized.last30Days = nil
+        }
+        guard usage.id.rawValue == "codex" else { return sanitized }
         let weekly = (sanitized.windows + sanitized.additionalWindows)
             .first { $0.label == "Weekly" }
         sanitized.windows = weekly.map { [$0] } ?? []
@@ -351,6 +391,8 @@ final class UsageStore: ObservableObject {
             || usage.balance != nil
             || usage.plan != nil
             || usage.today != nil
+            || usage.todayRequests != nil
+            || usage.last30DaysRequests != nil
             || usage.last30Days != nil
             || !usage.last30DaysDaily.isEmpty
             || usage.weeklyEstimate != nil

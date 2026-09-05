@@ -87,9 +87,18 @@ struct OpenCodeGoUsageTests {
         let enriched = OpenCodeGoLocalUsageReader.enrich(original, rows: rows, now: now)
 
         #expect(enriched.windows == original.windows)
-        #expect(enriched.today?.tokens == 2)
-        #expect(enriched.today?.valueUSD == 1.25)
-        #expect(enriched.last30Days?.tokens == 3)
-        #expect(enriched.last30Days?.valueUSD == 4.75)
+        #expect(enriched.today == nil)
+        #expect(enriched.last30Days == nil)
+        let combined = UsageStore.combinedLast30DaysUsage([enriched])
+        #expect(combined?.tokens == 0)
+        #expect(combined?.valueUSD == 4.75)
+        let daily = UsageStore.overviewDailyUsage(usages: [enriched], now: now)
+        #expect(daily.last?.usage.tokens == 0)
+        #expect(daily.last?.usage.valueUSD == 1.25)
+        #expect(enriched.todayDate == now)
+        #expect(enriched.todayRequests?.requests == 2)
+        #expect(enriched.todayRequests?.valueUSD == 1.25)
+        #expect(enriched.last30DaysRequests?.requests == 3)
+        #expect(enriched.last30DaysRequests?.valueUSD == 4.75)
     }
 }

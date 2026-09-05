@@ -20,15 +20,20 @@ enum OpenCodeGoLocalUsageReader {
         let thirtyDayStart = calendar.date(byAdding: .day, value: -29, to: todayStart) ?? todayStart
         let today = rows.filter { $0.date >= todayStart && $0.date <= now }
         let last30Days = rows.filter { $0.date >= thirtyDayStart && $0.date <= now }
+        enriched.today = nil
+        enriched.last30Days = nil
+        enriched.todayDate = now
+        enriched.todayRequests = nil
+        enriched.last30DaysRequests = nil
         if !today.isEmpty {
-            enriched.today = DailyTokenUsage(
-                tokens: today.reduce(0) { $0 + Int64($1.requestCount) },
+            enriched.todayRequests = DailyRequestUsage(
+                requests: today.reduce(0) { $0 + Int64($1.requestCount) },
                 valueUSD: today.reduce(0) { $0 + $1.cost }
             )
         }
         if !last30Days.isEmpty {
-            enriched.last30Days = DailyTokenUsage(
-                tokens: last30Days.reduce(0) { $0 + Int64($1.requestCount) },
+            enriched.last30DaysRequests = DailyRequestUsage(
+                requests: last30Days.reduce(0) { $0 + Int64($1.requestCount) },
                 valueUSD: last30Days.reduce(0) { $0 + $1.cost }
             )
         }

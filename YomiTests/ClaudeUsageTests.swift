@@ -93,6 +93,34 @@ struct ClaudeUsageTests {
     }
 
     @Test
+    func webEnterpriseSpendDoesNotRequireOAuthEnabledFlag() throws {
+        let data = Data(#"{"five_hour":null,"seven_day":null,"extra_usage":{"monthly_limit":100000,"used_credits":4132}}"#.utf8)
+        let usage = try UsageParser.parse(data, descriptor: descriptor, claudeWeb: true)
+
+        #expect(usage.providerCost?.used == 41.32)
+        #expect(usage.providerCost?.limit == 1000)
+        #expect(usage.windows.first?.usedFraction == 0.04132)
+        #expect(throws: (any Error).self) {
+            try UsageParser.parse(data, descriptor: descriptor)
+        }
+    }
+
+    @Test
+    func webPlanUsesSelectedMembershipRatherThanOrganizationName() throws {
+        let data = Data(#"""
+        {"memberships":[
+          {"organization":{"uuid":"other","rate_limit_tier":"default_claude_pro"}},
+          {"organization":{"uuid":"selected","name":"Personal workspace","rate_limit_tier":"default_claude_max_20x"}},
+          {"organization":{"uuid":"name-only","name":"Max"}}
+        ]}
+        """#.utf8)
+
+        #expect(ClaudeWebUsageFetcher.accountPlan(from: data, organizationID: "selected") == "Max 20x")
+        #expect(ClaudeWebUsageFetcher.accountPlan(from: data, organizationID: "name-only") == nil)
+        #expect(ClaudeWebUsageFetcher.accountPlan(from: data, organizationID: "missing") == nil)
+    }
+
+    @Test
     func parsesClaudeAdminCostAndTokenReports() throws {
         let now = Date(timeIntervalSince1970: 1_700_050_000)
         let costs = Data("""
@@ -159,7 +187,8 @@ struct ClaudeUsageTests {
 
         #expect(snapshot.sessionPercentLeft == 88)
         #expect(snapshot.weeklyPercentLeft == 62)
-        #expect(snapshot.sonnetPercentLeft == 66)
+        #expect(snapshot.modelPercentLeft == 66)
+        #expect(snapshot.modelName == "Sonnet")
         #expect(snapshot.sessionResetDescription == "Resets 3:15pm (Asia/Taipei)")
         #expect(snapshot.weeklyResetDescription == "Resets Sep 7 at 2pm (Asia/Taipei)")
     }
@@ -173,7 +202,7 @@ struct ClaudeUsageTests {
 
         #expect(snapshot.sessionPercentLeft == 93)
         #expect(snapshot.weeklyPercentLeft == nil)
-        #expect(snapshot.sonnetPercentLeft == nil)
+        #expect(snapshot.modelPercentLeft == nil)
         #expect(snapshot.scopedWeekly.isEmpty)
     }
 
@@ -188,6 +217,33 @@ struct ClaudeUsageTests {
 
         #expect(snapshot.sessionPercentLeft == 10)
         #expect(snapshot.weeklyPercentLeft == nil)
+    }
+
+    @Test(arguments: ["", "random log 45% used\n"])
+    func rejectsSessionWithoutItsOwnPercentage(prefix: String) {
+        #expect(throws: (any Error).self) {
+            try ClaudeCLIUsageFetcher.parse(prefix + "Current session\nCurrent week (all models)\n62% used")
+        }
+    }
+
+    @Test
+    func CLIProjectionKeepsOpusNameAndResetTogether() throws {
+        let snapshot = try ClaudeCLIUsageFetcher.parse("""
+        Current session
+        10% used
+        Current week (Opus)
+        70% used
+        Resets Sep 7 at 2pm (Asia/Taipei)
+        Current week (Sonnet)
+        20% used
+        Resets Sep 8 at 2pm (Asia/Taipei)
+        """)
+        let usage = ClaudeCLIUsageFetcher.providerUsage(snapshot: snapshot, now: Date())
+
+        #expect(usage.windows.map(\.label) == ["Session", "Opus"])
+        #expect(usage.windows.last?.id == "claude-opus")
+        #expect(usage.windows.last?.usedFraction == 0.7)
+        #expect(usage.windows.last?.detail == "Resets Sep 7 at 2pm (Asia/Taipei)")
     }
 
     @Test
@@ -384,6 +440,9 @@ struct ClaudeUsageTests {
         let usage = ClaudeCLIUsageFetcher.providerUsage(snapshot: snapshot, now: now)
 
         #expect(usage.windows.map(\.id) == ["claude-session", "claude-weekly"])
+        #expect(usage.windows.map(\.label) == ["Session", "Weekly"])
+        let chineseCopy = AppCopy(language: .simplifiedChinese)
+        #expect(usage.windows.map { chineseCopy.usageLabel($0.label) } == ["会话", "每周"])
         #expect(usage.windows.map(\.usedFraction) == [0.25, 0.60])
         #expect(usage.additionalWindows.map(\.id) == ["claude-weekly-scoped-fable"])
         #expect(usage.additionalWindows.first?.usedFraction == 0.70)

@@ -409,6 +409,7 @@ actor LocalDailyUsageScanner {
     }
 
     private struct ClaudeFileState: Codable {
+        var parserVersion = 2
         var size: UInt64 = 0
         var modificationNanoseconds: Int64 = 0
         var fileID = ""
@@ -725,18 +726,6 @@ actor LocalDailyUsageScanner {
             if count > 0 { drops[child.path] = count }
         }
 
-        for child in sessions where drops[child.path] == nil && child.state.samples.count >= 2 {
-            var best = 0
-            for parent in sessions
-            where parent.path != child.path && parent.state.samples.count >= 2 {
-                guard let childStart = child.state.samples.first?.timestamp,
-                      let parentStart = parent.state.samples.first?.timestamp,
-                      parentStart < childStart
-                else { continue }
-                best = max(best, matchingCodexPrefix(child.state.samples, parent.state.samples))
-            }
-            if best >= 2 { drops[child.path] = best }
-        }
         return drops
     }
 
@@ -1125,9 +1114,8 @@ actor LocalDailyUsageScanner {
             let isComplete = autoreleasepool {
                 if isRelevant {
                     if let predicate {
-                        guard let raw = try? JSONSerialization.jsonObject(with: pending),
-                              predicate(raw)
-                        else { return true }
+                        guard let raw = try? JSONSerialization.jsonObject(with: pending) else { return false }
+                        guard predicate(raw) else { return true }
                     }
                     guard let value = try? decoder.decode(type, from: pending) else { return false }
                     handle(value)
@@ -1207,7 +1195,9 @@ actor LocalDailyUsageScanner {
                 state.size = record.size
                 codexFileStates[record.path] = state
             case "claude-filtered":
-                guard var state = try? cacheDecoder.decode(ClaudeFileState.self, from: record.payload) else {
+                guard var state = try? cacheDecoder.decode(ClaudeFileState.self, from: record.payload),
+                      state.parserVersion == 2
+                else {
                     invalidPaths.insert(record.path)
                     continue
                 }
@@ -1216,7 +1206,9 @@ actor LocalDailyUsageScanner {
                 state.size = record.size
                 claudeFileStates[record.path] = state
             case "vertexai-only", "vertexai-all":
-                guard var state = try? cacheDecoder.decode(ClaudeFileState.self, from: record.payload) else {
+                guard var state = try? cacheDecoder.decode(ClaudeFileState.self, from: record.payload),
+                      state.parserVersion == 2
+                else {
                     invalidPaths.insert(record.path)
                     continue
                 }
@@ -1637,12 +1629,12 @@ actor LocalDailyUsageScanner {
         if model.contains("sonnet") {
             return ModelTokenRates(
                 input: 3e-6, cacheRead: 3e-7, cacheWrite: 3.75e-6, output: 1.5e-5,
-                threshold: model.contains("4-5") || model.contains("4-20250514") ? 200_000 : nil,
+                threshold: model.contains("4-5") || model == "claude-sonnet-4" ? 200_000 : nil,
                 inputAboveThreshold: 6e-6, cacheReadAboveThreshold: 6e-7,
                 cacheWriteAboveThreshold: 7.5e-6, outputAboveThreshold: 2.25e-5
             )
         }
-        if model.contains("opus-4-20250514") || model.contains("opus-4-1") {
+        if model == "claude-opus-4" || model.contains("opus-4-1") {
             return ModelTokenRates(input: 1.5e-5, cacheRead: 1.5e-6, cacheWrite: 1.875e-5, output: 7.5e-5, threshold: nil, inputAboveThreshold: nil, cacheReadAboveThreshold: nil, cacheWriteAboveThreshold: nil, outputAboveThreshold: nil)
         }
         if model.contains("opus") {
