@@ -72,7 +72,8 @@ nonisolated final class CodexPriorityTurnStore {
         WHERE id > ? AND ts >= ?
           AND (feedback_log_body LIKE '%websocket request:%'
                OR feedback_log_body LIKE '%response.completed%'
-               OR feedback_log_body LIKE '%service_tier: Some(Some("priority"))%')
+               OR feedback_log_body LIKE '%service_tier: Some(Some("priority"))%'
+               OR feedback_log_body LIKE '%service_tier: Some(Some("fast"))%')
         ORDER BY id
         """
         var statement: OpaquePointer?
@@ -124,7 +125,8 @@ nonisolated final class CodexPriorityTurnStore {
         guard let data = jsonText.data(using: .utf8),
               let request = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               request["type"] as? String == "response.create",
-              request["service_tier"] as? String == "priority"
+              let tier = request["service_tier"] as? String,
+              ["priority", "fast"].contains(tier)
         else { return nil }
         let turnID = value(named: "turn.id", in: prefix)
             ?? value(named: "turn_id", in: prefix)
@@ -134,7 +136,8 @@ nonisolated final class CodexPriorityTurnStore {
     }
 
     private static func parsePrioritySubmissionRow(_ body: String) -> (turnID: String, model: String?)? {
-        guard body.contains(#"service_tier: Some(Some("priority"))"#),
+        guard body.contains(#"service_tier: Some(Some("priority"))"#)
+                || body.contains(#"service_tier: Some(Some("fast"))"#),
               let submissionRange = body.range(of: "Submission sub=Submission {"),
               let turnID = quotedValue(named: "id", in: String(body[submissionRange.upperBound...]))
         else { return nil }

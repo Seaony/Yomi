@@ -659,8 +659,9 @@ actor LocalDailyUsageScanner {
                 let valueUSD = rates.map { rates -> Double in
                     let base = Self.codexCost(tokens: sample.tokens, rates: rates)
                     guard priorityTurn != nil,
-                          sample.tokens.input <= Self.codexFastInputTokenLimit,
-                          let multiplier = pricedModel.flatMap(Self.codexFastMultiplier)
+                          let multiplier = pricedModel.flatMap({
+                              Self.codexFastMultiplier(for: $0, inputTokens: sample.tokens.input)
+                          })
                     else { return base }
                     return base * multiplier
                 }
@@ -1449,8 +1450,14 @@ actor LocalDailyUsageScanner {
         return model
     }
 
-    private static func codexFastMultiplier(for model: String) -> Double? {
-        switch normalizedCodexModel(model.lowercased()) {
+    private static func codexFastMultiplier(for model: String, inputTokens: Int = 0) -> Double? {
+        let model = normalizedCodexModel(model.lowercased())
+        if inputTokens > codexFastInputTokenLimit,
+           !["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].contains(model) {
+            return nil
+        }
+        return switch model {
+        case "gpt-6-astra": 2
         case "gpt-5.4", "gpt-5.4-mini", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna": 2
         case "gpt-5.5": 2.5
         default: nil
@@ -1531,13 +1538,20 @@ actor LocalDailyUsageScanner {
             )
         }
         if var rates = codexCatalogRates(for: rawModel, catalog: catalog) {
-            if ["gpt-5.4", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+            if ["gpt-6-astra", "gpt-5.4", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
                 .contains(model) {
                 rates.threshold = 272_000
             }
             return rates
         }
         return switch model {
+        case "gpt-6-astra":
+            ModelTokenRates(
+                input: 1e-5, cacheRead: 1e-6, cacheWrite: 1.25e-5, output: 5e-5,
+                threshold: 272_000, inputAboveThreshold: 2e-5,
+                cacheReadAboveThreshold: 2e-6, cacheWriteAboveThreshold: 2.5e-5,
+                outputAboveThreshold: 7.5e-5
+            )
         case "gpt-5.6-sol":
             ModelTokenRates(
                 input: 4e-6, cacheRead: 4e-7, cacheWrite: 5e-6, output: 2e-5,
