@@ -218,6 +218,7 @@ nonisolated enum DeepSeekUsageFetcher {
         apiKey configuredAPIKey: String?,
         platformToken configuredPlatformToken: String? = nil,
         selectedProfileID: String? = nil,
+        balancePeaks: DeepSeekBalancePeakStore? = nil,
         session: URLSession,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectories: [URL] = BrowserCookieClient.defaultHomeDirectories(),
@@ -236,12 +237,13 @@ nonisolated enum DeepSeekUsageFetcher {
                     session: session,
                     homeDirectories: homeDirectories
                 )
-                return try await fetchPlatform(
+                let snapshot = try await fetchPlatform(
                     platformToken: token,
                     session: session,
                     includeOptionalUsage: includeOptionalUsage,
                     now: now
-                ).toProviderUsage(language: language)
+                )
+                return providerUsage(snapshot, balancePeaks: balancePeaks, language: language)
             case .automatic, .token:
                 if let apiKey = resolvedAPIKey(configured: configuredAPIKey, environment: environment) {
                     let explicitPlatform = cleaned(configuredPlatformToken)
@@ -275,7 +277,7 @@ nonisolated enum DeepSeekUsageFetcher {
                         missingDetailedUsageState: missingState,
                         now: now
                     )
-                    return snapshot.toProviderUsage(language: language)
+                    return providerUsage(snapshot, balancePeaks: balancePeaks, language: language)
                 }
                 guard source == .automatic else { throw DeepSeekUsageError.missingAPIKey }
                 let token = try await platformToken(
@@ -285,12 +287,13 @@ nonisolated enum DeepSeekUsageFetcher {
                     session: session,
                     homeDirectories: homeDirectories
                 )
-                return try await fetchPlatform(
+                let snapshot = try await fetchPlatform(
                     platformToken: token,
                     session: session,
                     includeOptionalUsage: includeOptionalUsage,
                     now: now
-                ).toProviderUsage(language: language)
+                )
+                return providerUsage(snapshot, balancePeaks: balancePeaks, language: language)
             case .account:
                 let token = try await platformToken(
                     explicit: resolvedPlatformToken(configured: configuredPlatformToken ?? configuredAPIKey,
@@ -300,12 +303,13 @@ nonisolated enum DeepSeekUsageFetcher {
                     session: session,
                     homeDirectories: homeDirectories
                 )
-                return try await fetchPlatform(
+                let snapshot = try await fetchPlatform(
                     platformToken: token,
                     session: session,
                     includeOptionalUsage: includeOptionalUsage,
                     now: now
-                ).toProviderUsage(language: language)
+                )
+                return providerUsage(snapshot, balancePeaks: balancePeaks, language: language)
             case .command, .endpoint:
                 throw DeepSeekUsageError.missingAPIKey
             }
@@ -316,6 +320,27 @@ nonisolated enum DeepSeekUsageFetcher {
         } catch {
             throw DeepSeekUsageError.networkError(error.localizedDescription)
         }
+    }
+
+    private static func providerUsage(
+        _ snapshot: DeepSeekUsageSnapshot,
+        balancePeaks: DeepSeekBalancePeakStore?,
+        language: AppLanguage
+    ) -> ProviderUsage {
+        var usage = snapshot.toProviderUsage(language: language)
+        let peak = balancePeaks?.record(
+            currency: snapshot.currency,
+            total: snapshot.totalBalance
+        ) ?? snapshot.totalBalance
+        let remaining = peak > 0 ? min(1, max(0, snapshot.totalBalance / peak)) : 0
+        usage.additionalWindows = [UsageWindow(
+            id: "deepseek-balance",
+            label: "Balance",
+            usedFraction: snapshot.isAvailable ? 1 - remaining : 1,
+            resetsAt: nil,
+            detail: nil
+        )]
+        return usage
     }
 
     static func fetchAPI(
@@ -795,6 +820,34 @@ private nonisolated final class DeepSeekOptionalSummaryResult: @unchecked Sendab
     func complete(_ value: Result<DeepSeekUsageSummary, Error>) {
         lock.withLock {
             if storage == nil { storage = value }
+        }
+    }
+}
+
+nonisolated final class DeepSeekBalancePeakStore: @unchecked Sendable {
+    static let shared = DeepSeekBalancePeakStore()
+
+    private let defaults: UserDefaults
+    private let key: String
+    private let lock = NSLock()
+
+    init(defaults: UserDefaults = .standard, key: String = "deepseek-balance-peaks.v1") {
+        self.defaults = defaults
+        self.key = key
+    }
+
+    func record(currency: String, total: Double) -> Double {
+        let id = currency.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return lock.withLock {
+            var peaks = defaults.data(forKey: key)
+                .flatMap { try? JSONDecoder().decode([String: Double].self, from: $0) } ?? [:]
+            let peak = max(peaks[id] ?? 0, total)
+            guard peaks[id] != peak else { return peak }
+            peaks[id] = peak
+            if let data = try? JSONEncoder().encode(peaks) {
+                defaults.set(data, forKey: key)
+            }
+            return peak
         }
     }
 }

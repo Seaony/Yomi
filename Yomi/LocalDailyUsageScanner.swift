@@ -458,41 +458,72 @@ actor LocalDailyUsageScanner {
         guard let end = calendar.date(byAdding: .day, value: 1, to: todayStart),
               let last30DaysStart = calendar.date(byAdding: .day, value: -29, to: todayStart)
         else { return nil }
-        let periods = PeriodAccumulators(
+        var periods = PeriodAccumulators(
             todayStart: todayStart,
             last30DaysStart: last30DaysStart,
             currentWeekStart: currentWeekStart,
             end: end
         )
-        return switch providerID.rawValue {
-        case "codex": scanCodex(
-            periods: periods,
-            homeDirectory: homeDirectory,
-            pricingCatalog: pricingCatalog
-        )
-        case "claude": scanClaude(
-            periods: periods,
-            homeDirectory: homeDirectory,
-            pricingCatalog: pricingCatalog,
-            cacheProvider: cacheProvider,
-            filter: .excludeVertex
-        )
-        case "vertexai": scanClaude(
-            periods: periods,
-            homeDirectory: homeDirectory,
-            pricingCatalog: pricingCatalog,
-            cacheProvider: cacheProvider,
-            filter: allowVertexClaudeFallback ? .all : .vertexOnly
-        )
-        default: nil
+        switch providerID.rawValue {
+        case "codex":
+            scanCodex(
+                periods: &periods,
+                homeDirectory: homeDirectory,
+                pricingCatalog: pricingCatalog,
+                modelFilter: { !Self.isDeepSeekModel($0) }
+            )
+        case "claude":
+            scanClaude(
+                periods: &periods,
+                homeDirectory: homeDirectory,
+                pricingCatalog: pricingCatalog,
+                cacheProvider: cacheProvider,
+                filter: .excludeVertex,
+                modelFilter: { !Self.isDeepSeekModel($0) }
+            )
+        case "vertexai":
+            scanClaude(
+                periods: &periods,
+                homeDirectory: homeDirectory,
+                pricingCatalog: pricingCatalog,
+                cacheProvider: cacheProvider,
+                filter: allowVertexClaudeFallback ? .all : .vertexOnly,
+                modelFilter: { !Self.isDeepSeekModel($0) }
+            )
+        case "deepseek":
+            loadCachedStatesIfNeeded(provider: "codex")
+            loadCachedStatesIfNeeded(provider: "claude-filtered")
+            scanDeepSeekHarness(
+                periods: &periods,
+                homeDirectory: homeDirectory,
+                pricingCatalog: pricingCatalog
+            )
+            scanCodex(
+                periods: &periods,
+                homeDirectory: homeDirectory,
+                pricingCatalog: pricingCatalog,
+                modelFilter: Self.isDeepSeekModel
+            )
+            scanClaude(
+                periods: &periods,
+                homeDirectory: homeDirectory,
+                pricingCatalog: pricingCatalog,
+                cacheProvider: "claude-filtered",
+                filter: .excludeVertex,
+                modelFilter: Self.isDeepSeekModel
+            )
+        default:
+            return nil
         }
+        return periods.summary
     }
 
     private func scanCodex(
-        periods: PeriodAccumulators,
+        periods: inout PeriodAccumulators,
         homeDirectory: URL,
-        pricingCatalog: ModelPricingCatalog?
-    ) -> LocalTokenUsageSummary? {
+        pricingCatalog: ModelPricingCatalog?,
+        modelFilter: (String?) -> Bool
+    ) {
         let files = Self.logFiles(
             modifiedSince: periods.last30DaysStart,
             below: Self.codexSessionRoots(homeDirectory: homeDirectory)
@@ -624,13 +655,13 @@ actor LocalDailyUsageScanner {
         )
         let sessions = Self.canonicalCodexSessions(codexFileStates)
         let droppedPrefixes = Self.replayedCodexPrefixes(sessions)
-        var accumulated = periods
         var rateCache: [String: RateResolution] = [:]
         for (path, state) in sessions {
             let droppedCount = droppedPrefixes[path] ?? 0
             for sample in state.samples.dropFirst(droppedCount) {
                 let priorityTurn = sample.turnID.flatMap { priorityTurns[$0] }
                 let pricedModel = Self.codexPricedModel(sample: sample, priorityTurn: priorityTurn)
+                guard modelFilter(pricedModel ?? sample.model) else { continue }
                 let rates = pricedModel.flatMap { model -> ModelTokenRates? in
                     let era: String
                     if sample.timestamp < Self.codexGPT56PricingCutoff {
@@ -665,14 +696,13 @@ actor LocalDailyUsageScanner {
                     else { return base }
                     return base * multiplier
                 }
-                accumulated.add(
+                periods.add(
                     timestamp: sample.timestamp,
                     tokens: sample.tokens.codexTotal,
                     valueUSD: valueUSD
                 )
             }
         }
-        return accumulated.summary
     }
 
     private static func canonicalCodexSessions(
@@ -753,12 +783,13 @@ actor LocalDailyUsageScanner {
     }
 
     private func scanClaude(
-        periods: PeriodAccumulators,
+        periods: inout PeriodAccumulators,
         homeDirectory: URL,
         pricingCatalog: ModelPricingCatalog?,
         cacheProvider: String,
-        filter: ClaudeLogProviderFilter
-    ) -> LocalTokenUsageSummary? {
+        filter: ClaudeLogProviderFilter,
+        modelFilter: (String?) -> Bool
+    ) {
         let files = Self.logFiles(
             modifiedSince: periods.last30DaysStart,
             below: Self.claudeProjectRoots(homeDirectory: homeDirectory)
@@ -889,10 +920,10 @@ actor LocalDailyUsageScanner {
             unkeyedSamples.append(contentsOf: state.unkeyedSamples)
         }
         let samples = keyedSamples.values.map(\.sample) + unkeyedSamples
-        guard !samples.isEmpty else { return nil }
-        var accumulated = periods
+        guard !samples.isEmpty else { return }
         var rateCache: [String: RateResolution] = [:]
         for sample in samples {
+            guard modelFilter(sample.model) else { continue }
             let era = sample.timestamp < Self.claudeFullContextPricingCutoff ? "historical" : "current"
             let key = "\(era):\(sample.model)"
             let rates: ModelTokenRates?
@@ -914,13 +945,12 @@ actor LocalDailyUsageScanner {
                 rates = nil
             }
             let valueUSD = rates.map { Self.claudeCost(sample: sample, rates: $0) }
-            accumulated.add(
+            periods.add(
                 timestamp: sample.timestamp,
                 tokens: sample.tokens.claudeTotal,
                 valueUSD: valueUSD
             )
         }
-        return accumulated.summary
     }
 
     private static func logFiles(modifiedSince start: Date, below roots: [URL]) -> [LogFile] {
@@ -1680,6 +1710,48 @@ actor LocalDailyUsageScanner {
                     : nil)
         }
         return catalog.rates(providerID: "openai", modelID: normalizedCodexModel(trimmed))
+    }
+
+    private static func isDeepSeekModel(_ rawModel: String?) -> Bool {
+        guard let rawModel else { return false }
+        let model = rawModel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !model.isEmpty else { return false }
+        if let slash = model.firstIndex(of: "/") {
+            return String(model[..<slash]) == "deepseek"
+        }
+        return model == "deepseek" || model.hasPrefix("deepseek-")
+    }
+
+    private func scanDeepSeekHarness(
+        periods: inout PeriodAccumulators,
+        homeDirectory: URL,
+        pricingCatalog: ModelPricingCatalog?
+    ) {
+        let sessions = DeepSeekHarnessUsageReader.sessions(
+            homeDirectory: homeDirectory,
+            modifiedSince: periods.last30DaysStart
+        )
+        for session in sessions {
+            let rates = pricingCatalog?.rates(
+                providerID: "deepseek",
+                modelID: session.model
+            )
+            periods.add(
+                timestamp: session.timestamp,
+                tokens: session.tokens,
+                valueUSD: rates.map { Self.deepSeekHarnessCost(session, rates: $0) }
+            )
+        }
+    }
+
+    private static func deepSeekHarnessCost(
+        _ usage: DeepSeekHarnessSessionUsage,
+        rates: ModelTokenRates
+    ) -> Double {
+        Double(usage.uncachedInputTokens) * rates.input
+            + Double(usage.cacheReadTokens) * (rates.cacheRead ?? rates.input)
+            + Double(usage.cacheWriteTokens) * (rates.cacheWrite ?? rates.input)
+            + Double(usage.outputTokens) * rates.output
     }
 
     private static func claudeCatalogRates(

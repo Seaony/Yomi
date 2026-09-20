@@ -76,6 +76,7 @@ actor UsageCollector {
         guard descriptor.id.rawValue == "codex"
             || descriptor.id.rawValue == "claude"
             || descriptor.id.rawValue == "vertexai"
+            || descriptor.id.rawValue == "deepseek"
         else {
             return usage
         }
@@ -94,6 +95,7 @@ actor UsageCollector {
         guard descriptor.id.rawValue == "codex"
             || descriptor.id.rawValue == "claude"
             || descriptor.id.rawValue == "vertexai"
+            || descriptor.id.rawValue == "deepseek"
         else {
             return usage
         }
@@ -715,6 +717,7 @@ actor UsageCollector {
                     ? (resolvedSecret.isEmpty ? nil : resolvedSecret)
                     : nil,
                 selectedProfileID: configuration.account.isEmpty ? nil : configuration.account,
+                balancePeaks: DeepSeekBalancePeakStore.shared,
                 session: session
             )
         }

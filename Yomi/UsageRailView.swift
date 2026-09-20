@@ -648,6 +648,10 @@ private struct ProviderRailItem: View {
     }
 
     private var headlineWindow: UsageWindow? {
+        if descriptor.id.rawValue == "deepseek",
+           let balance = usage.additionalWindows.first(where: { $0.id == "deepseek-balance" }) {
+            return balance
+        }
         if descriptor.id.rawValue == "deepinfra",
            let cost = usage.providerCost,
            cost.used.isFinite,
