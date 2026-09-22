@@ -1,5 +1,4 @@
 import Foundation
-import LocalAuthentication
 import Security
 
 nonisolated enum ZedUsageError: LocalizedError, Equatable {
@@ -289,14 +288,12 @@ nonisolated enum ZedUsageFetcher {
     }
 
     static func loadCredentials(serviceURL: String) throws -> ZedCredentials? {
-        let context = LAContext()
-        context.interactionNotAllowed = true
-        let common: [String: Any] = [
+        var common: [String: Any] = [
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnAttributes as String: true,
             kSecReturnData as String: true,
-            kSecUseAuthenticationContext as String: context,
         ]
+        KeychainAccess.applyInteractionPolicy(to: &common)
         var internet = common
         internet[kSecClass as String] = kSecClassInternetPassword
         internet[kSecAttrServer as String] = serviceURL
@@ -309,7 +306,7 @@ nonisolated enum ZedUsageFetcher {
 
     private static func credentials(query: [String: Any]) throws -> ZedCredentials? {
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = KeychainAccess.perform { SecItemCopyMatching(query as CFDictionary, &result) }
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess else { throw ZedUsageError.keychainUnavailable }
         guard let item = result as? [String: Any],

@@ -1,5 +1,4 @@
 import Foundation
-import LocalAuthentication
 import Security
 
 enum UsageCollectionError: LocalizedError {
@@ -1036,17 +1035,16 @@ actor UsageCollector {
     }
 
     private func claudeKeychainCredentialData() -> Data? {
-        let context = LAContext()
-        context.interactionNotAllowed = true
-        let query: [String: Any] = [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "Claude Code-credentials",
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnData as String: true,
-            kSecUseAuthenticationContext as String: context,
         ]
+        KeychainAccess.applyInteractionPolicy(to: &query)
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else {
+        let status = KeychainAccess.perform { SecItemCopyMatching(query as CFDictionary, &item) }
+        guard status == errSecSuccess else {
             return nil
         }
         return item as? Data

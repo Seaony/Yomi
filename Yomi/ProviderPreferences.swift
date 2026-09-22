@@ -83,7 +83,8 @@ private nonisolated enum SecretVault {
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+        let status = KeychainAccess.perform { SecItemCopyMatching(query as CFDictionary, &item) }
+        guard status == errSecSuccess,
               let data = item as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
@@ -91,29 +92,34 @@ private nonisolated enum SecretVault {
     static func write(_ value: String, account: String) throws {
         let data = Data(value.utf8)
         let query = baseQuery(account: account)
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        let status = KeychainAccess.perform {
+            SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        }
         if status == errSecItemNotFound {
             var addition = query
             addition[kSecValueData as String] = data
-            try check(SecItemAdd(addition as CFDictionary, nil))
+            try check(KeychainAccess.perform { SecItemAdd(addition as CFDictionary, nil) })
         } else {
             try check(status)
         }
     }
 
     static func delete(account: String) throws {
-        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
+        let query = baseQuery(account: account)
+        let status = KeychainAccess.perform { SecItemDelete(query as CFDictionary) }
         if status != errSecItemNotFound {
             try check(status)
         }
     }
 
     private static func baseQuery(account: String) -> [String: Any] {
-        [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
+        KeychainAccess.applyInteractionPolicy(to: &query)
+        return query
     }
 
     private static func check(_ status: OSStatus) throws {
