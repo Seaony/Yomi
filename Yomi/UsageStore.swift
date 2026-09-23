@@ -1,6 +1,5 @@
 import Combine
 import Foundation
-import SweetCookieKit
 
 @MainActor
 final class UsageStore: ObservableObject {
@@ -80,12 +79,7 @@ final class UsageStore: ObservableObject {
 
         var nextRequest: RefreshRequest? = request
         while let currentRequest = nextRequest {
-            let allowsInteraction = currentRequest.providerID != nil
-            await KeychainAccess.$allowsInteraction.withValue(allowsInteraction) {
-                await BrowserCookieKeychainAccessGate.$isUserInteractionDisallowed.withValue(!allowsInteraction) {
-                    await performRefresh(providerID: currentRequest.providerID)
-                }
-            }
+            await performRefresh(providerID: currentRequest.providerID)
             nextRequest = dequeueRefresh()
         }
     }

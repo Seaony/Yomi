@@ -33,6 +33,7 @@ actor UsageCollector {
     private var pricingCatalogReloadAt = Date.distantPast
     private let localUsageScanner = LocalDailyUsageScanner()
     private var claudeWeeklyAmountEstimator: ClaudeWeeklyAmountEstimator
+    private var cachedClaudeKeychainCredential: (data: Data, expiresAt: Date?)?
 
     init() {
         let configuration = URLSessionConfiguration.ephemeral
@@ -866,8 +867,14 @@ actor UsageCollector {
         let configured = secret.trimmingCharacters(in: .whitespacesAndNewlines)
         let environmentCredential = environmentSecret(for: descriptor)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let local = localCredential(for: descriptor.id)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let needsLocalCredential: Bool = switch configuration.source {
+        case .automatic, .account: !configured.lowercased().hasPrefix("sk-ant-oat")
+        case .token: configured.isEmpty && environmentCredential.isEmpty
+        case .cookie, .command, .endpoint: false
+        }
+        let local = needsLocalCredential
+            ? localCredential(for: descriptor.id).trimmingCharacters(in: .whitespacesAndNewlines)
+            : ""
         let oauthCredential = [configured, local].first { value in
             value.lowercased().hasPrefix("sk-ant-oat")
         }
@@ -925,11 +932,26 @@ actor UsageCollector {
                     guard let recipe = ProviderRecipes.recipe(for: descriptor.id) else {
                         throw UsageCollectionError.missingEndpoint
                     }
-                    return try await remoteUsage(
-                        descriptor: descriptor,
-                        recipe: recipe,
-                        secret: credential
-                    )
+                    do {
+                        return try await remoteUsage(
+                            descriptor: descriptor,
+                            recipe: recipe,
+                            secret: credential
+                        )
+                    } catch UsageCollectionError.requestFailed(401) {
+                        guard credential == local,
+                              invalidateClaudeKeychainCredential(rejectedToken: credential)
+                        else { throw UsageCollectionError.requestFailed(401) }
+                        let renewed = localCredential(for: descriptor.id)
+                        guard !renewed.isEmpty, renewed != credential else {
+                            throw UsageCollectionError.requestFailed(401)
+                        }
+                        return try await remoteUsage(
+                            descriptor: descriptor,
+                            recipe: recipe,
+                            secret: renewed
+                        )
+                    }
                 case .adminAPI:
                     let credential = [configured, environmentCredential]
                         .first { $0.lowercased().hasPrefix("sk-ant-admin") }
@@ -1034,20 +1056,48 @@ actor UsageCollector {
         }
     }
 
-    private func claudeKeychainCredentialData() -> Data? {
-        var query: [String: Any] = [
+    func claudeKeychainCredentialData(
+        now: Date = Date(),
+        read: @Sendable ([String: Any]) -> (OSStatus, Data?) = UsageCollector.readClaudeKeychain
+    ) -> Data? {
+        if let cached = cachedClaudeKeychainCredential,
+           cached.expiresAt.map({ $0 > now }) ?? true {
+            return cached.data
+        }
+        cachedClaudeKeychainCredential = nil
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "Claude Code-credentials",
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnData as String: true,
         ]
-        KeychainAccess.applyInteractionPolicy(to: &query)
-        var item: CFTypeRef?
-        let status = KeychainAccess.perform { SecItemCopyMatching(query as CFDictionary, &item) }
-        guard status == errSecSuccess else {
-            return nil
+        let (status, data) = read(query)
+        guard status == errSecSuccess, let data else { return nil }
+        if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let oauth = root["claudeAiOauth"] as? [String: Any],
+           let token = oauth["accessToken"] as? String, !token.isEmpty {
+            let expiresAt = (oauth["expiresAt"] as? Double)
+                .map { Date(timeIntervalSince1970: $0 / 1000) }
+            if expiresAt.map({ $0 > now }) ?? true {
+                cachedClaudeKeychainCredential = (data, expiresAt)
+            }
         }
-        return item as? Data
+        return data
+    }
+
+    func invalidateClaudeKeychainCredential(rejectedToken: String) -> Bool {
+        guard let data = cachedClaudeKeychainCredential?.data,
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let oauth = root["claudeAiOauth"] as? [String: Any],
+              oauth["accessToken"] as? String == rejectedToken else { return false }
+        cachedClaudeKeychainCredential = nil
+        return true
+    }
+
+    private nonisolated static func readClaudeKeychain(_ query: [String: Any]) -> (OSStatus, Data?) {
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        return (status, item as? Data)
     }
 
     private func addingLocalMetadata(
@@ -1207,7 +1257,7 @@ actor UsageCollector {
         }
 
         var credentialData = localCandidates(for: descriptor.id).compactMap { try? Data(contentsOf: $0) }
-        if let keychainData = claudeKeychainCredentialData() {
+        if let keychainData = cachedClaudeKeychainCredential?.data {
             credentialData.append(keychainData)
         }
         for data in credentialData {
