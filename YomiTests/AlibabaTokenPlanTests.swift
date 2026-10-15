@@ -40,7 +40,10 @@ struct AlibabaTokenPlanTests {
         )
         #expect(usage.plan == "Pro")
         #expect(usage.windows.map(\.usedFraction) == [0.125, 0.4])
-        #expect(usage.windows.map(\.detail) == ["250 / 2,000 credits used", "4,000 / 10,000 credits used"])
+        #expect(usage.windows.map(\.detail) == [
+            AppLocalization.text("已用 250 / 2,000 点数", "250 / 2,000 credits used"),
+            AppLocalization.text("已用 4,000 / 10,000 点数", "4,000 / 10,000 credits used"),
+        ])
     }
 
     @Test
@@ -51,7 +54,8 @@ struct AlibabaTokenPlanTests {
         #expect(AlibabaTokenPlanFetcher.Region.international.productCode == "sfm_tokenplanteams_dp_intl")
         #expect(AlibabaTokenPlanFetcher.Region.chinaMainlandPersonal.productCode == "sfm_tokenplansolo_public_cn")
         #expect(AlibabaTokenPlanFetcher.cliArguments(region: .internationalPersonal) == [
-            "usage", "token-plan", "--console-region", "ap-southeast-1",
+            "console", "call", "--api", "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage",
+            "--data", "{}", "--console-region", "ap-southeast-1",
             "--console-site", "international", "--output", "json",
         ])
     }

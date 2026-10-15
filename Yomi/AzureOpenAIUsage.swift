@@ -162,18 +162,32 @@ enum AzureOpenAIUsageFetcher {
 
     static func normalizedEndpoint(_ raw: String) throws -> URL {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let candidate = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
-        guard let components = URLComponents(string: candidate),
-              components.scheme?.lowercased() == "https",
-              components.user == nil,
-              components.password == nil,
-              let host = components.host,
-              !host.isEmpty,
-              let url = components.url
+        let candidate = hasExplicitScheme(trimmed) ? trimmed : "https://\(trimmed)"
+        guard let url = ProviderEndpointValidator.privateNetworkURL(candidate),
+              url.scheme?.lowercased() == "https"
         else {
             throw AzureOpenAIUsageError.invalidEndpoint
         }
         return url
+    }
+
+    private static func hasExplicitScheme(_ raw: String) -> Bool {
+        guard let colon = raw.firstIndex(of: ":") else { return false }
+        if raw[colon...].hasPrefix("://") { return true }
+        if let authorityEnd = raw.firstIndex(where: { ["/", "?", "#"].contains($0) }),
+           colon > authorityEnd {
+            return false
+        }
+        let afterColon = raw.index(after: colon)
+        guard afterColon < raw.endIndex else { return true }
+        let portEnd = raw[afterColon...].firstIndex { ["/", "?", "#"].contains($0) } ?? raw.endIndex
+        let suffix = raw[afterColon..<portEnd]
+        if !suffix.isEmpty, suffix.allSatisfy(\.isNumber) { return false }
+        let scheme = raw[..<colon]
+        guard let first = scheme.first, first.isLetter else { return false }
+        return scheme.dropFirst().allSatisfy {
+            $0.isLetter || $0.isNumber || ["+", "-", "."].contains($0)
+        }
     }
 
     private static func apiRoot(_ endpoint: URL, expected: [String]) -> URL {

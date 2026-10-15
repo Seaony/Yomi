@@ -300,12 +300,18 @@ nonisolated enum ZaiUsageFetcher {
               root["success"] as? Bool == true,
               integer(root["code"]) == 200
         else {
-            throw ZaiUsageError.parseFailed("invalid quota response")
+            throw ZaiUsageError.parseFailed(AppLocalization.text(
+                "不支持的额度格式，请在用量面板查看方案用量",
+                "Unsupported quota format. Check Usage Dashboard for plan usage."
+            ))
         }
         guard let response = root["data"] as? [String: Any],
               let rawLimits = response["limits"] as? [Any]
         else {
-            throw ZaiUsageError.parseFailed("missing quota limits")
+            throw ZaiUsageError.parseFailed(AppLocalization.text(
+                "不支持的额度格式，请在用量面板查看方案用量",
+                "Unsupported quota format. Check Usage Dashboard for plan usage."
+            ))
         }
 
         let limits = try rawLimits.compactMap(parseLimit)
@@ -324,15 +330,25 @@ nonisolated enum ZaiUsageFetcher {
 
         var windows: [UsageWindow] = []
         if let primaryLimit {
-            windows.append(usageWindow(primaryLimit, id: "zai-primary", fallbackLabel: "5-hour"))
+            windows.append(usageWindow(primaryLimit, id: "zai-primary", fallbackLabel: "5-hour", now: now))
         }
         if sessionLimit != nil, let tokenLimit {
-            windows.append(usageWindow(tokenLimit, id: "zai-secondary", fallbackLabel: "Weekly"))
+            windows.append(usageWindow(tokenLimit, id: "zai-secondary", fallbackLabel: "Weekly", now: now))
         }
         var additional: [UsageWindow] = []
         if (tokenLimit != nil || sessionLimit != nil), let timeLimit {
-            additional.append(usageWindow(timeLimit, id: "zai-mcp", fallbackLabel: "MCP"))
+            additional.append(usageWindow(timeLimit, id: "zai-mcp", fallbackLabel: "MCP", now: now))
         }
+        let details: [UsageDetail] = limits.isEmpty || limits.count < rawLimits.count ? [UsageDetail(
+            id: "zai-unavailable-quota",
+            label: tokenLimits.isEmpty
+                ? AppLocalization.text("Coding Plan 用量", "Coding Plan usage")
+                : AppLocalization.text("其他额度", "Additional quota"),
+            value: AppLocalization.text(
+                "暂不可用，请在用量面板查看完整方案用量",
+                "Unavailable. Check Usage Dashboard for complete plan usage."
+            )
+        )] : []
 
         let plan = ["planName", "plan", "plan_type", "packageName", "level"]
             .lazy
@@ -346,7 +362,7 @@ nonisolated enum ZaiUsageFetcher {
             additionalWindows: additional,
             balance: nil,
             plan: plan,
-            details: [],
+            details: details,
             updatedAt: now,
             message: nil
         )
@@ -371,13 +387,19 @@ nonisolated enum ZaiUsageFetcher {
     }
 
     private static func parseLimit(_ raw: Any) throws -> Limit? {
+        if let object = raw as? [String: Any],
+           let type = object["type"] as? String,
+           LimitKind(rawValue: type) == nil { return nil }
         guard let object = raw as? [String: Any],
               let type = object["type"] as? String,
               let unit = integer(object["unit"]),
               let number = integer(object["number"]),
               let percentage = integer(object["percentage"])
         else {
-            throw ZaiUsageError.parseFailed("invalid quota limit")
+            throw ZaiUsageError.parseFailed(AppLocalization.text(
+                "不支持的额度条目，请在用量面板查看方案用量",
+                "Unsupported quota entry. Check Usage Dashboard for plan usage."
+            ))
         }
         guard let kind = LimitKind(rawValue: type) else { return nil }
         let usage = try optionalInteger(object["usage"], field: "limit.usage")
@@ -423,7 +445,8 @@ nonisolated enum ZaiUsageFetcher {
     private static func usageWindow(
         _ limit: Limit,
         id: String,
-        fallbackLabel: String
+        fallbackLabel: String,
+        now: Date
     ) -> UsageWindow {
         let label: String
         if limit.kind == .time {
@@ -436,11 +459,15 @@ nonisolated enum ZaiUsageFetcher {
             label = fallbackLabel
         }
         let detail = detailValue(limit)
+        let isFiveHourPlan = limit.kind != .time && limit.windowMinutes == 300
+        let reset = limit.reset.flatMap {
+            !isFiveHourPlan || $0 <= now.addingTimeInterval(5 * 3_600 + 60) ? $0 : nil
+        }
         return UsageWindow(
             id: id,
             label: label,
             usedFraction: limit.percent / 100,
-            resetsAt: limit.reset,
+            resetsAt: reset,
             detail: detail.isEmpty ? nil : detail
         )
     }

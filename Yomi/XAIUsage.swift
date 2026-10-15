@@ -54,6 +54,22 @@ nonisolated enum XAIUsageFetcher {
             required: true
         )
         let balance = try parseBalance(balanceData)
+        let liveRemaining: Double?
+        do {
+            let data = try await request(
+                teamURL.appendingPathComponent("postpaid/invoice/preview"),
+                method: "GET",
+                apiKey: apiKey,
+                body: nil,
+                session: session,
+                required: false,
+                timeout: 5
+            )
+            liveRemaining = parseLiveRemaining(data, balance: balance)
+        } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
+            liveRemaining = nil
+        }
 
         let history: (daily: [DailySpend], partial: Bool)?
         do {
@@ -72,7 +88,7 @@ nonisolated enum XAIUsageFetcher {
         } catch {
             history = nil
         }
-        return providerUsage(balance: balance, history: history, now: now)
+        return providerUsage(balance: balance, history: history, now: now, liveRemaining: liveRemaining)
     }
 
     static func parseBalance(_ data: Data) throws -> Double {
@@ -87,6 +103,16 @@ nonisolated enum XAIUsageFetcher {
             throw XAIUsageError.parseFailure("balance total.val is not a cent amount")
         }
         return -cents / 100
+    }
+
+    static func parseLiveRemaining(_ data: Data, balance: Double) -> Double? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let invoice = root["coreInvoice"] as? [String: Any],
+              let raw = invoice["amountAfterVat"] as? String,
+              raw.range(of: #"^-?\d+$"#, options: .regularExpression) != nil,
+              let cents = Double(raw), cents.isFinite,
+              abs(cents) <= 9_007_199_254_740_991 else { return nil }
+        return balance - cents / 100
     }
 
     static func parseHistory(_ data: Data) throws -> (daily: [DailySpend], partial: Bool) {
@@ -149,7 +175,8 @@ nonisolated enum XAIUsageFetcher {
     static func providerUsage(
         balance: Double,
         history: (daily: [DailySpend], partial: Bool)?,
-        now: Date
+        now: Date,
+        liveRemaining: Double? = nil
     ) -> ProviderUsage {
         let total = history?.daily.reduce(0) { $0 + $1.value } ?? 0
         var details = [UsageDetail(
@@ -157,6 +184,13 @@ nonisolated enum XAIUsageFetcher {
             label: AppLocalization.text("预付余额", "Prepaid balance"),
             value: String(format: "$%.2f", balance)
         )]
+        if let liveRemaining {
+            details.append(UsageDetail(
+                id: "xai-live-remaining",
+                label: AppLocalization.text("实时剩余（估算）", "Live remaining (est.)"),
+                value: String(format: "$%.2f", liveRemaining)
+            ))
+        }
         if let history {
             details.append(UsageDetail(
                 id: "xai-history",
@@ -191,12 +225,13 @@ nonisolated enum XAIUsageFetcher {
         apiKey: String,
         body: Data?,
         session: URLSession,
-        required: Bool
+        required: Bool,
+        timeout: TimeInterval = 18
     ) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.httpBody = body
-        request.timeoutInterval = 18
+        request.timeoutInterval = timeout
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }

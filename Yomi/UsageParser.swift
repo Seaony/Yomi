@@ -188,11 +188,13 @@ nonisolated enum UsageParser {
             )
         }()
         if windows.isEmpty, let providerCost, providerCost.limit > 0 {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
             windows = [UsageWindow(
                 id: "claude-spend-limit",
                 label: "Spend limit",
                 usedFraction: providerCost.used / providerCost.limit,
-                resetsAt: nil,
+                resetsAt: calendar.dateInterval(of: .month, for: Date())?.end,
                 detail: String(format: "$%.2f / $%.2f", providerCost.used, providerCost.limit)
             )]
         }

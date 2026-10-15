@@ -37,12 +37,40 @@ enum OpenCodeUsageFetcher {
             throw UsageCollectionError.missingCredential
         }
 
+        let hasConsoleCookie = cookie.split(separator: ";").contains {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("__Host-console_session=")
+        }
         let workspaceID: String
         if let configured = normalizeWorkspaceID(rawWorkspaceID) {
             workspaceID = configured
+        } else if let rawWorkspaceID,
+                  !rawWorkspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw UsageCollectionError.unreadableResponse
+        } else if hasConsoleCookie {
+            workspaceID = try await OpenCodeGoUsageFetcher.consoleOrLegacy(cookie: cookie) {
+                try await fetchConsoleWorkspaceID(cookie: cookie, session: session)
+            } legacy: {
+                try await fetchWorkspaceID(cookie: cookie, session: session)
+            }
         } else {
             workspaceID = try await fetchWorkspaceID(cookie: cookie, session: session)
         }
+        if hasConsoleCookie {
+            return try await OpenCodeGoUsageFetcher.consoleOrLegacy(cookie: cookie) {
+                try await fetchConsoleUsage(workspaceID: workspaceID, cookie: cookie, session: session, now: now)
+            } legacy: {
+                try await fetchLegacyUsage(workspaceID: workspaceID, cookie: cookie, session: session, now: now)
+            }
+        }
+        return try await fetchLegacyUsage(workspaceID: workspaceID, cookie: cookie, session: session, now: now)
+    }
+
+    private static func fetchLegacyUsage(
+        workspaceID: String,
+        cookie: String,
+        session: URLSession,
+        now: Date
+    ) async throws -> ProviderUsage {
         do {
             let text = try await subscriptionText(
                 workspaceID: workspaceID,
@@ -149,12 +177,12 @@ enum OpenCodeUsageFetcher {
 
     static func requestCookieHeader(from raw: String?) -> String? {
         guard let raw else { return nil }
-        let allowed = Set(["auth", "__Host-auth"])
+        let allowed = Set(["auth", "__Host-auth", "__Host-console_session"])
         let components = raw.split(separator: ";").compactMap { part -> String? in
             let pair = part.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let separator = pair.firstIndex(of: "=") else { return nil }
             let name = String(pair[..<separator])
-            guard allowed.contains(name) else { return nil }
+            guard allowed.contains(name), !pair[pair.index(after: separator)...].isEmpty else { return nil }
             return pair
         }
         return components.isEmpty ? nil : components.joined(separator: "; ")
@@ -165,11 +193,18 @@ enum OpenCodeUsageFetcher {
             return nil
         }
         if trimmed.hasPrefix("wrk_"), trimmed.count > 4 { return trimmed }
+        if isConsoleWorkspaceID(trimmed) { return trimmed }
         if let url = URL(string: trimmed),
            let index = url.pathComponents.firstIndex(of: "workspace"),
            url.pathComponents.count > index + 1 {
             let candidate = url.pathComponents[index + 1]
             if candidate.hasPrefix("wrk_"), candidate.count > 4 { return candidate }
+        }
+        if let url = URL(string: trimmed), url.scheme == "https", url.host == "opencode.ai",
+           let index = url.pathComponents.firstIndex(of: "console"),
+           url.pathComponents.count > index + 1 {
+            let candidate = url.pathComponents[index + 1]
+            if isConsoleWorkspaceID(candidate) { return candidate }
         }
         if let range = trimmed.range(of: #"wrk_[A-Za-z0-9]+"#, options: .regularExpression) {
             return String(trimmed[range])
@@ -177,10 +212,121 @@ enum OpenCodeUsageFetcher {
         return nil
     }
 
+    private static func isConsoleWorkspaceID(_ value: String) -> Bool {
+        value.range(of: #"^(?:wrk_|org_)[A-Za-z0-9_-]+$"#, options: .regularExpression) != nil
+    }
+
+    static func fetchConsoleWorkspaceID(cookie: String, session: URLSession) async throws -> String {
+        let text = try await OpenCodeGoUsageFetcher.consoleText(
+            path: "/console/api/orgs", workspaceID: nil, cookie: cookie, session: session
+        )
+        guard let data = text.data(using: .utf8),
+              let rows = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]],
+              let id = rows.compactMap({ $0["id"] as? String }).first(where: isConsoleWorkspaceID)
+        else { throw UsageCollectionError.unreadableResponse }
+        return id
+    }
+
+    private static func fetchConsoleUsage(
+        workspaceID: String,
+        cookie: String,
+        session: URLSession,
+        now: Date
+    ) async throws -> ProviderUsage {
+        let text = try await OpenCodeGoUsageFetcher.consoleText(
+            path: "/console/api/go/status", workspaceID: workspaceID, cookie: cookie, session: session
+        )
+        guard let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+        else { throw UsageCollectionError.unreadableResponse }
+        if let access = (object as? [String: Any])?["access"] as? [String: Any],
+           let meters = access["meters"] as? [String: Any],
+           let rolling = consoleWindow(meters["fiveHour"], id: "rolling", label: "5-hour", now: now) {
+            var windows = [rolling]
+            if let rawWeekly = meters["week"] as? [String: Any] {
+                guard let weekly = consoleWindow(rawWeekly, id: "weekly", label: "Weekly", now: now) else {
+                    throw UsageCollectionError.unreadableResponse
+                }
+                windows.append(weekly)
+            }
+            return ProviderUsage(
+                id: ProviderID(rawValue: "opencode"),
+                state: .ready,
+                windows: windows,
+                details: renewalDetails(dateValue(access["endsAt"])),
+                updatedAt: now
+            )
+        }
+        guard object is NSNull || (object as? [String: Any])?["access"] is NSNull else {
+            throw UsageCollectionError.unreadableResponse
+        }
+        let organizationText = try await OpenCodeGoUsageFetcher.consoleText(
+            path: "/console/api/orgs/current", workspaceID: workspaceID, cookie: cookie, session: session
+        )
+        guard let organizationData = organizationText.data(using: .utf8),
+              let organization = try? JSONDecoder().decode(OpenCodeConsoleOrganization.self, from: organizationData),
+              !organization.hasGoSubscription
+        else { throw UsageCollectionError.unreadableResponse }
+        let billingText = try await OpenCodeGoUsageFetcher.consoleText(
+            path: "/console/api/billing/status", workspaceID: workspaceID, cookie: cookie, session: session
+        )
+        guard let billingData = billingText.data(using: .utf8),
+              let billing = (try? JSONSerialization.jsonObject(with: billingData)) as? [String: Any],
+              billing["mode"] as? String == "pay-as-you-go"
+        else { throw UsageCollectionError.unreadableResponse }
+        let summaryText = try await OpenCodeGoUsageFetcher.consoleText(
+            path: "/console/api/usage/summary?range=30d", workspaceID: workspaceID, cookie: cookie, session: session
+        )
+        guard let summaryData = summaryText.data(using: .utf8),
+              let summary = try? JSONDecoder().decode(OpenCodeConsoleSummary.self, from: summaryData)
+        else { throw UsageCollectionError.unreadableResponse }
+        let balance = try? OpenCodeGoUsageFetcher.parseConsoleBalance(text: billingText)
+        return ProviderUsage(
+            id: ProviderID(rawValue: "opencode"),
+            state: .ready,
+            windows: [],
+            balance: balance.map { String(format: "$%.2f", $0) },
+            providerCost: ProviderCostSummary(
+                used: summary.totalCostMicroCents / OpenCodeBilling.usdScale,
+                limit: 0,
+                currencyCode: "USD",
+                period: AppLocalization.text("最近 30 天", "Last 30 days"),
+                balance: balance
+            ),
+            updatedAt: now
+        )
+    }
+
+    private static func consoleWindow(_ raw: Any?, id: String, label: String, now: Date) -> UsageWindow? {
+        guard let meter = raw as? [String: Any],
+              let used = doubleValue(meter["usedMicroCents"]),
+              let limit = doubleValue(meter["limitMicroCents"]), limit > 0
+        else { return nil }
+        return UsageWindow(
+            id: "opencode-\(id)", label: label,
+            usedFraction: min(1, max(0, used / limit)),
+            resetsAt: dateValue(meter["resetsAt"]).flatMap { date in
+                let interval = date.timeIntervalSince(now)
+                guard interval.isFinite, interval < Double(Int.max) else { return nil }
+                return interval <= 0 ? now : now.addingTimeInterval(TimeInterval(Int(interval)))
+            },
+            detail: nil
+        )
+    }
+
+    private static func renewalDetails(_ renewal: Date?) -> [UsageDetail] {
+        guard let renewal else { return [] }
+        return [UsageDetail(
+            id: "opencode-renewal",
+            label: AppLocalization.text("订阅续期", "Subscription renewal"),
+            value: renewal.formatted(.dateTime.locale(AppLocalization.currentLanguage.locale))
+        )]
+    }
+
     static func automaticCookieHeader() -> String? {
         let client = BrowserCookieClient()
         let query = BrowserCookieQuery(domains: ["opencode.ai", "app.opencode.ai"])
-        for browser in [Browser.chrome, Browser.dia] {
+        for browser in Browser.defaultImportOrder {
             guard let sources = try? client.records(matching: query, in: browser) else { continue }
             for source in sources {
                 let cookies = BrowserCookieClient.makeHTTPCookies(source.records, origin: query.origin)
@@ -330,6 +476,7 @@ enum OpenCodeUsageFetcher {
             ],
             additionalWindows: [],
             balance: nil,
+            details: renewalDetails(snapshot.renewsAt),
             updatedAt: now,
             message: nil
         )
@@ -500,6 +647,29 @@ enum OpenCodeUsageFetcher {
             of: #"\]\s*=\s*\[\s*\]\s*,\s*null\s*\)\s*$"#,
             options: .regularExpression
         ) != nil
+    }
+}
+
+private struct OpenCodeConsoleOrganization: Decodable {
+    let hasGoSubscription: Bool
+}
+
+private struct OpenCodeConsoleSummary: Decodable {
+    let totalCostMicroCents: Double
+
+    private enum CodingKeys: String, CodingKey {
+        case totalCostMicroCents
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let raw = try? container.decode(String.self, forKey: .totalCostMicroCents),
+           !raw.isEmpty, raw.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+           let value = Double(raw), value.isFinite {
+            totalCostMicroCents = value
+        } else {
+            totalCostMicroCents = try Double(container.decode(UInt64.self, forKey: .totalCostMicroCents))
+        }
     }
 }
 

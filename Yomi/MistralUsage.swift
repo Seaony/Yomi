@@ -41,7 +41,12 @@ nonisolated struct MistralDailyUsage: Sendable, Equatable {
         let cachedTokens: Int
         let outputTokens: Int
 
-        var totalTokens: Int { inputTokens + cachedTokens + outputTokens }
+        var totalTokens: Int {
+            guard let total = MistralTokenMath.total(inputTokens, cachedTokens, outputTokens) else {
+                preconditionFailure("Mistral token count exceeds supported range")
+            }
+            return total
+        }
     }
 
     let day: String
@@ -51,7 +56,22 @@ nonisolated struct MistralDailyUsage: Sendable, Equatable {
     let outputTokens: Int
     let models: [Model]
 
-    var totalTokens: Int { inputTokens + cachedTokens + outputTokens }
+    var totalTokens: Int {
+        guard let total = MistralTokenMath.total(inputTokens, cachedTokens, outputTokens) else {
+            preconditionFailure("Mistral token count exceeds supported range")
+        }
+        return total
+    }
+}
+
+private nonisolated enum MistralTokenMath {
+    static func total(_ input: Int, _ cached: Int, _ output: Int) -> Int? {
+        let lanes = [input, cached, output].sorted()
+        let extremes = lanes[0].addingReportingOverflow(lanes[2])
+        guard !extremes.overflow else { return nil }
+        let result = extremes.partialValue.addingReportingOverflow(lanes[1])
+        return result.overflow ? nil : result.partialValue
+    }
 }
 
 nonisolated struct MistralCredits: Sendable, Equatable {
@@ -89,7 +109,9 @@ nonisolated struct MistralUsageSnapshot: Sendable, Equatable {
     func toProviderUsage() -> ProviderUsage {
         let todayKey = MistralUsageFetcher.utcDayFormatter.string(from: updatedAt)
         let todayBucket = daily.first { $0.day == todayKey }
-        let totalTokens = totalInputTokens + totalCachedTokens + totalOutputTokens
+        guard let totalTokens = MistralTokenMath.total(totalInputTokens, totalCachedTokens, totalOutputTokens) else {
+            preconditionFailure("Mistral token count exceeds supported range")
+        }
         var windows: [UsageWindow] = []
         if let vibeUsage {
             windows.append(UsageWindow(
@@ -411,42 +433,39 @@ nonisolated enum MistralUsageFetcher {
         var modelCount = 0
         var daily: [String: DailyAccumulator] = [:]
 
-        if let models = response.completion?.models {
-            for (name, usage) in models {
+        for models in [response.completion?.models, response.chat?.models, response.vibeCode?.completion?.models] {
+            for (name, usage) in models ?? [:] {
                 modelCount += 1
-                let aggregate = aggregate(usage, prices: prices)
-                input = safeAdd(input, aggregate.input)
-                output = safeAdd(output, aggregate.output)
-                cached = safeAdd(cached, aggregate.cached)
+                let aggregate = try aggregate(usage, prices: prices)
+                input = try safeAdd(input, aggregate.input)
+                output = try safeAdd(output, aggregate.output)
+                cached = try safeAdd(cached, aggregate.cached)
                 addFinite(aggregate.cost, to: &totalCost)
-                addDaily(name: name, usage: usage, prices: prices, countsTokens: true, daily: &daily)
+                try addDaily(name: name, usage: usage, prices: prices, countsTokens: true, daily: &daily)
             }
         }
         for category in [response.ocr, response.connectors, response.audio] {
             for (name, usage) in category?.models ?? [:] {
-                let aggregate = aggregate(usage, prices: prices)
+                let aggregate = try aggregate(usage, prices: prices, countsTokens: false)
                 addFinite(aggregate.cost, to: &totalCost)
-                addDaily(name: name, usage: usage, prices: prices, countsTokens: false, daily: &daily)
+                try addDaily(name: name, usage: usage, prices: prices, countsTokens: false, daily: &daily)
             }
         }
         for (name, usage) in response.librariesAPI?.pages?.models ?? [:] {
-            let aggregate = aggregate(usage, prices: prices)
+            let aggregate = try aggregate(usage, prices: prices, countsTokens: false)
             addFinite(aggregate.cost, to: &totalCost)
-            addDaily(name: name, usage: usage, prices: prices, countsTokens: false, daily: &daily)
+            try addDaily(name: name, usage: usage, prices: prices, countsTokens: false, daily: &daily)
         }
         for (name, usage) in response.librariesAPI?.tokens?.models ?? [:] {
-            let aggregate = aggregate(usage, prices: prices)
-            input = safeAdd(input, aggregate.input)
-            output = safeAdd(output, aggregate.output)
-            cached = safeAdd(cached, aggregate.cached)
+            let aggregate = try aggregate(usage, prices: prices, countsTokens: false)
             addFinite(aggregate.cost, to: &totalCost)
-            addDaily(name: name, usage: usage, prices: prices, countsTokens: true, daily: &daily)
+            try addDaily(name: name, usage: usage, prices: prices, countsTokens: true, daily: &daily)
         }
         for models in [response.fineTuning?.training, response.fineTuning?.storage] {
             for (name, usage) in models ?? [:] {
-                let aggregate = aggregate(usage, prices: prices)
+                let aggregate = try aggregate(usage, prices: prices, countsTokens: false)
                 addFinite(aggregate.cost, to: &totalCost)
-                addDaily(name: name, usage: usage, prices: prices, countsTokens: false, daily: &daily)
+                try addDaily(name: name, usage: usage, prices: prices, countsTokens: false, daily: &daily)
             }
         }
 
@@ -454,6 +473,9 @@ nonisolated enum MistralUsageFetcher {
         let currency = rawCurrency.isEmpty ? "XXX" : rawCurrency.uppercased()
         let rawSymbol = response.currencySymbol?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let defaultSymbol = currency == "EUR" ? "€" : (currency == "XXX" ? "¤" : currency)
+        guard MistralTokenMath.total(input, cached, output) != nil else {
+            throw MistralUsageError.parseFailed("Token count exceeds supported range")
+        }
         return MistralUsageSnapshot(
             totalCost: totalCost,
             currency: currency,
@@ -462,7 +484,7 @@ nonisolated enum MistralUsageFetcher {
             totalOutputTokens: output,
             totalCachedTokens: cached,
             modelCount: modelCount,
-            daily: daily.values.map { $0.snapshot() }.sorted { $0.day < $1.day },
+            daily: try daily.values.map { try $0.snapshot() }.sorted { $0.day < $1.day },
             credits: nil,
             vibeUsage: nil,
             startDate: response.startDate.flatMap(parseDate),
@@ -618,41 +640,56 @@ nonisolated enum MistralUsageFetcher {
         return String(value[range])
     }
 
-    private static func priceIndex(_ prices: [Price]) -> [String: Double] {
-        var result: [String: Double] = [:]
+    private struct PriceKey: Hashable {
+        let eventType: String?
+        let metric: String
+        let group: String
+        let apiZone: String?
+        let serviceTier: String?
+    }
+
+    private static func priceIndex(_ prices: [Price]) -> [PriceKey: Double] {
+        var result: [PriceKey: Double] = [:]
         for price in prices {
             guard let metric = price.billingMetric,
                   let group = price.billingGroup,
                   let raw = price.price,
                   let value = Double(raw), value.isFinite
             else { continue }
-            result["\(metric)::\(group)"] = value
+            result[PriceKey(
+                eventType: price.eventType,
+                metric: metric,
+                group: group,
+                apiZone: price.apiZone,
+                serviceTier: price.serviceTier
+            )] = value
         }
         return result
     }
 
     private static func aggregate(
         _ usage: ModelUsage,
-        prices: [String: Double]
-    ) -> (input: Int, output: Int, cached: Int, cost: Double) {
+        prices: [PriceKey: Double],
+        countsTokens: Bool = true
+    ) throws -> (input: Int, output: Int, cached: Int, cost: Double) {
         var input = 0
         var output = 0
         var cached = 0
         var cost = 0.0
         for entry in usage.input ?? [] {
-            let value = entry.valuePaid ?? entry.value ?? 0
-            input = safeAdd(input, value)
-            addFinite(entryCost(entry, units: value, prices: prices), to: &cost)
+            let value = entry.value ?? entry.valuePaid ?? 0
+            if countsTokens { input = try safeAdd(input, value) }
+            addFinite(entryCost(entry, units: entry.valuePaid ?? entry.value ?? 0, prices: prices), to: &cost)
         }
         for entry in usage.output ?? [] {
-            let value = entry.valuePaid ?? entry.value ?? 0
-            output = safeAdd(output, value)
-            addFinite(entryCost(entry, units: value, prices: prices), to: &cost)
+            let value = entry.value ?? entry.valuePaid ?? 0
+            if countsTokens { output = try safeAdd(output, value) }
+            addFinite(entryCost(entry, units: entry.valuePaid ?? entry.value ?? 0, prices: prices), to: &cost)
         }
         for entry in usage.cached ?? [] {
-            let value = entry.valuePaid ?? entry.value ?? 0
-            cached = safeAdd(cached, value)
-            addFinite(entryCost(entry, units: value, prices: prices), to: &cost)
+            let value = entry.value ?? entry.valuePaid ?? 0
+            if countsTokens { cached = try safeAdd(cached, value) }
+            addFinite(entryCost(entry, units: entry.valuePaid ?? entry.value ?? 0, prices: prices), to: &cost)
         }
         return (input, output, cached, cost)
     }
@@ -660,23 +697,23 @@ nonisolated enum MistralUsageFetcher {
     private static func addDaily(
         name: String,
         usage: ModelUsage,
-        prices: [String: Double],
+        prices: [PriceKey: Double],
         countsTokens: Bool,
         daily: inout [String: DailyAccumulator]
-    ) {
+    ) throws {
         for (entries, kind) in [(usage.input ?? [], TokenKind.input),
                                 (usage.output ?? [], TokenKind.output),
                                 (usage.cached ?? [], TokenKind.cached)] {
             for entry in entries {
                 guard let timestamp = entry.timestamp, timestamp.count >= 10 else { continue }
                 let day = String(timestamp.prefix(10))
-                let units = entry.valuePaid ?? entry.value ?? 0
+                let units = entry.value ?? entry.valuePaid ?? 0
                 var accumulator = daily[day] ?? DailyAccumulator(day: day)
-                accumulator.add(
+                try accumulator.add(
                     modelName: displayName(name, entry: entry),
                     kind: kind,
                     units: units,
-                    cost: entryCost(entry, units: units, prices: prices),
+                    cost: entryCost(entry, units: entry.valuePaid ?? entry.value ?? 0, prices: prices),
                     countsTokens: countsTokens
                 )
                 daily[day] = accumulator
@@ -691,15 +728,30 @@ nonisolated enum MistralUsageFetcher {
         return raw.split(separator: "::").first.map(String.init) ?? raw
     }
 
-    private static func entryCost(_ entry: Entry, units: Int, prices: [String: Double]) -> Double {
+    private static func entryCost(_ entry: Entry, units: Int, prices: [PriceKey: Double]) -> Double {
         guard let metric = entry.billingMetric, let group = entry.billingGroup else { return 0 }
-        let result = Double(units) * (prices["\(metric)::\(group)"] ?? 0)
+        let key = PriceKey(
+            eventType: entry.eventType,
+            metric: metric,
+            group: group,
+            apiZone: entry.apiZone,
+            serviceTier: entry.serviceTier
+        )
+        let unqualifiedKey = PriceKey(
+            eventType: entry.eventType,
+            metric: metric,
+            group: group,
+            apiZone: nil,
+            serviceTier: nil
+        )
+        let result = Double(units) * (prices[key] ?? prices[unqualifiedKey] ?? 0)
         return result.isFinite ? result : 0
     }
 
-    private static func safeAdd(_ lhs: Int, _ rhs: Int) -> Int {
+    private static func safeAdd(_ lhs: Int, _ rhs: Int) throws -> Int {
         let result = lhs.addingReportingOverflow(rhs)
-        return result.overflow ? lhs : result.partialValue
+        guard !result.overflow else { throw MistralUsageError.parseFailed("Token count exceeds supported range") }
+        return result.partialValue
     }
 
     private static func addFinite(_ value: Double, to total: inout Double) {
@@ -726,28 +778,33 @@ nonisolated enum MistralUsageFetcher {
         var outputTokens = 0
         var models: [String: ModelAccumulator] = [:]
 
-        mutating func add(modelName: String, kind: TokenKind, units: Int, cost: Double, countsTokens: Bool) {
+        mutating func add(modelName: String, kind: TokenKind, units: Int, cost: Double, countsTokens: Bool) throws {
             addFinite(cost, to: &self.cost)
             var model = models[modelName] ?? ModelAccumulator(name: modelName)
             addFinite(cost, to: &model.cost)
             if countsTokens {
                 switch kind {
                 case .input:
-                    inputTokens = safeAdd(inputTokens, units)
-                    model.inputTokens = safeAdd(model.inputTokens, units)
+                    inputTokens = try safeAdd(inputTokens, units)
+                    model.inputTokens = try safeAdd(model.inputTokens, units)
                 case .cached:
-                    cachedTokens = safeAdd(cachedTokens, units)
-                    model.cachedTokens = safeAdd(model.cachedTokens, units)
+                    cachedTokens = try safeAdd(cachedTokens, units)
+                    model.cachedTokens = try safeAdd(model.cachedTokens, units)
                 case .output:
-                    outputTokens = safeAdd(outputTokens, units)
-                    model.outputTokens = safeAdd(model.outputTokens, units)
+                    outputTokens = try safeAdd(outputTokens, units)
+                    model.outputTokens = try safeAdd(model.outputTokens, units)
                 }
             }
             models[modelName] = model
         }
 
-        func snapshot() -> MistralDailyUsage {
-            MistralDailyUsage(
+        func snapshot() throws -> MistralDailyUsage {
+            guard MistralTokenMath.total(inputTokens, cachedTokens, outputTokens) != nil,
+                  models.values.allSatisfy({
+                      MistralTokenMath.total($0.inputTokens, $0.cachedTokens, $0.outputTokens) != nil
+                  })
+            else { throw MistralUsageError.parseFailed("Token count exceeds supported range") }
+            return MistralDailyUsage(
                 day: day,
                 cost: cost,
                 inputTokens: inputTokens,
@@ -780,6 +837,8 @@ nonisolated enum MistralUsageFetcher {
 
     private struct BillingResponse: Decodable {
         let completion: Category?
+        let chat: Category?
+        let vibeCode: VibeCode?
         let ocr: Category?
         let connectors: Category?
         let librariesAPI: Libraries?
@@ -792,7 +851,8 @@ nonisolated enum MistralUsageFetcher {
         let endDate: String?
 
         enum CodingKeys: String, CodingKey {
-            case completion, ocr, connectors, audio, currency, prices
+            case completion, chat, ocr, connectors, audio, currency, prices
+            case vibeCode = "vibe_code"
             case librariesAPI = "libraries_api"
             case fineTuning = "fine_tuning"
             case currencySymbol = "currency_symbol"
@@ -802,34 +862,47 @@ nonisolated enum MistralUsageFetcher {
     }
 
     private struct Category: Decodable { let models: [String: ModelUsage]? }
+    private struct VibeCode: Decodable { let completion: Category? }
     private struct Libraries: Decodable { let pages: Category?; let tokens: Category? }
     private struct FineTuning: Decodable { let training: [String: ModelUsage]?; let storage: [String: ModelUsage]? }
     private struct ModelUsage: Decodable { let input: [Entry]?; let output: [Entry]?; let cached: [Entry]? }
     private struct Entry: Decodable {
+        let eventType: String?
         let billingMetric: String?
         let billingDisplayName: String?
         let billingGroup: String?
+        let apiZone: String?
+        let serviceTier: String?
         let timestamp: String?
         let value: Int?
         let valuePaid: Int?
 
         enum CodingKeys: String, CodingKey {
             case timestamp, value
+            case eventType = "event_type"
             case billingMetric = "billing_metric"
             case billingDisplayName = "billing_display_name"
             case billingGroup = "billing_group"
+            case apiZone = "api_zone"
+            case serviceTier = "service_tier"
             case valuePaid = "value_paid"
         }
     }
     private struct Price: Decodable {
+        let eventType: String?
         let billingMetric: String?
         let billingGroup: String?
+        let apiZone: String?
+        let serviceTier: String?
         let price: String?
 
         enum CodingKeys: String, CodingKey {
             case price
+            case eventType = "event_type"
             case billingMetric = "billing_metric"
             case billingGroup = "billing_group"
+            case apiZone = "api_zone"
+            case serviceTier = "service_tier"
         }
     }
     private struct CreditsResponse: Decodable {

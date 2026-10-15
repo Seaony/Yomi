@@ -120,6 +120,7 @@ final class UsageStore: ObservableObject {
                 additionalWindows: loadingUsage[job.0.id]?.additionalWindows ?? [],
                 balance: loadingUsage[job.0.id]?.balance,
                 plan: loadingUsage[job.0.id]?.plan,
+                codexResetCredits: loadingUsage[job.0.id]?.codexResetCredits,
                 today: loadingUsage[job.0.id]?.today,
                 todayDate: loadingUsage[job.0.id]?.todayDate,
                 todayRequests: loadingUsage[job.0.id]?.todayRequests,
@@ -185,6 +186,9 @@ final class UsageStore: ObservableObject {
                 if resolvedUsage.state == .failed,
                    var cached = refreshedUsage[resolvedUsage.id],
                    Self.hasCacheableData(cached) {
+                    if cached.id.rawValue == "zai" {
+                        cached = Self.sanitizeCachedUsage(cached)
+                    }
                     if let descriptor = ProviderCatalog.byID[usage.id] {
                         cached = await collector.enrichLocalMetadata(
                             to: cached,
@@ -192,6 +196,7 @@ final class UsageStore: ObservableObject {
                             allowVertexClaudeFallback: allowVertexClaudeFallback
                         )
                     }
+                    cached.codexResetCredits = nil
                     cached.state = .unavailable
                     cached.message = resolvedUsage.message
                     refreshedUsage[resolvedUsage.id] = cached
@@ -341,17 +346,27 @@ final class UsageStore: ObservableObject {
     private static func sanitizeCachedUsage(_ usage: ProviderUsage) -> ProviderUsage {
         var sanitized = usage
         sanitized.state = .unavailable
+        if sanitized.id.rawValue == "zai" {
+            let latestReset = Date().addingTimeInterval(5 * 60 * 60 + 60)
+            for index in sanitized.windows.indices {
+                if sanitized.windows[index].label == "5-hour",
+                   let reset = sanitized.windows[index].resetsAt,
+                   reset > latestReset {
+                    sanitized.windows[index].resetsAt = nil
+                }
+            }
+        }
         if sanitized.id.rawValue == "opencodego" {
             if sanitized.todayRequests == nil,
                let today = sanitized.today, let cost = today.valueUSD {
                 sanitized.todayRequests = DailyRequestUsage(requests: today.tokens, valueUSD: cost)
+                sanitized.today = nil
             }
             if sanitized.last30DaysRequests == nil,
                let last30Days = sanitized.last30Days, let cost = last30Days.valueUSD {
                 sanitized.last30DaysRequests = DailyRequestUsage(requests: last30Days.tokens, valueUSD: cost)
+                sanitized.last30Days = nil
             }
-            sanitized.today = nil
-            sanitized.last30Days = nil
         }
         guard usage.id.rawValue == "codex" else { return sanitized }
         let weekly = (sanitized.windows + sanitized.additionalWindows)

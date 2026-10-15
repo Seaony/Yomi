@@ -390,7 +390,13 @@ struct ClaudeUsageTests {
         #expect(recorder.invocations.count == 1)
         #expect(invocation?.binary == "/usr/bin/true")
         #expect(invocation?.mode == .pty)
-        #expect(invocation?.arguments.prefix(4) == ["--allowed-tools", "", "--strict-mcp-config", "--session-id"])
+        let sessionID = try #require(invocation?.arguments.last)
+        #expect(UUID(uuidString: sessionID) != nil)
+        #expect(invocation?.arguments == [
+            "--allowed-tools", "", "--strict-mcp-config",
+            "--settings", #"{"remoteControlAtStartup":false,"disableAllHooks":true}"#,
+            "--session-id", sessionID,
+        ])
         #expect(invocation?.environment["ANTHROPIC_API_KEY"] == nil)
         #expect(usage.windows.map(\.label) == ["Session"])
         #expect(usage.windows.first?.usedFraction == 0.25)
@@ -419,7 +425,9 @@ struct ClaudeUsageTests {
         #expect(snapshot.sessionPercentLeft == 40)
         #expect(recorder.invocations.count == 2)
         #expect(recorder.invocations.last?.mode == .direct)
-        #expect(recorder.invocations.last?.arguments == ["/usage"])
+        #expect(recorder.invocations.last?.arguments == [
+            "--settings", #"{"remoteControlAtStartup":false,"disableAllHooks":true}"#, "/usage",
+        ])
         #expect(recorder.invocations.last?.timeout == 8)
     }
 

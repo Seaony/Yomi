@@ -115,6 +115,17 @@ actor UsageCollector {
         allowBrowserCookieImport: Bool
     ) async throws -> ProviderUsage {
         let secret = secret.trimmingCharacters(in: .whitespacesAndNewlines)
+        if descriptor.id.rawValue == "clinepass" {
+            return try await ClinePassUsageFetcher.fetch(
+                apiKey: secret.isEmpty ? nil : secret,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "coderabbit" {
+            return try await CodeRabbitUsageFetcher.fetch(
+                configuredBinary: configuration.command.isEmpty ? nil : configuration.command
+            )
+        }
         if descriptor.id.rawValue == "codex" {
             let cachedCookie = await MainActor.run {
                 ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie")
@@ -464,6 +475,7 @@ actor UsageCollector {
             return try await KimiUsageFetcher.fetch(
                 credential: resolvedSecret,
                 source: configuration.source,
+                region: configuration.account.isEmpty ? nil : configuration.account,
                 session: session
             )
         }
@@ -526,6 +538,9 @@ actor UsageCollector {
             )
         }
         if descriptor.id.rawValue == "zed" {
+            if configuration.source == .cookie {
+                return try await ZedUsageFetcher.fetchBilling(cookieHeader: secret, session: session)
+            }
             return try await ZedUsageFetcher.fetch(session: session)
         }
         if descriptor.id.rawValue == "openrouter" {
@@ -618,6 +633,9 @@ actor UsageCollector {
             )
         }
         if descriptor.id.rawValue == "venice" {
+            if configuration.source == .cookie {
+                return try await VeniceUsageFetcher.fetchWeb(cookieHeader: secret, session: session)
+            }
             return try await VeniceUsageFetcher.fetch(
                 apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
                 session: session
@@ -641,8 +659,13 @@ actor UsageCollector {
             let cachedCookie = await MainActor.run {
                 ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie")
             }
+            let configuredCookie = CommandCodeCookieHeader.override(from: secret)
+            let matchesValidatedCookie = configuredCookie != nil
+                && configuredCookie == CommandCodeCookieHeader.override(from: cachedCookie)
+            let automaticCookie = configuration.source == .automatic
+                && (matchesValidatedCookie || secret.contains("=") && configuredCookie != nil)
             return try await CommandCodeUsageFetcher.fetch(
-                credential: resolvedSecret,
+                credential: configuration.source == .cookie ? secret : automaticCookie ? environmentValue : resolvedSecret,
                 source: configuration.source,
                 session: session,
                 cachedCookieHeader: cachedCookie.isEmpty ? nil : cachedCookie,
@@ -807,6 +830,207 @@ actor UsageCollector {
                         )
                     }
                 }
+            )
+        }
+        if descriptor.id.rawValue == "langdock" {
+            return try await LangdockUsageFetcher.fetch(
+                credential: secret, source: configuration.source, session: session
+            )
+        }
+        if descriptor.id.rawValue == "aixy" {
+            return try await AixyUsageFetcher.fetch(
+                apiKey: secret.isEmpty ? nil : secret,
+                endpointOverride: configuration.endpoint.isEmpty ? nil : configuration.endpoint,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "atlascloud" {
+            return try await AtlasCloudUsageFetcher.fetch(apiKey: secret.isEmpty ? nil : secret, session: session)
+        }
+        if descriptor.id.rawValue == "devpass" {
+            return try await DevPassUsageFetcher.fetch(apiKey: secret.isEmpty ? nil : secret, session: session)
+        }
+        if descriptor.id.rawValue == "huggingface" {
+            return try await HuggingFaceUsageFetcher.fetch(apiKey: secret.isEmpty ? nil : secret, session: session)
+        }
+        if descriptor.id.rawValue == "linkup" {
+            return try await LinkupUsageFetcher.fetch(apiKey: secret.isEmpty ? nil : secret, session: session)
+        }
+        if descriptor.id.rawValue == "llmman" {
+            return try await LLMManUsageFetcher.fetch(
+                apiKey: secret, endpointOverride: configuration.endpoint, session: session
+            )
+        }
+        if descriptor.id.rawValue == "muse" {
+            return try await MuseUsageFetcher.fetch(
+                source: configuration.source, configuredToken: secret.isEmpty ? nil : secret, session: session
+            )
+        }
+        if descriptor.id.rawValue == "museai" {
+            return try await MuseAIUsageFetcher.fetch(cookieHeader: secret, session: session)
+        }
+        if descriptor.id.rawValue == "raycast" {
+            return try await RaycastUsageFetcher.fetch(
+                credential: secret, source: configuration.source, session: session
+            )
+        }
+        if descriptor.id.rawValue == "tavily" {
+            return try await TavilyUsageFetcher.fetch(
+                source: configuration.source, apiKey: secret.isEmpty ? nil : secret, session: session
+            )
+        }
+        if descriptor.id.rawValue == "tinyapi" {
+            return try await TinyApiUsageFetcher.fetch(
+                credential: secret, source: configuration.source, session: session
+            )
+        }
+        if descriptor.id.rawValue == "v0" {
+            return try await V0UsageFetcher.fetch(
+                apiKey: secret.isEmpty ? nil : secret,
+                scope: configuration.account.isEmpty ? nil : configuration.account,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "vercel" {
+            return try await VercelUsageFetcher.fetch(apiKey: secret.isEmpty ? nil : secret, session: session)
+        }
+        if descriptor.id.rawValue == "xapi" {
+            return try await XAPIUsageFetcher.fetch(cookie: secret.isEmpty ? nil : secret, session: session)
+        }
+        if descriptor.id.rawValue == "xkiro" {
+            return try await XKiroUsageFetcher.fetch(
+                apiKey: secret.isEmpty ? nil : secret, source: configuration.source, session: session
+            )
+        }
+        if descriptor.id.rawValue == "aerostack" {
+            return try await AerostackUsageFetcher.fetch(token: secret.isEmpty ? nil : secret, session: session)
+        }
+        if descriptor.id.rawValue == "bifrost" {
+            return try await BifrostUsageFetcher.fetch(
+                apiKey: secret.isEmpty ? nil : secret,
+                endpointOverride: configuration.endpoint.isEmpty ? nil : configuration.endpoint,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "helmcode" {
+            let cached = await MainActor.run {
+                (
+                    cookie: ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie"),
+                    tenant: ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-tenant")
+                )
+            }
+            return try await HelmcodeUsageFetcher.fetch(
+                credential: secret, source: configuration.source, tenant: configuration.account,
+                session: session,
+                cachedCookieHeader: cached.cookie.isEmpty ? nil : cached.cookie,
+                cachedTenant: cached.tenant.isEmpty ? nil : cached.tenant,
+                cacheUpdate: { cookie, tenant in
+                    await MainActor.run {
+                        try? ProviderPreferences.shared.setAuxiliarySecret(cookie ?? "", for: descriptor.id, key: "imported-cookie")
+                        try? ProviderPreferences.shared.setAuxiliarySecret(tenant ?? "", for: descriptor.id, key: "imported-tenant")
+                    }
+                },
+                allowBrowserImport: allowBrowserCookieImport
+            )
+        }
+        if descriptor.id.rawValue == "nous" {
+            return try await NousUsageFetcher.fetch(accessToken: secret, session: session)
+        }
+        if descriptor.id.rawValue == "replicate" {
+            let cachedCookie = await MainActor.run {
+                ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie")
+            }
+            return try await ReplicateUsageFetcher.fetch(
+                credential: secret, source: configuration.source, session: session,
+                cachedCookieHeader: cachedCookie.isEmpty ? nil : cachedCookie,
+                allowBrowserImport: allowBrowserCookieImport,
+                cacheUpdate: { value in
+                    await MainActor.run {
+                        try? ProviderPreferences.shared.setAuxiliarySecret(value ?? "", for: descriptor.id, key: "imported-cookie")
+                    }
+                }
+            )
+        }
+        if descriptor.id.rawValue == "typesafe" {
+            let cachedCookie = await MainActor.run {
+                ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie")
+            }
+            return try await TypeSafeUsageFetcher.fetch(
+                credential: secret, source: configuration.source,
+                cachedCookieHeader: cachedCookie.isEmpty ? nil : cachedCookie,
+                cacheUpdate: { value in
+                    await MainActor.run {
+                        try? ProviderPreferences.shared.setAuxiliarySecret(value ?? "", for: descriptor.id, key: "imported-cookie")
+                    }
+                },
+                allowBrowserImport: allowBrowserCookieImport
+            )
+        }
+        if descriptor.id.rawValue == "hyper" {
+            let cachedCookie = await MainActor.run {
+                ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie")
+            }
+            return try await HyperUsageFetcher.fetch(
+                credential: secret, source: configuration.source, session: session,
+                cachedCookieHeader: cachedCookie.isEmpty ? nil : cachedCookie,
+                cacheUpdate: { value in
+                    await MainActor.run {
+                        try? ProviderPreferences.shared.setAuxiliarySecret(value ?? "", for: descriptor.id, key: "imported-cookie")
+                    }
+                },
+                allowBrowserImport: allowBrowserCookieImport
+            )
+        }
+        if descriptor.id.rawValue == "gitkraken" {
+            return try await GitKrakenUsageFetcher.fetch(
+                credential: secret.isEmpty ? nil : secret, source: configuration.source,
+                organization: configuration.account, session: session
+            )
+        }
+        if descriptor.id.rawValue == "lithosai" {
+            return try await LithosAIUsageFetcher.fetch(
+                credential: secret, source: configuration.source, session: session
+            )
+        }
+        if descriptor.id.rawValue == "workbuddy" {
+            return try await WorkBuddyUsageFetcher.fetch(
+                credential: secret.isEmpty ? nil : secret, session: session
+            )
+        }
+        if descriptor.id.rawValue == "exa" {
+            return try await ExaUsageFetcher.fetch(
+                serviceKey: secret, apiKeyID: configuration.account, session: session
+            )
+        }
+        if descriptor.id.rawValue == "cosmic" {
+            return try await CosmicUsageFetcher.fetch(
+                apiKey: secret.isEmpty ? nil : secret,
+                projectID: configuration.account.isEmpty ? nil : configuration.account, session: session
+            )
+        }
+        if descriptor.id.rawValue == "sailresearch" {
+            return try await SailResearchUsageFetcher.fetch(apiKey: secret, session: session)
+        }
+        if descriptor.id.rawValue == "sofya" {
+            return try await SofyaUsageFetcher.fetch(apiKey: secret.isEmpty ? nil : secret, session: session)
+        }
+        if descriptor.id.rawValue == "fal" {
+            return try await FalUsageFetcher.fetch(apiKey: secret.isEmpty ? nil : secret, session: session)
+        }
+        if descriptor.id.rawValue == "flora" {
+            return try await FloraUsageFetcher.fetch(
+                apiKey: secret, workspaceID: configuration.account, session: session
+            )
+        }
+        if descriptor.id.rawValue == "parallel" {
+            return try await ParallelUsageFetcher.fetch(
+                credential: secret, source: configuration.source, session: session
+            )
+        }
+        if descriptor.id.rawValue == "claudeplatform" {
+            return try await ClaudePlatformUsageFetcher.fetch(
+                credential: secret, source: configuration.source,
+                organizationID: configuration.account, session: session
             )
         }
         if let recipe = ProviderRecipes.recipe(for: descriptor.id), !resolvedSecret.isEmpty {

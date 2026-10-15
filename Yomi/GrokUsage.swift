@@ -6,7 +6,7 @@ nonisolated enum GrokUsageError: LocalizedError, Equatable {
     case invalidCredentials
     case unsupportedCredential
     case cliUnavailable
-    case cliFailure(String)
+    case cliFailure(String, code: Int? = nil)
     case requestFailed(Int, String)
     case rpcFailed(Int, String)
     case parseFailed
@@ -22,7 +22,7 @@ nonisolated enum GrokUsageError: LocalizedError, Equatable {
             AppLocalization.text("Grok 不接受 xAI Management API Key", "Grok does not accept xAI Management API keys")
         case .cliUnavailable:
             AppLocalization.text("未找到 Grok CLI", "Grok CLI was not found")
-        case let .cliFailure(message):
+        case let .cliFailure(message, _):
             AppLocalization.text("Grok CLI 失败：\(message)", "Grok CLI failed: \(message)")
         case let .requestFailed(status, body):
             AppLocalization.text("Grok 请求失败（HTTP \(status)）：\(body)", "Grok request failed (HTTP \(status)): \(body)")
@@ -164,12 +164,48 @@ nonisolated struct GrokBillingSnapshot: Sendable, Equatable {
     let resetsAt: Date?
     let plan: String?
     let percentWasPublished: Bool
+    let windowMinutes: Int?
+    let prepaidBalanceUSD: Double?
 
-    init(usedPercent: Double?, resetsAt: Date?, plan: String? = nil, percentWasPublished: Bool = true) {
+    init(
+        usedPercent: Double?, resetsAt: Date?, plan: String? = nil,
+        percentWasPublished: Bool = true, windowMinutes: Int? = nil, prepaidBalanceUSD: Double? = nil
+    ) {
         self.usedPercent = usedPercent
         self.resetsAt = resetsAt
         self.plan = plan
         self.percentWasPublished = percentWasPublished
+        self.windowMinutes = windowMinutes
+        self.prepaidBalanceUSD = prepaidBalanceUSD
+    }
+}
+
+private nonisolated struct GrokPrepaidBalance: Decodable {
+    let usd: Double?
+
+    private enum CodingKeys: String, CodingKey { case val }
+
+    init(from decoder: Decoder) throws {
+        guard let values = try? decoder.container(keyedBy: CodingKeys.self) else {
+            usd = nil
+            return
+        }
+        let cents: Int64?
+        if !values.contains(.val) {
+            let empty = try? decoder.singleValueContainer().decode([String: Int64].self)
+            cents = empty?.isEmpty == true ? 0 : nil
+        } else if let number = try? values.decode(Int64.self, forKey: .val) {
+            cents = number
+        } else if let string = try? values.decode(String.self, forKey: .val) {
+            cents = Int64(string)
+        } else {
+            cents = nil
+        }
+        guard let cents, cents >= 0, let exact = Double(exactly: cents) else {
+            usd = nil
+            return
+        }
+        usd = exact / 100
     }
 }
 
@@ -291,17 +327,19 @@ nonisolated enum GrokUsageFetcher {
         }
     }
 
-    static func parseProxy(_ data: Data) throws -> GrokBillingSnapshot {
+    static func parseProxy(_ data: Data, now: Date = Date()) throws -> GrokBillingSnapshot {
         struct Response: Decodable {
             struct Config: Decodable {
-                struct Period: Decodable { let end: String? }
+                struct Period: Decodable { let start: String?; let end: String? }
                 struct Amount: Decodable { let val: Double? }
                 let creditUsagePercent: Double?
                 let currentPeriod: Period?
+                let billingPeriodStart: String?
                 let billingPeriodEnd: String?
                 let onDemandCap: Amount?
                 let onDemandUsed: Amount?
                 let subscriptionTier: String?
+                let prepaidBalance: GrokPrepaidBalance?
             }
             let config: Config?
             let subscriptionTier: String?
@@ -309,16 +347,28 @@ nonisolated enum GrokUsageFetcher {
         guard let response = try? JSONDecoder().decode(Response.self, from: data), let config = response.config else {
             throw GrokUsageError.parseFailed
         }
-        let reset = isoDate(config.currentPeriod?.end) ?? isoDate(config.billingPeriodEnd)
+        let currentEnd = isoDate(config.currentPeriod?.end)
+        let reset = currentEnd ?? isoDate(config.billingPeriodEnd)
+        let start = isoDate(currentEnd == nil ? config.billingPeriodStart : config.currentPeriod?.start)
+        let minutes: Int?
+        if let start, let reset, start <= now, reset > start {
+            minutes = Int(exactly: (reset.timeIntervalSince(start) / 60).rounded(.down)).flatMap { $0 > 0 ? $0 : nil }
+        } else {
+            minutes = nil
+        }
         let plan = GrokPlan.display(config.subscriptionTier ?? response.subscriptionTier)
-        if let percent = config.creditUsagePercent, percent.isFinite {
-            return GrokBillingSnapshot(usedPercent: min(100, max(0, percent)), resetsAt: reset, plan: plan)
+        let percent: Double?
+        if let reported = config.creditUsagePercent, reported.isFinite {
+            percent = reported
+        } else if let cap = config.onDemandCap?.val, cap > 0, let used = config.onDemandUsed?.val {
+            percent = used / cap * 100
+        } else {
+            percent = nil
         }
-        if let cap = config.onDemandCap?.val, cap > 0, let used = config.onDemandUsed?.val {
-            return GrokBillingSnapshot(usedPercent: min(100, max(0, used / cap * 100)), resetsAt: reset, plan: plan)
-        }
-        guard reset != nil else { throw GrokUsageError.parseFailed }
-        return GrokBillingSnapshot(usedPercent: nil, resetsAt: reset, plan: plan)
+        guard percent != nil || reset != nil || config.prepaidBalance?.usd != nil else { throw GrokUsageError.parseFailed }
+        return GrokBillingSnapshot(
+            usedPercent: percent.map { min(100, max(0, $0)) }, resetsAt: reset, plan: plan,
+            windowMinutes: minutes, prepaidBalanceUSD: config.prepaidBalance?.usd)
     }
 
     static func parseGRPC(_ data: Data, now: Date = Date()) throws -> GrokBillingSnapshot {
@@ -357,7 +407,7 @@ nonisolated enum GrokUsageFetcher {
         if let percent = snapshot.usedPercent {
             windows = [UsageWindow(
                 id: "grok-credits",
-                label: windowLabel(minutes: windowMinutes, reset: snapshot.resetsAt, now: now, language: language),
+                label: windowLabel(minutes: windowMinutes ?? snapshot.windowMinutes, reset: snapshot.resetsAt, now: now, language: language),
                 usedFraction: min(1, max(0, percent / 100)),
                 resetsAt: snapshot.resetsAt,
                 detail: AppLocalization.text("Grok Credits", "Grok credits", language: language)
@@ -367,6 +417,7 @@ nonisolated enum GrokUsageFetcher {
         }
         return ProviderUsage(
             id: ProviderID(rawValue: "grok"), state: .ready, windows: windows,
+            balance: snapshot.prepaidBalanceUSD.map { String(format: "$%.2f", $0) },
             plan: plan,
             today: local.today.map { DailyTokenUsage(tokens: $0, valueUSD: nil) },
             last30Days: local.last30.map { DailyTokenUsage(tokens: $0, valueUSD: nil) },
@@ -412,7 +463,9 @@ nonisolated enum GrokUsageFetcher {
                             usedPercent: percent,
                             resetsAt: proxy.resetsAt ?? grpc.resetsAt,
                             plan: proxy.plan,
-                            percentWasPublished: true)
+                            percentWasPublished: true,
+                            windowMinutes: proxy.resetsAt == nil ? grpc.windowMinutes : proxy.windowMinutes,
+                            prepaidBalanceUSD: proxy.prepaidBalanceUSD ?? grpc.prepaidBalanceUSD)
                     }
                 } catch is CancellationError {
                     throw CancellationError()
@@ -445,7 +498,8 @@ nonisolated enum GrokUsageFetcher {
         let tier = await settingsTier(credentials: credentials, session: session)
         return GrokBillingSnapshot(
             usedPercent: billing.usedPercent, resetsAt: billing.resetsAt,
-            plan: tier ?? billing.plan, percentWasPublished: billing.percentWasPublished)
+            plan: tier ?? billing.plan, percentWasPublished: billing.percentWasPublished,
+            windowMinutes: billing.windowMinutes, prepaidBalanceUSD: billing.prepaidBalanceUSD)
     }
 
     private static func fetchProxy(credentials: GrokCredentials, session: URLSession) async throws -> GrokBillingSnapshot {
@@ -538,8 +592,8 @@ nonisolated enum GrokUsageFetcher {
         _ error: GrokUsageError,
         credentials: GrokCredentials?
     ) -> Bool {
-        guard credentials?.isTeam == true, case let .cliFailure(message) = error else { return false }
-        return message.localizedCaseInsensitiveContains("method not found")
+        guard credentials?.isTeam == true, case let .cliFailure(_, code) = error else { return false }
+        return code == -32601
     }
 
     private static func fetchGRPC(
@@ -550,7 +604,7 @@ nonisolated enum GrokUsageFetcher {
     ) async throws -> GrokBillingSnapshot {
         var request = URLRequest(url: grpcURL)
         request.httpMethod = "POST"; request.timeoutInterval = timeout
-        request.httpBody = Data([0, 0, 0, 0, 0])
+        request.httpBody = Data([0, 0, 0, 0, 2, 8, 0])
         if let bearer { request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization") }
         if let cookie { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
         request.setValue("https://grok.com", forHTTPHeaderField: "Origin")
@@ -632,7 +686,7 @@ nonisolated enum GrokUsageFetcher {
         try sendCLI(billing, to: input.fileHandleForWriting)
         let root = try await cliResponse(id: 2, timeout: 3, lines: lines)
         if let error = root["error"] as? [String: Any] {
-            throw GrokUsageError.cliFailure(error["message"] as? String ?? "JSON-RPC error")
+            throw GrokUsageError.cliFailure(error["message"] as? String ?? "JSON-RPC error", code: error["code"] as? Int)
         }
         guard let value = root["result"] else { throw GrokUsageError.parseFailed }
         let data = try JSONSerialization.data(withJSONObject: value)
@@ -690,16 +744,21 @@ nonisolated enum GrokUsageFetcher {
     private static func scanLocalUsage(environment: [String: String], now: Date) -> (today: Int64?, last30: Int64?) {
         let root = GrokCredentialsStore.authURL(environment: environment).deletingLastPathComponent()
             .appendingPathComponent("sessions")
-        guard let iterator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else {
+        guard let iterator = FileManager.default.enumerator(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else {
             return (nil, nil)
         }
         let calendar = Calendar.current; let today = calendar.startOfDay(for: now)
-        let cutoff = calendar.date(byAdding: .day, value: -30, to: now) ?? now
+        let cutoff = calendar.date(byAdding: .day, value: -29, to: today) ?? today
+        let end = calendar.date(byAdding: .day, value: 1, to: today) ?? now
         var todayTokens: Int64 = 0; var total: Int64 = 0; var any = false
-        while let url = iterator.nextObject() as? URL {
-            guard url.lastPathComponent == "signals.json" else { continue }
+        while let sessionURL = iterator.nextObject() as? URL {
+            guard iterator.level == 2 else { continue }
+            iterator.skipDescendants()
+            guard (try? sessionURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
+            let url = sessionURL.appendingPathComponent("signals.json")
             let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-            guard date >= cutoff, let data = try? Data(contentsOf: url),
+            guard date >= cutoff, date < end, let data = try? Data(contentsOf: url),
                   let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
             let tokens = Int64(root["totalTokensBeforeCompaction"] as? Int ?? 0)
                 + Int64(root["contextTokensUsed"] as? Int ?? 0)
@@ -713,6 +772,7 @@ nonisolated enum GrokUsageFetcher {
         let bytes = [UInt8](data); var index = 0; var result: [Data] = []
         while index + 5 <= bytes.count {
             let flags = bytes[index]
+            guard flags == 0 || flags == 0x80 else { return [] }
             let length = Int(bytes[index + 1]) << 24 | Int(bytes[index + 2]) << 16 | Int(bytes[index + 3]) << 8 | Int(bytes[index + 4])
             let start = index + 5; let end = start + length
             guard end <= bytes.count else { return [] }
@@ -758,34 +818,46 @@ nonisolated enum GrokUsageFetcher {
     ) {
         let bytes = [UInt8](data); var index = 0
         while index < bytes.count {
-            let start = index
-            guard let key = readVarint(bytes, index: &index), key != 0 else { index = start + 1; continue }
+            guard let key = readVarint(bytes, index: &index),
+                  key >> 3 > 0, key >> 3 <= 536_870_911 else { return }
             let field = path + [key >> 3]
             switch key & 7 {
             case 0:
-                if let value = readVarint(bytes, index: &index) { vars.append((field, value)) }
-                else { index = start + 1 }
+                guard let value = readVarint(bytes, index: &index) else { return }
+                vars.append((field, value))
             case 1: guard index + 8 <= bytes.count else { return }; index += 8
             case 2:
-                guard let length = readVarint(bytes, index: &index), length <= UInt64(bytes.count - index) else {
-                    index = start + 1; continue
-                }
+                guard let length = readVarint(bytes, index: &index), length <= UInt64(bytes.count - index) else { return }
                 let end = index + Int(length)
-                if depth < 4 { scan(Data(bytes[index..<end]), path: field, depth: depth + 1, order: &order, vars: &vars) }
+                if depth < 4, isBillingMessage(field) {
+                    scan(Data(bytes[index..<end]), path: field, depth: depth + 1, order: &order, vars: &vars)
+                }
                 index = end
             case 5:
                 guard index + 4 <= bytes.count else { return }
                 let bits = UInt32(bytes[index]) | UInt32(bytes[index + 1]) << 8 | UInt32(bytes[index + 2]) << 16 | UInt32(bytes[index + 3]) << 24
                 order.append((field, Float(bitPattern: bits), order.count)); index += 4
-            default: index = start + 1
+            default: return
             }
+        }
+    }
+
+    private static func isBillingMessage(_ path: [UInt64]) -> Bool {
+        switch path {
+        case [1], [1, 2], [1, 3], [1, 4], [1, 5], [1, 6], [1, 7], [1, 8], [1, 12],
+             [1, 6, 1], [1, 6, 2], [1, 6, 3], [1, 8, 2], [1, 8, 3], [1, 6, 3, 2], [1, 6, 3, 3]:
+            return true
+        default:
+            return false
         }
     }
 
     private static func readVarint(_ bytes: [UInt8], index: inout Int) -> UInt64? {
         var value: UInt64 = 0; var shift: UInt64 = 0
         while index < bytes.count, shift < 64 {
-            let byte = bytes[index]; index += 1; value |= UInt64(byte & 0x7f) << shift
+            let byte = bytes[index]; index += 1
+            if shift == 63, byte > 1 { return nil }
+            value |= UInt64(byte & 0x7f) << shift
             if byte & 0x80 == 0 { return value }; shift += 7
         }
         return nil

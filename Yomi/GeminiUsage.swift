@@ -2,6 +2,26 @@ import CoreFoundation
 import Foundation
 
 nonisolated enum GeminiUsageFetcher {
+    enum FetchError: LocalizedError {
+        case unsupportedAuthType
+        case consumerTierDeprecated
+
+        var errorDescription: String? {
+            switch self {
+            case .unsupportedAuthType:
+                AppLocalization.text(
+                    "Gemini 额度暂不支持 API Key 或 Vertex AI 登录，请使用 Google 账号 OAuth 登录。",
+                    "Gemini quota does not support API key or Vertex AI authentication. Sign in with Google OAuth."
+                )
+            case .consumerTierDeprecated:
+                AppLocalization.text(
+                    "Google 已停止个人、AI Pro 和 Ultra 账号使用 Gemini CLI OAuth。请启用 Antigravity，登录 Antigravity 或运行 agy 后刷新。Workspace、教育和 Code Assist Standard/Enterprise 账号仍可使用 Gemini。",
+                    "Google no longer supports Gemini CLI OAuth for individual, AI Pro, or Ultra accounts. Enable Antigravity, sign in to Antigravity or run agy, then refresh. Workspace, education, and Code Assist Standard/Enterprise accounts can keep using Gemini."
+                )
+            }
+        }
+    }
+
     enum AuthType: String {
         case oauthPersonal = "oauth-personal"
         case apiKey = "gemini-api-key"
@@ -26,6 +46,7 @@ nonisolated enum GeminiUsageFetcher {
         var tier: Tier?
         var projectID: String?
         var paidTierName: String?
+        var isConsumerClientUnsupported = false
     }
 
     private static let quotaEndpoint = URL(
@@ -44,7 +65,7 @@ nonisolated enum GeminiUsageFetcher {
         let settingsURL = home.appending(path: ".gemini/settings.json")
         switch authType(settingsURL: settingsURL) {
         case .apiKey, .vertex:
-            throw UsageCollectionError.missingCredential
+            throw FetchError.unsupportedAuthType
         case .oauthPersonal, .unknown:
             break
         }
@@ -85,6 +106,10 @@ nonisolated enum GeminiUsageFetcher {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: projectID.map { ["project": $0] } ?? [:])
         let (data, response) = try await session.data(for: request)
+        if (response as? HTTPURLResponse)?.statusCode == 403,
+           codeAssist.isConsumerClientUnsupported, codeAssist.tier != .standard {
+            throw FetchError.consumerTierDeprecated
+        }
         try validate(response: response, data: data)
         return try parseQuota(
             data: data,
@@ -166,17 +191,21 @@ nonisolated enum GeminiUsageFetcher {
             }
             return nil
         }()
-        let tier = ((root["currentTier"] as? [String: Any])?["id"] as? String)
-            .flatMap(Tier.init(rawValue:))
+        let tierID = (root["currentTier"] as? [String: Any])?["id"] as? String
+        let tier = tierID.flatMap(Tier.init(rawValue:))
         let paidName = clean((root["paidTier"] as? [String: Any])?["name"] as? String)
         let unsupported = (root["ineligibleTiers"] as? [[String: Any]])?.contains { item in
             [item["reasonCode"], item["reasonMessage"]].compactMap { $0 as? String }
                 .contains { isConsumerDeprecation($0) }
         } == true
-        if tier == nil, paidName == nil, hostedDomain == nil, unsupported {
-            throw UsageCollectionError.unreadableResponse
+        let consumerUnsupported = paidName == nil && hostedDomain == nil && unsupported
+        if tierID == nil, consumerUnsupported {
+            throw FetchError.consumerTierDeprecated
         }
-        return CodeAssistStatus(tier: tier, projectID: rawProject, paidTierName: paidName)
+        return CodeAssistStatus(
+            tier: tier, projectID: rawProject, paidTierName: paidName,
+            isConsumerClientUnsupported: consumerUnsupported
+        )
     }
 
     static func plan(tier: Tier?, hostedDomain: String?, paidTierName: String?) -> String? {
@@ -228,11 +257,13 @@ nonisolated enum GeminiUsageFetcher {
             }
             if http.statusCode != 200 {
                 if let text = String(data: data, encoding: .utf8), isConsumerDeprecation(text) {
-                    throw UsageCollectionError.unreadableResponse
+                    throw FetchError.consumerTierDeprecated
                 }
                 return CodeAssistStatus(tier: nil, projectID: nil, paidTierName: nil)
             }
             return try parseCodeAssist(data: data, hostedDomain: hostedDomain)
+        } catch let error as FetchError {
+            throw error
         } catch let error as UsageCollectionError {
             throw error
         } catch {
@@ -271,7 +302,7 @@ nonisolated enum GeminiUsageFetcher {
             URLQueryItem(name: "refresh_token", value: token),
             URLQueryItem(name: "grant_type", value: "refresh_token"),
         ]
-        request.httpBody = Data((body.percentEncodedQuery ?? "").utf8)
+        request.httpBody = Data((body.percentEncodedQuery ?? "").replacingOccurrences(of: "+", with: "%2B").utf8)
         let (data, response) = try await session.data(for: request)
         try validate(response: response, data: data)
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -303,6 +334,9 @@ nonisolated enum GeminiUsageFetcher {
             "/usr/local/lib/node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js",
             "\(home)/.npm-global/lib/node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js",
         ].compactMap { $0 }
+        for prefix in ["/opt/homebrew", "/usr/local", "\(home)/.npm-global"] {
+            candidates += oauthCandidates(packageRoot: "\(prefix)/lib/node_modules/@google/gemini-cli")
+        }
         if let binary = resolveGeminiBinary(environment: environment) {
             let resolved = URL(fileURLWithPath: binary).resolvingSymlinksInPath().path
             let binDirectory = (resolved as NSString).deletingLastPathComponent
@@ -345,9 +379,9 @@ nonisolated enum GeminiUsageFetcher {
         if let configured = clean(environment["GEMINI_CLI_PATH"]),
            FileManager.default.isExecutableFile(atPath: configured) { return configured }
         let path = environment["PATH"] ?? ""
-        let pathCandidates = path.split(separator: ":", omittingEmptySubsequences: false)
-            .map { $0.isEmpty ? "." : String($0) }
-            .map { URL(fileURLWithPath: $0).appending(path: "gemini").path }
+        let pathCandidates = path.split(separator: ":")
+            .filter { $0.hasPrefix("/") }
+            .map { URL(fileURLWithPath: String($0)).appending(path: "gemini").path }
         return (pathCandidates + [
             "/opt/homebrew/bin/gemini", "/usr/local/bin/gemini",
             "\(FileManager.default.homeDirectoryForCurrentUser.path)/.npm-global/bin/gemini",
@@ -383,18 +417,28 @@ nonisolated enum GeminiUsageFetcher {
     }
 
     private static func oauthCandidates(packageRoot: String) -> [String] {
-        [
+        var paths = [
             "\(packageRoot)/dist/src/code_assist/oauth2.js",
             "\(packageRoot)/node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js",
             "\(packageRoot)/libexec/lib/node_modules/@google/gemini-cli/node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js",
         ]
+        for root in [packageRoot, "\(packageRoot)/libexec/lib/node_modules/@google/gemini-cli"] {
+            let bundle = URL(fileURLWithPath: root).appending(path: "bundle")
+            guard FileManager.default.fileExists(atPath: bundle.appending(path: "gemini.js").path) else { continue }
+            paths.append(bundle.appending(path: "gemini.js").path)
+            let files = (try? FileManager.default.contentsOfDirectory(
+                at: bundle, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+            )) ?? []
+            paths += files.filter { $0.pathExtension == "js" }.map(\.path).sorted()
+        }
+        return paths
     }
 
     private static func validate(response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else { throw UsageCollectionError.unreadableResponse }
         guard http.statusCode == 200 else {
             if let text = String(data: data, encoding: .utf8), isConsumerDeprecation(text) {
-                throw UsageCollectionError.unreadableResponse
+                throw FetchError.consumerTierDeprecated
             }
             throw UsageCollectionError.requestFailed(http.statusCode)
         }

@@ -250,9 +250,10 @@ nonisolated enum CopilotUsageFetcher {
             throw UsageCollectionError.unreadableResponse
         }
         var details: [UsageDetail] = []
-        if let credits = response.quotas.premium?.creditsUsed ?? response.quotas.chat?.creditsUsed {
+        if let credits = response.quotas.premium?.creditsUsed ?? response.quotas.chat?.creditsUsed,
+           response.tokenBasedBilling || hasUnlimited || credits > 0 {
             details.append(UsageDetail(
-                id: "credits-used", label: "Credits used",
+                id: "credits-used", label: AppLocalization.text("已用点数", "Credits used"),
                 value: credits.formatted(.number.precision(.fractionLength(0...2)))
             ))
         }

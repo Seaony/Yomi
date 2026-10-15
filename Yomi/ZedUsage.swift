@@ -4,6 +4,7 @@ import Security
 
 nonisolated enum ZedUsageError: LocalizedError, Equatable {
     case notSignedIn
+    case missingBrowserSession
     case keychainUnavailable
     case invalidServerURL(String)
     case untrustedServerConfiguration
@@ -18,6 +19,11 @@ nonisolated enum ZedUsageError: LocalizedError, Equatable {
             AppLocalization.text(
                 "尚未登录 Zed，请先在 Zed 编辑器中使用 GitHub 登录",
                 "Not signed in to Zed. Sign in from the Zed editor with GitHub."
+            )
+        case .missingBrowserSession:
+            AppLocalization.text(
+                "缺少 Zed 浏览器会话，请登录 zed.dev 后填写 Cookie",
+                "Missing Zed browser session. Sign in to zed.dev and provide the Cookie header."
             )
         case .keychainUnavailable:
             AppLocalization.text(
@@ -203,6 +209,25 @@ nonisolated enum ZedUsageFetcher {
         request.timeoutInterval = 18
         request.setValue(credentials.authorizationHeader, forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return providerUsage(try parse(try await responseData(request, session: session)), now: now)
+    }
+
+    static func fetchBilling(
+        cookieHeader: String,
+        session: URLSession,
+        now: Date = Date()
+    ) async throws -> ProviderUsage {
+        let cookie = cookieHeader.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cookie.isEmpty else { throw ZedUsageError.missingBrowserSession }
+        var request = URLRequest(url: URL(string: "https://cloud.zed.dev/frontend/billing/usage")!)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 18
+        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return try parseBilling(try await responseData(request, session: session), now: now)
+    }
+
+    private static func responseData(_ request: URLRequest, session: URLSession) async throws -> Data {
         let data: Data
         let response: URLResponse
         do {
@@ -218,7 +243,7 @@ nonisolated enum ZedUsageFetcher {
             throw ZedUsageError.networkError("Invalid response")
         }
         switch http.statusCode {
-        case 200: return providerUsage(try parse(data), now: now)
+        case 200: return data
         case 401, 403: throw ZedUsageError.unauthorized
         default: throw ZedUsageError.httpError(http.statusCode)
         }
@@ -240,8 +265,36 @@ nonisolated enum ZedUsageFetcher {
 
     static func providerUsage(_ response: ZedAuthenticatedUserResponse, now: Date = Date()) -> ProviderUsage {
         let edit = response.plan.usage.editPredictions
+        var windows = editPredictionWindows(used: edit.used, limit: edit.limit)
+        if let period = response.plan.subscriptionPeriod {
+            let duration = period.endedAt.timeIntervalSince(period.startedAt)
+            windows.append(UsageWindow(
+                id: "zed-billing-cycle",
+                label: "Billing cycle",
+                usedFraction: duration > 0 ? min(1, max(0, now.timeIntervalSince(period.startedAt) / duration)) : 0,
+                resetsAt: period.endedAt,
+                detail: period.endedAt <= now ? AppLocalization.text("本周期已结束", "Cycle ended") : nil
+            ))
+        }
+        return ProviderUsage(
+            id: ProviderID(rawValue: "zed"),
+            state: .ready,
+            windows: windows,
+            plan: displayPlanName(response.plan.planV3),
+            details: response.plan.hasOverdueInvoices ? [UsageDetail(
+                id: "zed-overdue-invoices",
+                label: AppLocalization.text("账单", "Billing"),
+                value: AppLocalization.text("有逾期账单", "Overdue invoices")
+            )] : [],
+            updatedAt: now,
+            message: response.plan.hasOverdueInvoices
+                ? AppLocalization.text("有逾期账单", "Overdue invoices") : nil
+        )
+    }
+
+    private static func editPredictionWindows(used: Int, limit: ZedUsageLimit) -> [UsageWindow] {
         var windows: [UsageWindow] = []
-        switch edit.limit {
+        switch limit {
         case .unlimited:
             windows.append(UsageWindow(
                 id: "zed-edit-predictions",
@@ -251,7 +304,7 @@ nonisolated enum ZedUsageFetcher {
                 detail: "Unlimited"
             ))
         case let .limited(limit) where limit > 0:
-            let used = min(limit, max(0, edit.used))
+            let used = min(limit, max(0, used))
             windows.append(UsageWindow(
                 id: "zed-edit-predictions",
                 label: "Edit predictions",
@@ -262,12 +315,98 @@ nonisolated enum ZedUsageFetcher {
         default:
             break
         }
+        return windows
+    }
+
+    static func parseBilling(_ data: Data, now: Date = Date()) throws -> ProviderUsage {
+        struct BillingResponse: Decodable {
+            struct CurrentUsage: Decodable {
+                struct EditPredictions: Decodable {
+                    let used: Int
+                    let limit: ZedUsageLimit?
+
+                    enum CodingKeys: String, CodingKey { case used, limit }
+
+                    init(from decoder: Decoder) throws {
+                        let values = try decoder.container(keyedBy: CodingKeys.self)
+                        used = try values.decode(Int.self, forKey: .used)
+                        limit = try values.decodeNil(forKey: .limit) ? nil : values.decode(ZedUsageLimit.self, forKey: .limit)
+                    }
+                }
+
+                struct TokenSpend: Decodable {
+                    let spendInCents: Double
+                    let limitInCents: Double?
+
+                    enum CodingKeys: String, CodingKey {
+                        case spendInCents = "spend_in_cents"
+                        case limitInCents = "limit_in_cents"
+                    }
+                }
+
+                let editPredictions: EditPredictions
+                let tokenSpend: TokenSpend
+
+                enum CodingKeys: String, CodingKey {
+                    case editPredictions = "edit_predictions"
+                    case tokenSpend = "token_spend"
+                }
+            }
+
+            let plan: String
+            let currentUsage: CurrentUsage
+
+            enum CodingKeys: String, CodingKey {
+                case plan
+                case currentUsage = "current_usage"
+            }
+        }
+        let response: BillingResponse
+        do { response = try JSONDecoder().decode(BillingResponse.self, from: data) }
+        catch { throw ZedUsageError.parseFailed(error.localizedDescription) }
+        let edit = response.currentUsage.editPredictions
+        let spend = response.currentUsage.tokenSpend
+        guard !response.plan.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              edit.used >= 0, edit.used <= 9_007_199_254_740_991,
+              spend.spendInCents.isFinite, spend.spendInCents >= 0,
+              spend.spendInCents <= 9_007_199_254_740_991,
+              spend.limitInCents.map({ $0.isFinite && $0 >= 0 && $0 <= 9_007_199_254_740_991 }) ?? true
+        else { throw ZedUsageError.parseFailed(AppLocalization.text("账单数值无效", "Invalid billing values")) }
+        if case let .limited(limit)? = edit.limit, limit < 0 || limit > 9_007_199_254_740_991 {
+            throw ZedUsageError.parseFailed(AppLocalization.text("编辑预测限额无效", "Invalid edit prediction limit"))
+        }
+        let spent = spend.spendInCents / 100
+        let cap = spend.limitInCents.map { $0 / 100 }
+        var details = [
+            UsageDetail(id: "zed-spent", label: AppLocalization.text("已消费", "Spent"), value: String(format: "$%.2f", spent)),
+            UsageDetail(
+                id: "zed-spend-limit",
+                label: AppLocalization.text("消费上限", "Spend limit"),
+                value: cap.map { String(format: "$%.2f", $0) } ?? AppLocalization.text("未提供", "Not reported")
+            ),
+        ]
+        if let cap {
+            details.append(UsageDetail(
+                id: "zed-remaining-budget",
+                label: AppLocalization.text("剩余预算", "Remaining budget"),
+                value: String(format: "$%.2f", max(0, cap - spent))
+            ))
+        }
         return ProviderUsage(
             id: ProviderID(rawValue: "zed"),
             state: .ready,
-            windows: windows,
-            plan: displayPlanName(response.plan.planV3),
-            details: [],
+            windows: editPredictionWindows(used: edit.used, limit: edit.limit ?? .unlimited),
+            plan: displayPlanName(response.plan),
+            providerCost: cap.map {
+                ProviderCostSummary(
+                    used: spent,
+                    limit: $0,
+                    currencyCode: "USD",
+                    period: AppLocalization.text("当前计费周期", "Current billing period"),
+                    balance: nil
+                )
+            },
+            details: details,
             updatedAt: now,
             message: nil
         )

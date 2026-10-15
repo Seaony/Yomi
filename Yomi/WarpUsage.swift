@@ -69,12 +69,25 @@ nonisolated struct WarpUsageSnapshot: Sendable, Equatable {
             } else {
                 bonusUsedFraction = bonusCreditsRemaining > 0 ? 0 : 1
             }
+            let bonusDetail: String?
+            if bonusCreditsRemaining > 0, let expiry = bonusNextExpiration, bonusNextExpirationRemaining > 0 {
+                let dateText = expiry.formatted(
+                    Date.FormatStyle(date: .abbreviated, time: .shortened).locale(language.locale)
+                )
+                bonusDetail = AppLocalization.text(
+                    "\(bonusNextExpirationRemaining) 点数将于 \(dateText) 到期",
+                    "\(bonusNextExpirationRemaining) credits expire on \(dateText)",
+                    language: language
+                )
+            } else {
+                bonusDetail = nil
+            }
             additionalWindows = [UsageWindow(
                 id: "add-on-credits",
                 label: "Add-on credits",
                 usedFraction: bonusUsedFraction,
                 resetsAt: nil,
-                detail: nil
+                detail: bonusDetail
             )]
         } else {
             additionalWindows = []

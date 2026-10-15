@@ -123,6 +123,8 @@ struct CodexUsageTests {
 
     @Test
     func OAuthUsesAuthJSONBearerAndAccountWithoutPATHeaders() async throws {
+        let recorder = CodexRequestRecorder()
+        let resetCreditsURL = URL(string: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits")!
         let directory = try Self.temporaryCodexHome()
         defer { try? FileManager.default.removeItem(at: directory) }
         let token = try Self.jwt([
@@ -132,10 +134,27 @@ struct CodexUsageTests {
         try Data(#"{"tokens":{"access_token":"\#(token)","refresh_token":"refresh"}}"#.utf8)
             .write(to: directory.appendingPathComponent("auth.json"))
         CodexTestURLProtocol.handler = { request in
-            #expect(request.url == CodexUsageFetcher.usageURL)
+            recorder.append(request)
             #expect(request.cachePolicy == .reloadIgnoringLocalCacheData)
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
             #expect(request.value(forHTTPHeaderField: "ChatGPT-Account-Id") == "acct-oauth")
+            if request.url == resetCreditsURL {
+                #expect(request.httpMethod == "GET")
+                #expect(request.timeoutInterval == 4)
+                #expect(request.value(forHTTPHeaderField: "User-Agent") == "Yomi")
+                #expect(request.value(forHTTPHeaderField: "Accept") == "application/json")
+                #expect(request.value(forHTTPHeaderField: "OpenAI-Beta") == "codex-1")
+                #expect(request.value(forHTTPHeaderField: "originator") == "Codex Desktop")
+                return (200, Data(#"""
+                {"available_count":3,"credits":[
+                  {"status":"available","expires_at":"2030-01-01T00:00:00.123Z"},
+                  {"status":"available","expires_at":null},
+                  {"status":"available","expires_at":"2020-01-01T00:00:00Z"},
+                  {"status":"redeemed","expires_at":null}
+                ]}
+                """#.utf8))
+            }
+            #expect(request.url == CodexUsageFetcher.usageURL)
             #expect(request.value(forHTTPHeaderField: "User-Agent") == "CodexBar")
             #expect(request.value(forHTTPHeaderField: "originator") == nil)
             return (200, Self.weeklyUsage)
@@ -144,8 +163,12 @@ struct CodexUsageTests {
 
         let usage = try await CodexUsageFetcher.fetchOAuth(
             session: Self.session(), environment: ["CODEX_HOME": directory.path], now: Self.now)
+        #expect(recorder.requests.map(\.url) == [CodexUsageFetcher.usageURL, resetCreditsURL])
         #expect(usage.windows.count == 1)
         #expect(usage.details.isEmpty)
+        #expect(usage.codexResetCredits?.count == 2)
+        #expect(usage.codexResetCredits?.first?.expiresAt != nil)
+        #expect(usage.codexResetCredits?.last?.expiresAt == nil)
     }
 
     @Test
@@ -251,7 +274,7 @@ struct CodexUsageTests {
         #expect(usage.windows.map(\.label) == ["Weekly"])
         #expect(usage.windows.map(\.usedFraction) == [0.38])
         #expect(usage.windows.count == 1)
-        #expect(usage.balance == "42.50")
+        #expect(usage.balance == AppLocalization.text("42.50 积分", "42.50 credits"))
         #expect(usage.plan == "Pro 20x")
         #expect(usage.updatedAt == Self.now)
     }

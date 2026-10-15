@@ -53,6 +53,7 @@ nonisolated enum MoonshotUsageFetcher {
         let voucherBalance: Double
         let cashBalance: Double
         let updatedAt: Date
+        let region: MoonshotUsageRegion
     }
 
     private struct BalanceResponse: Decodable {
@@ -119,7 +120,7 @@ nonisolated enum MoonshotUsageFetcher {
             throw MoonshotUsageError.apiError("HTTP \(http.statusCode)")
         }
 
-        return providerUsage(summary: try parseSummary(data, now: now))
+        return providerUsage(summary: try parseSummary(data, region: region, now: now))
     }
 
     static func resolvedRegion(
@@ -165,7 +166,11 @@ nonisolated enum MoonshotUsageFetcher {
         region.balanceURL
     }
 
-    static func parseSummary(_ data: Data, now: Date = Date()) throws -> Summary {
+    static func parseSummary(
+        _ data: Data,
+        region: MoonshotUsageRegion = .international,
+        now: Date = Date()
+    ) throws -> Summary {
         let response: BalanceResponse
         do {
             response = try JSONDecoder().decode(BalanceResponse.self, from: data)
@@ -181,15 +186,20 @@ nonisolated enum MoonshotUsageFetcher {
             availableBalance: response.data.availableBalance,
             voucherBalance: response.data.voucherBalance,
             cashBalance: response.data.cashBalance,
-            updatedAt: now
+            updatedAt: now,
+            region: region
         )
     }
 
     static func providerUsage(summary: Summary) -> ProviderUsage {
-        let balance = currency(summary.availableBalance)
+        let balance = currency(summary.availableBalance, region: summary.region)
         let detail: String
         if summary.cashBalance < 0 {
-            detail = "\(balance) · \(currency(abs(summary.cashBalance))) in deficit"
+            let deficit = currency(abs(summary.cashBalance), region: summary.region)
+            detail = AppLocalization.text(
+                "\(balance) · 欠款 \(deficit)",
+                "\(balance) · \(deficit) in deficit"
+            )
         } else {
             detail = balance
         }
@@ -223,7 +233,8 @@ nonisolated enum MoonshotUsageFetcher {
         return cleaned(value)
     }
 
-    private static func currency(_ value: Double) -> String {
-        value.formatted(.currency(code: "USD").locale(Locale(identifier: "en_US")))
+    private static func currency(_ value: Double, region: MoonshotUsageRegion) -> String {
+        let code = region == .china ? "CNY" : "USD"
+        return value.formatted(.currency(code: code).locale(Locale(identifier: "en_US")))
     }
 }

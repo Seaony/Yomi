@@ -221,6 +221,18 @@ private nonisolated struct LiteLLMTeamInfoResponse: Decodable {
     }
 }
 
+private nonisolated struct LiteLLMSpendReportRow: Decodable {
+    let totalCost: Double
+
+    private enum CodingKeys: String, CodingKey {
+        case totalCost = "total_cost"
+    }
+}
+
+private nonisolated enum LiteLLMRequestError: Error {
+    case endpointUnavailable
+}
+
 nonisolated enum LiteLLMUsageFetcher {
     static let apiKeyEnvironmentKey = "LITELLM_API_KEY"
     static let baseURLEnvironmentKey = "LITELLM_BASE_URL"
@@ -242,7 +254,14 @@ nonisolated enum LiteLLMUsageFetcher {
             throw LiteLLMUsageError.invalidEndpointOverride(baseURLEnvironmentKey)
         }
 
-        let keyInfoData = try await request(keyInfoURL(baseURL), apiKey: apiKey, session: session)
+        let keyInfoData: Data
+        do {
+            keyInfoData = try await request(
+                keyInfoURL(baseURL), apiKey: apiKey, session: session, allowsUnavailable: true
+            )
+        } catch LiteLLMRequestError.endpointUnavailable {
+            return try await fetchSpendReport(baseURL, apiKey: apiKey, session: session, updatedAt: updatedAt)
+        }
         let keyInfo = try parseKeyInfo(keyInfoData)
         let snapshot: LiteLLMUsageSnapshot
         if let userID = keyInfo.userID {
@@ -381,7 +400,63 @@ nonisolated enum LiteLLMUsageFetcher {
         }
     }
 
-    private static func request(_ url: URL, apiKey: String, session: URLSession) async throws -> Data {
+    private static func fetchSpendReport(
+        _ baseURL: URL,
+        apiKey: String,
+        session: URLSession,
+        updatedAt: Date
+    ) async throws -> ProviderUsage {
+        let end = String(updatedAt.ISO8601Format().prefix(10))
+        let start = String(end.prefix(7)) + "-01"
+        func reportURL(_ scope: String) throws -> URL {
+            let endpoint = managementBaseURL(baseURL)
+                .appendingPathComponent(scope).appendingPathComponent("spend/report")
+            guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
+                throw LiteLLMUsageError.invalidURL
+            }
+            components.queryItems = [
+                URLQueryItem(name: "start_date", value: start),
+                URLQueryItem(name: "end_date", value: end),
+            ]
+            guard let url = components.url else { throw LiteLLMUsageError.invalidURL }
+            return url
+        }
+        let data: Data
+        let scope: String
+        do {
+            data = try await request(reportURL("key"), apiKey: apiKey, session: session, allowsUnavailable: true)
+            scope = AppLocalization.text("仅密钥花费", "Key spend only")
+        } catch LiteLLMRequestError.endpointUnavailable {
+            data = try await request(reportURL("user"), apiKey: apiKey, session: session)
+            scope = AppLocalization.text("仅用户花费", "User spend only")
+        }
+        guard let rows = try? JSONDecoder().decode([LiteLLMSpendReportRow].self, from: data),
+              !rows.isEmpty, rows.allSatisfy({ $0.totalCost.isFinite && $0.totalCost >= 0 }) else {
+            throw LiteLLMUsageError.parseFailed(AppLocalization.text(
+                "花费报表为空或格式不正确", "empty or invalid spend report"
+            ))
+        }
+        let used = rows.reduce(0) { $0 + $1.totalCost }
+        guard used.isFinite else {
+            throw LiteLLMUsageError.parseFailed(AppLocalization.text("total_cost 无效", "invalid total_cost"))
+        }
+        return ProviderUsage(
+            id: ProviderID(rawValue: "litellm"),
+            state: .ready,
+            windows: [],
+            providerCost: ProviderCostSummary(
+                used: used, limit: 0, currencyCode: "USD", period: "\(scope) (\(start)–\(end) UTC)"
+            ),
+            updatedAt: updatedAt
+        )
+    }
+
+    private static func request(
+        _ url: URL,
+        apiKey: String,
+        session: URLSession,
+        allowsUnavailable: Bool = false
+    ) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -389,9 +464,12 @@ nonisolated enum LiteLLMUsageFetcher {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw LiteLLMUsageError.apiError("") }
         guard (200..<300).contains(http.statusCode) else {
-            let summary = String(bytes: data.prefix(500), encoding: .utf8)?
+            if allowsUnavailable, [401, 403, 404].contains(http.statusCode) {
+                throw LiteLLMRequestError.endpointUnavailable
+            }
+            let summary = url.path.hasSuffix("/spend/report") ? "" : String(bytes: data.prefix(500), encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            throw LiteLLMUsageError.apiError("HTTP \(http.statusCode): \(summary)")
+            throw LiteLLMUsageError.apiError("HTTP \(http.statusCode)\(summary.isEmpty ? "" : ": \(summary)")")
         }
         return data
     }

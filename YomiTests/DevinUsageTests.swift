@@ -323,8 +323,8 @@ struct DevinUsageTests {
 
         let candidates = DevinSessionImporter.chromeLocalStorageCandidates(homeDirectories: [home])
 
-        #expect(candidates.map(\.label) == ["Chrome Default"])
-        #expect(candidates.first?.url.resolvingSymlinksInPath() == chrome.resolvingSymlinksInPath())
+        #expect(candidates.map(\.label) == ["Chrome Default", "Brave Default"])
+        #expect(candidates.map { $0.url.resolvingSymlinksInPath() } == [chrome, brave].map { $0.resolvingSymlinksInPath() })
     }
 
     private func makeSession() -> URLSession {

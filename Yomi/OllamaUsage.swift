@@ -52,10 +52,13 @@ nonisolated enum OllamaUsageFetcher {
     struct Snapshot: Sendable, Equatable {
         let plan: String?
         let email: String?
+        let monthlyUsedPercent: Double?
+        let monthlyResetsAt: Date?
         let sessionUsedPercent: Double?
         let weeklyUsedPercent: Double?
         let sessionResetsAt: Date?
         let weeklyResetsAt: Date?
+        let details: [UsageDetail]
     }
 
     private struct CookieCandidate: Sendable {
@@ -76,7 +79,7 @@ nonisolated enum OllamaUsageFetcher {
         "__Secure-next-auth.session-token",
         "next-auth.session-token",
     ]
-    private static let usageLabels = ["Session usage", "Hourly usage", "Weekly usage"]
+    private static let usageLabels = ["Monthly usage", "Free usage", "Session usage", "Hourly usage", "Weekly usage"]
     private static let browserUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
 
@@ -145,18 +148,22 @@ nonisolated enum OllamaUsageFetcher {
     }
 
     static func parseSnapshot(_ html: String) throws -> Snapshot {
+        let monthly = parseUsageBlock(labels: ["Monthly usage", "Free usage"], html: html)
         let session = parseUsageBlock(labels: ["Session usage", "Hourly usage"], html: html)
         let weekly = parseUsageBlock(labels: ["Weekly usage"], html: html)
-        guard session != nil || weekly != nil else {
+        let details = parseCreditDetails(html)
+        guard monthly != nil || session != nil || weekly != nil || !details.isEmpty else {
             if looksSignedOut(html) { throw OllamaUsageError.notLoggedIn }
             throw OllamaUsageError.parseFailed("Missing Ollama usage data.")
         }
         return Snapshot(
-            plan: firstCapture(
+            plan: [
+                #"Included usage\s*</span>\s*<span[^>]*>([^<]+)</span"#,
                 #"Cloud Usage\s*</span>\s*<span[^>]*>([^<]+)</span>"#,
-                in: html,
-                options: [.dotMatchesLineSeparators]
-            ).flatMap(cleaned),
+                #"<h[1-6][^>]*>\s*Usage credits\s*<span[^>]*>\s*([^<]+)</span"#,
+            ].lazy.compactMap {
+                firstCapture($0, in: html, options: [.dotMatchesLineSeparators]).flatMap(cleaned)
+            }.first,
             email: firstCapture(
                 #"id=\"header-email\"[^>]*>([^<]+)<"#,
                 in: html,
@@ -165,16 +172,27 @@ nonisolated enum OllamaUsageFetcher {
                 guard let value = cleaned(value), value.contains("@") else { return nil }
                 return value
             },
+            monthlyUsedPercent: monthly?.percent,
+            monthlyResetsAt: monthly?.resetsAt,
             sessionUsedPercent: session?.percent,
             weeklyUsedPercent: weekly?.percent,
             sessionResetsAt: session?.resetsAt,
-            weeklyResetsAt: weekly?.resetsAt
+            weeklyResetsAt: weekly?.resetsAt,
+            details: details
         )
     }
 
     static func providerUsage(_ snapshot: Snapshot, now: Date = Date()) -> ProviderUsage {
         var windows: [UsageWindow] = []
-        if let percent = snapshot.sessionUsedPercent {
+        if let percent = snapshot.monthlyUsedPercent {
+            windows.append(UsageWindow(
+                id: "ollama-monthly",
+                label: "Monthly",
+                usedFraction: min(1, max(0, percent / 100)),
+                resetsAt: snapshot.monthlyResetsAt,
+                detail: nil
+            ))
+        } else if let percent = snapshot.sessionUsedPercent {
             windows.append(UsageWindow(
                 id: "ollama-session",
                 label: "Session",
@@ -196,8 +214,9 @@ nonisolated enum OllamaUsageFetcher {
             id: ProviderID(rawValue: "ollama"),
             state: .ready,
             windows: windows,
+            balance: snapshot.details.first(where: { $0.id == "ollama-credit-balance" })?.value,
             plan: snapshot.plan,
-            details: [],
+            details: snapshot.details,
             updatedAt: now,
             message: nil
         )
@@ -266,48 +285,83 @@ nonisolated enum OllamaUsageFetcher {
     ) async throws -> ProviderUsage {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw OllamaUsageError.missingAPIKey }
-        let validation = try resolvedValidationURL(tagsURL: tagsURL, override: override)
-
-        var validationRequest = URLRequest(url: validation)
-        validationRequest.httpMethod = "POST"
-        validationRequest.timeoutInterval = 20
-        validationRequest.httpBody = Data(#"{"query":""}"#.utf8)
-        validationRequest.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        validationRequest.setValue("application/json", forHTTPHeaderField: "Accept")
-        validationRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        validationRequest.setValue("Yomi/1.0", forHTTPHeaderField: "User-Agent")
-        let (_, validationResponse) = try await response(for: validationRequest, session: session)
-        switch validationResponse.statusCode {
-        case 200, 400: break
-        case 401, 403: throw OllamaUsageError.apiUnauthorized
-        default: throw OllamaUsageError.requestFailed(validationResponse.statusCode)
-        }
-
-        var tagsRequest = URLRequest(url: tagsURL)
-        tagsRequest.timeoutInterval = 20
-        tagsRequest.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        tagsRequest.setValue("application/json", forHTTPHeaderField: "Accept")
-        tagsRequest.setValue("Yomi/1.0", forHTTPHeaderField: "User-Agent")
-        let (data, tagsResponse) = try await response(for: tagsRequest, session: session)
-        switch tagsResponse.statusCode {
+        _ = try resolvedValidationURL(tagsURL: tagsURL, override: override)
+        let balanceURL = tagsURL.deletingLastPathComponent().appendingPathComponent("balance")
+        var request = URLRequest(url: balanceURL)
+        request.timeoutInterval = 20
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("Yomi/1.0", forHTTPHeaderField: "User-Agent")
+        let (data, http) = try await response(for: request, session: session)
+        switch http.statusCode {
         case 200: break
         case 401, 403: throw OllamaUsageError.apiUnauthorized
-        default: throw OllamaUsageError.requestFailed(tagsResponse.statusCode)
+        default: throw OllamaUsageError.requestFailed(http.statusCode)
         }
-        struct Tags: Decodable { let models: [Model] }
-        struct Model: Decodable {}
-        do {
-            _ = try JSONDecoder().decode(Tags.self, from: data)
-        } catch {
-            throw OllamaUsageError.parseFailed(error.localizedDescription)
+        return try parseAPIBalance(data, now: now)
+    }
+
+    static func parseAPIBalance(_ data: Data, now: Date = Date()) throws -> ProviderUsage {
+        let invalid = OllamaUsageError.parseFailed(AppLocalization.text(
+            "无法识别额度余额数据。", "Unrecognized credit balance response."
+        ))
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { throw invalid }
+        var details: [UsageDetail] = []
+        var monthlyPercent: Double?
+        var resetsAt: Date?
+        if let purchased = root["purchased"], !(purchased is NSNull) {
+            guard let wallet = purchased as? [String: Any], let balance = amount(wallet["balance_usd"]) else {
+                throw invalid
+            }
+            details.append(UsageDetail(id: "ollama-credit-balance", label: "Credit balance", value: usd(balance)))
         }
-        return ProviderUsage(
-            id: ProviderID(rawValue: "ollama"),
-            state: .ready,
-            windows: [],
-            updatedAt: now,
-            message: nil
-        )
+        if let included = root["included"], !(included is NSNull) {
+            guard let wallet = included as? [String: Any],
+                  let allowance = amount(wallet["allowance_usd"]), allowance >= 0,
+                  let balance = amount(wallet["balance_usd"]) else { throw invalid }
+            let used = max(0, allowance - balance)
+            guard used.isFinite else { throw invalid }
+            details.append(UsageDetail(id: "ollama-monthly-used", label: "Monthly credits used", value: usd(used)))
+            if allowance > 0 { monthlyPercent = min(100, used / allowance * 100) }
+            if let period = wallet["period"], !(period is NSNull) {
+                guard let period = period as? [String: Any] else { throw invalid }
+                if let until = period["until"], !(until is NSNull) {
+                    guard let raw = until as? String,
+                          raw.range(of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"#,
+                                    options: .regularExpression) != nil,
+                          let date = isoDate(raw), validCalendarDate(raw) else { throw invalid }
+                    resetsAt = date
+                }
+            }
+        }
+        guard !details.isEmpty else { throw invalid }
+        return providerUsage(Snapshot(
+            plan: nil, email: nil, monthlyUsedPercent: monthlyPercent, monthlyResetsAt: resetsAt,
+            sessionUsedPercent: nil, weeklyUsedPercent: nil, sessionResetsAt: nil, weeklyResetsAt: nil,
+            details: details
+        ), now: now)
+    }
+
+    private static func amount(_ raw: Any?) -> Double? {
+        if let number = raw as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
+            return number.doubleValue.isFinite ? number.doubleValue : nil
+        }
+        guard let text = (raw as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              text.range(of: #"^-?\d+(?:\.\d+)?$"#, options: .regularExpression) != nil,
+              let value = Double(text), value.isFinite else { return nil }
+        return value
+    }
+
+    private static func usd(_ value: Double) -> String { String(format: "$%.2f", value) }
+
+    private static func validCalendarDate(_ raw: String) -> Bool {
+        let parts = raw.prefix(10).split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return false }
+        let calendar = Calendar(identifier: .gregorian)
+        let components = DateComponents(year: parts[0], month: parts[1], day: parts[2])
+        guard let date = calendar.date(from: components) else { return false }
+        let parsed = calendar.dateComponents([.year, .month, .day], from: date)
+        return parsed.year == parts[0] && parsed.month == parts[1] && parsed.day == parts[2]
     }
 
     private static func fetchWeb(
@@ -454,13 +508,50 @@ nonisolated enum OllamaUsageFetcher {
         let resetsAt: Date?
     }
 
+    private static func parseCreditDetails(_ html: String) -> [UsageDetail] {
+        let page = html.replacingOccurrences(
+            of: #"(?is)<(script|style)\b[^>]*>.*?</\1\s*>"#, with: "", options: .regularExpression
+        ).replacingOccurrences(of: "&nbsp;", with: " ")
+        let heading = #"<h[1-6][^>]*>\s*Usage credits(?:\s*<span[^>]*>[^<]*</span\s*>)?\s*</h[1-6]\s*>"#
+        guard let wallet = firstCapture(
+            heading + #"(.*?)(?=</section\s*>|<h[1-6]\b|$)"#,
+            in: page, options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else { return [] }
+        let amount = #"(\$(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?)"#
+        let fields = [
+            ("ollama-credit-balance", "Credit balance", #"^\s*(?:<div[^>]*>\s*)*<span[^>]*>\s*\#(amount)\s*</span\s*>"#),
+            ("ollama-monthly-used", "Monthly credits used",
+             #"<span[^>]*>\s*Monthly credits used\s*</span\s*>\s*<span[^>]*>\s*\#(amount)\s*</span\s*>"#),
+            ("ollama-next-refill", "Next refill",
+             #"<p[^>]*>\s*Refills\s+(to\s+\#(amount)\s+in\s+[^<]{1,160}?)\s*</p\s*>"#),
+        ]
+        let details = fields.compactMap { id, label, pattern in
+            firstCapture(pattern, in: wallet, options: [.caseInsensitive])
+                .map { UsageDetail(id: id, label: label, value: id == "ollama-next-refill" ? refillText($0) : $0) }
+        }
+        return details.contains(where: { $0.id != "ollama-next-refill" }) ? details : []
+    }
+
+    private static func refillText(_ text: String) -> String {
+        let pattern = #"^to\s+(\$[0-9,.]+)\s+in\s+([0-9]+(?:\.[0-9]+)?)\s+(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\.?$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)),
+              let amountRange = Range(match.range(at: 1), in: text),
+              let countRange = Range(match.range(at: 2), in: text),
+              let unitRange = Range(match.range(at: 3), in: text) else { return text }
+        let units = ["second": "秒", "minute": "分钟", "hour": "小时", "day": "天", "week": "周", "month": "个月", "year": "年"]
+        let unit = text[unitRange].lowercased()
+        guard let chineseUnit = units[unit.hasSuffix("s") ? String(unit.dropLast()) : unit] else { return text }
+        return AppLocalization.text("\(text[countRange]) \(chineseUnit)后补充至 \(text[amountRange])", text)
+    }
+
     private static func parseUsageBlock(labels: [String], html: String) -> UsageBlock? {
         for label in labels {
-            guard let labelRange = html.range(of: label) else { continue }
+            guard let labelRange = html.range(of: #">\s*\#(label)\s*<"#, options: .regularExpression) else { continue }
             let tail = String(html[labelRange.upperBound...])
             let boundary = usageLabels
                 .filter { $0 != label }
-                .compactMap { tail.range(of: $0)?.lowerBound }
+                .compactMap { tail.range(of: #">\s*\#($0)\s*<"#, options: .regularExpression)?.lowerBound }
                 .min()
             let bounded = boundary.map { String(tail[..<$0]) } ?? String(tail.prefix(4000))
             let block = String(bounded.prefix(4000))
@@ -468,7 +559,7 @@ nonisolated enum OllamaUsageFetcher {
                 #"([0-9]+(?:\.[0-9]+)?)\s*%\s*used"#,
                 in: block,
                 options: [.caseInsensitive]
-            ).flatMap(Double.init) ?? firstCapture(
+            ).flatMap(Double.init) ?? dollarUsedPercent(block) ?? firstCapture(
                 #"width:\s*([0-9]+(?:\.[0-9]+)?)%"#,
                 in: block,
                 options: [.caseInsensitive]
@@ -479,8 +570,26 @@ nonisolated enum OllamaUsageFetcher {
         return nil
     }
 
+    private static func dollarUsedPercent(_ text: String) -> Double? {
+        let amount = #"((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?)"#
+        let pattern = #"\$\#(amount)\s+of\s+\$\#(amount)\s+used"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)),
+              let usedRange = Range(match.range(at: 1), in: text),
+              let limitRange = Range(match.range(at: 2), in: text),
+              let used = Double(text[usedRange].replacingOccurrences(of: ",", with: "")),
+              let limit = Double(text[limitRange].replacingOccurrences(of: ",", with: "")),
+              used.isFinite, limit.isFinite, limit > 0 else { return nil }
+        let percent = used / limit * 100
+        return percent.isFinite ? percent : nil
+    }
+
     private static func parseISODate(_ text: String) -> Date? {
         guard let raw = firstCapture(#"data-time=\"([^\"]+)\""#, in: text) else { return nil }
+        return isoDate(raw)
+    }
+
+    private static func isoDate(_ raw: String) -> Date? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = formatter.date(from: raw) { return date }

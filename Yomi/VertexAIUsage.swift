@@ -473,14 +473,17 @@ nonisolated enum VertexAIUsageFetcher {
         request.httpMethod = "POST"
         request.timeoutInterval = 30
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        var body = URLComponents()
-        body.queryItems = [
-            URLQueryItem(name: "client_id", value: credentials.clientID),
-            URLQueryItem(name: "client_secret", value: credentials.clientSecret),
-            URLQueryItem(name: "refresh_token", value: credentials.refreshToken),
-            URLQueryItem(name: "grant_type", value: "refresh_token"),
-        ]
-        request.httpBody = Data((body.percentEncodedQuery ?? "").utf8)
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "+&=")
+        let body = [
+            ("client_id", credentials.clientID),
+            ("client_secret", credentials.clientSecret),
+            ("refresh_token", credentials.refreshToken),
+            ("grant_type", "refresh_token"),
+        ].map { key, value in
+            "\(key)=\(value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value)"
+        }.joined(separator: "&")
+        request.httpBody = Data(body.utf8)
         let data: Data
         let response: URLResponse
         do {
@@ -502,7 +505,13 @@ nonisolated enum VertexAIUsageFetcher {
         guard http.statusCode == 200,
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { throw VertexAIUsageError.requestFailed(http.statusCode, responseBody(data)) }
-        let accessToken = root["access_token"] as? String ?? credentials.accessToken
+        guard let accessToken = root["access_token"] as? String,
+              !accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw VertexAIUsageError.invalidResponse(
+                AppLocalization.text("未返回访问令牌", "Missing access token")
+            )
+        }
         let expiresIn = number(root["expires_in"]) ?? 3600
         return VertexAICredentials(
             accessToken: accessToken,
@@ -562,12 +571,7 @@ nonisolated enum VertexAIUsageFetcher {
         var pageToken: String?
         var allSeries: [TimeSeries] = []
         var seenPageTokens: Set<String> = []
-        var pageCount = 0
         repeat {
-            pageCount += 1
-            guard pageCount <= 100 else {
-                throw VertexAIUsageError.invalidResponse("Cloud Monitoring returned too many pages")
-            }
             guard var components = URLComponents(
                 string: "\(monitoringEndpoint)/\(projectID)/timeSeries"
             ) else { throw VertexAIUsageError.invalidCredentials("Invalid Monitoring URL") }
@@ -608,11 +612,13 @@ nonisolated enum VertexAIUsageFetcher {
             }
             let decoded = try JSONDecoder().decode(TimeSeriesResponse.self, from: data)
             allSeries.append(contentsOf: decoded.timeSeries ?? [])
-            pageToken = decoded.nextPageToken?.isEmpty == false ? decoded.nextPageToken : nil
-            if let pageToken, !seenPageTokens.insert(pageToken).inserted {
-                throw VertexAIUsageError.invalidResponse("Cloud Monitoring returned a repeated page token")
+            guard let nextToken = decoded.nextPageToken, !nextToken.isEmpty,
+                  seenPageTokens.insert(nextToken).inserted else { break }
+            guard seenPageTokens.count < 100 else {
+                throw VertexAIUsageError.invalidResponse("Cloud Monitoring returned too many pages")
             }
-        } while pageToken != nil
+            pageToken = nextToken
+        } while true
         return allSeries
     }
 

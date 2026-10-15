@@ -7,11 +7,15 @@ nonisolated enum OpenRouterUsageError: LocalizedError, Equatable {
     case network(String)
     case apiError(endpoint: String, status: Int)
     case parseFailed(endpoint: String, reason: String)
+    case unavailable(String)
 
     var errorDescription: String? {
         switch self {
         case .missingCredential:
-            AppLocalization.text("缺少 OpenRouter API Key", "Missing OpenRouter API key")
+            AppLocalization.text(
+                "请在 API Key 字段填写普通或管理 API Key，或设置 OPENROUTER_API_KEY；可选的管理 API Key 字段不能替代它。",
+                "Enter a regular or Management API key in the API key field, or set OPENROUTER_API_KEY. The optional Management API key field does not replace it."
+            )
         case let .invalidEndpoint(value):
             AppLocalization.text(
                 "OpenRouter 接口必须使用 HTTPS：\(value)",
@@ -32,6 +36,8 @@ nonisolated enum OpenRouterUsageError: LocalizedError, Equatable {
                 "无法解析 OpenRouter \(endpoint) 返回的数据：\(reason)",
                 "Failed to parse OpenRouter \(endpoint) response: \(reason)"
             )
+        case let .unavailable(message):
+            AppLocalization.text("OpenRouter 暂时不可用：\(message)", "OpenRouter is unavailable: \(message)")
         }
     }
 }
@@ -44,11 +50,6 @@ nonisolated enum OpenRouterUsageFetcher {
         var balance: Double { max(0, total - used) }
     }
 
-    struct RateLimit: Sendable, Equatable {
-        let requests: Int
-        let interval: String
-    }
-
     struct KeyUsage: Sendable, Equatable {
         let limit: Double?
         let limitRemaining: Double?
@@ -57,7 +58,7 @@ nonisolated enum OpenRouterUsageFetcher {
         let daily: Double?
         let weekly: Double?
         let monthly: Double?
-        let rateLimit: RateLimit?
+        let isManagementKey: Bool
 
         var amountUsedForLimit: Double? {
             guard let limit, limit > 0 else { return nil }
@@ -98,7 +99,7 @@ nonisolated enum OpenRouterUsageFetcher {
     }
 
     struct Snapshot: Sendable, Equatable {
-        let credits: Credits
+        let credits: Credits?
         let keyUsage: KeyUsage?
         let keyDiagnostic: String?
         let activity: ActivitySummary?
@@ -166,16 +167,24 @@ nonisolated enum OpenRouterUsageFetcher {
         let title = cleaned(clientTitle) ?? cleaned(environment[titleEnvironmentKey]) ?? "Yomi"
         let referer = cleaned(httpReferer) ?? cleaned(environment[refererEnvironmentKey])
 
-        let creditsData = try await request(
-            url: baseURL.appendingPathComponent("credits"),
-            token: key,
-            timeout: 15,
-            session: session,
-            clientTitle: title,
-            referer: referer,
-            endpointName: "credits"
-        )
-        let credits = try parseCredits(creditsData)
+        let credits: Credits?
+        let creditsDiagnostic: String?
+        do {
+            let data = try await request(
+                url: baseURL.appendingPathComponent("credits"),
+                token: key,
+                timeout: 4,
+                session: session,
+                clientTitle: title,
+                referer: referer,
+                endpointName: "credits"
+            )
+            credits = try parseCredits(data)
+            creditsDiagnostic = nil
+        } catch {
+            credits = nil
+            creditsDiagnostic = degradation(for: error, management: false)
+        }
 
         let keyResult = await optionalKeyUsage(
             baseURL: baseURL,
@@ -183,11 +192,18 @@ nonisolated enum OpenRouterUsageFetcher {
             session: session
         )
         let managementKey = resolvedManagementKey(configured: managementAPIKey, environment: environment)
+            ?? (isOfficialAPIBase(baseURL) && keyResult.value?.isManagementKey == true ? key : nil)
         let activityResult = await optionalActivity(
             managementAPIKey: managementKey,
             session: session,
             now: now
         )
+        guard credits != nil || keyResult.value != nil || activityResult.value != nil else {
+            throw OpenRouterUsageError.unavailable(localizedDiagnostic(
+                keyResult.diagnostic ?? creditsDiagnostic ?? activityResult.diagnostic,
+                language: language
+            ))
+        }
         let snapshot = Snapshot(
             credits: credits,
             keyUsage: keyResult.value,
@@ -196,7 +212,7 @@ nonisolated enum OpenRouterUsageFetcher {
             activityDiagnostic: activityResult.diagnostic,
             updatedAt: now
         )
-        return providerUsage(snapshot, language: language)
+        return providerUsage(snapshot, language: language, creditsDiagnostic: creditsDiagnostic)
     }
 
     static func parseCredits(_ data: Data) throws -> Credits {
@@ -232,23 +248,9 @@ nonisolated enum OpenRouterUsageFetcher {
             throw OpenRouterUsageError.parseFailed(endpoint: "key", reason: "limit_reset must be a string")
         }
 
-        let rateLimit: RateLimit?
-        if payload["rate_limit"] == nil || payload["rate_limit"] is NSNull {
-            rateLimit = nil
-        } else if let value = payload["rate_limit"] as? [String: Any],
-                  let requests = try optionalSafeInteger(
-                      value["requests"], field: "rate_limit.requests", endpoint: "key"
-                  ),
-                  let interval = value["interval"] as? String {
-            guard requests <= Int64(Int.max) else {
-                throw OpenRouterUsageError.parseFailed(
-                    endpoint: "key", reason: "rate_limit.requests is out of range"
-                )
-            }
-            rateLimit = RateLimit(requests: Int(requests), interval: interval)
-        } else {
-            throw OpenRouterUsageError.parseFailed(endpoint: "key", reason: "rate_limit is invalid")
-        }
+        let isManagementKey = (payload["is_management_key"] as? NSNumber).map {
+            CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue
+        } ?? false
 
         return KeyUsage(
             limit: limit,
@@ -258,7 +260,7 @@ nonisolated enum OpenRouterUsageFetcher {
             daily: daily,
             weekly: weekly,
             monthly: monthly,
-            rateLimit: rateLimit
+            isManagementKey: isManagementKey
         )
     }
 
@@ -279,6 +281,7 @@ nonisolated enum OpenRouterUsageFetcher {
         var signatures: [String: String] = [:]
         var entries: [ActivityEntry] = []
         var totalTokens: Int64 = 0
+        var totalReasoning: Int64 = 0
         var totalRequests: Int64 = 0
         var totalCost = 0.0
         var meteredCost = 0.0
@@ -304,9 +307,6 @@ nonisolated enum OpenRouterUsageFetcher {
             let output = try requiredNonnegativeInteger(row["completion_tokens"], index, "completion_tokens")
             let reasoning = try optionalNonnegativeInteger(row["reasoning_tokens"], index, "reasoning_tokens") ?? 0
             let requests = try requiredNonnegativeInteger(row["requests"], index, "requests")
-            guard reasoning <= output else {
-                throw activityFailure(index, "reasoning_tokens must not exceed completion_tokens")
-            }
             let metered = try requiredFinite(row["usage"], field: "usage", endpoint: "activity")
             let estimated = try optionalFinite(
                 row["byok_usage_inference"], field: "byok_usage_inference", endpoint: "activity"
@@ -315,7 +315,9 @@ nonisolated enum OpenRouterUsageFetcher {
                 throw activityFailure(index, "spend must be finite and nonnegative")
             }
             let (rowTokens, rowTokenOverflow) = input.addingReportingOverflow(output)
-            guard !rowTokenOverflow else { throw activityFailure(index, "token total overflowed") }
+            guard !rowTokenOverflow, rowTokens <= 9_007_199_254_740_991 else {
+                throw activityFailure(index, "token total overflowed")
+            }
 
             let identity = [
                 day,
@@ -332,11 +334,15 @@ nonisolated enum OpenRouterUsageFetcher {
             signatures[identity] = signature
 
             let (newTokens, tokenOverflow) = totalTokens.addingReportingOverflow(rowTokens)
+            let (newReasoning, reasoningOverflow) = totalReasoning.addingReportingOverflow(reasoning)
             let (newRequests, requestOverflow) = totalRequests.addingReportingOverflow(requests)
-            guard !tokenOverflow, !requestOverflow else {
+            guard !tokenOverflow, !reasoningOverflow, !requestOverflow,
+                  newTokens <= 9_007_199_254_740_991, newReasoning <= 9_007_199_254_740_991,
+                  newRequests <= 9_007_199_254_740_991 else {
                 throw activityFailure(index, "aggregate exceeded the integer range")
             }
             totalTokens = newTokens
+            totalReasoning = newReasoning
             totalRequests = newRequests
             meteredCost += metered
             estimatedCost += estimated
@@ -372,20 +378,28 @@ nonisolated enum OpenRouterUsageFetcher {
 
     static func providerUsage(
         _ snapshot: Snapshot,
-        language: AppLanguage = AppLocalization.currentLanguage
+        language: AppLanguage = AppLocalization.currentLanguage,
+        creditsDiagnostic: String? = nil
     ) -> ProviderUsage {
         let currency: (Double) -> String = { String(format: "$%.2f", max(0, $0)) }
         let text: (String, String) -> String = {
             AppLocalization.text($0, $1, language: language)
         }
         var windows: [UsageWindow] = []
-        var details = [
-            UsageDetail(
-                id: "openrouter-credit-remaining", label: "Remaining", value: currency(snapshot.credits.balance)
-            ),
-            UsageDetail(id: "openrouter-credit-used", label: "Used", value: currency(snapshot.credits.used)),
-            UsageDetail(id: "openrouter-credit-total", label: "Total added", value: currency(snapshot.credits.total)),
-        ]
+        var details: [UsageDetail] = []
+        if let credits = snapshot.credits {
+            details = [
+                UsageDetail(id: "openrouter-credit-remaining", label: "Remaining", value: currency(credits.balance)),
+                UsageDetail(id: "openrouter-credit-used", label: "Used", value: currency(credits.used)),
+                UsageDetail(id: "openrouter-credit-total", label: "Total added", value: currency(credits.total)),
+            ]
+        } else {
+            details.append(UsageDetail(
+                id: "openrouter-credit-unavailable",
+                label: "Balance",
+                value: localizedDiagnostic(creditsDiagnostic, language: language)
+            ))
+        }
 
         if let key = snapshot.keyUsage {
             if let limit = key.limit, limit > 0 {
@@ -434,34 +448,69 @@ nonisolated enum OpenRouterUsageFetcher {
                     id: "openrouter-key-\(id)", label: label, value: currency(value)
                 ))
             }
-            if let rate = key.rateLimit {
-                details.append(UsageDetail(
-                    id: "openrouter-rate-limit",
-                    label: "Rate limit",
-                    value: text("\(rate.requests) 次请求 / \(rate.interval)", "\(rate.requests) requests / \(rate.interval)")
-                ))
-            }
+        } else {
+            details.append(UsageDetail(
+                id: "openrouter-key-unavailable",
+                label: "API key limit",
+                value: localizedDiagnostic(snapshot.keyDiagnostic, language: language)
+            ))
         }
 
-        let providerCost: ProviderCostSummary?
-        let last30Days: DailyTokenUsage?
-        if let activity = snapshot.activity {
+        var providerCost: ProviderCostSummary?
+        let key = snapshot.keyUsage
+        if !(key?.limit.map { $0 > 0 } ?? false), key?.isManagementKey != true,
+           let used = key?.monthly ?? key?.cumulative ?? snapshot.credits?.used {
+            let period: String
+            if key?.monthly != nil {
+                period = text("本月（API Key）", "This month (API key)")
+            } else if key?.cumulative != nil {
+                period = text("密钥累计用量", "Total key usage")
+            } else {
+                period = text("账号累计用量", "Total account usage")
+            }
             providerCost = ProviderCostSummary(
-                used: activity.totalCost,
+                used: max(0, used),
                 limit: 0,
                 currencyCode: "USD",
-                period: text("最近 30 天", "Last 30 days"),
-                balance: snapshot.credits.balance
+                period: period,
+                balance: snapshot.credits?.balance
             )
+        }
+        let last30Days: DailyTokenUsage?
+        if let activity = snapshot.activity {
             last30Days = DailyTokenUsage(tokens: activity.totalTokens, valueUSD: activity.totalCost)
+            details.append(UsageDetail(
+                id: "openrouter-history-tokens",
+                label: text("最近 30 天 Token（UTC）", "30-day tokens (UTC)"),
+                value: activity.totalTokens.formatted()
+            ))
             details.append(UsageDetail(
                 id: "openrouter-history-requests",
                 label: "Last 30 days requests",
                 value: activity.totalRequests.formatted()
             ))
+            details.append(UsageDetail(
+                id: "openrouter-history-models",
+                label: text("最近 30 天模型数（UTC）", "30-day models (UTC)"),
+                value: Set(activity.entries.compactMap(\.model)).count.formatted()
+            ))
+            details.append(UsageDetail(
+                id: "openrouter-history-cost",
+                label: text("最近 30 天费用（UTC）", "30-day spend (UTC)"),
+                value: activity.estimatedCost > 0
+                    ? text(
+                        "\(currency(activity.totalCost)) · 含 BYOK 估算 \(currency(activity.estimatedCost))",
+                        "\(currency(activity.totalCost)) · includes \(currency(activity.estimatedCost)) BYOK estimates"
+                    )
+                    : currency(activity.totalCost)
+            ))
         } else {
-            providerCost = nil
             last30Days = nil
+            details.append(UsageDetail(
+                id: "openrouter-history-unavailable",
+                label: "Last 30 days",
+                value: localizedDiagnostic(snapshot.activityDiagnostic, language: language)
+            ))
         }
 
         return ProviderUsage(
@@ -469,7 +518,7 @@ nonisolated enum OpenRouterUsageFetcher {
             state: .ready,
             windows: windows,
             additionalWindows: [],
-            balance: currency(snapshot.credits.balance),
+            balance: snapshot.credits.map { currency($0.balance) },
             plan: nil,
             last30Days: last30Days,
             providerCost: providerCost,
@@ -488,7 +537,7 @@ nonisolated enum OpenRouterUsageFetcher {
             let data = try await request(
                 url: baseURL.appendingPathComponent("key"),
                 token: apiKey,
-                timeout: 1,
+                timeout: 4,
                 session: session,
                 clientTitle: nil,
                 referer: nil,
@@ -514,7 +563,7 @@ nonisolated enum OpenRouterUsageFetcher {
             async let historyData = request(
                 url: activityURL,
                 token: managementAPIKey,
-                timeout: 1,
+                timeout: 4,
                 session: session,
                 clientTitle: nil,
                 referer: nil,
@@ -523,7 +572,7 @@ nonisolated enum OpenRouterUsageFetcher {
             async let latestData = request(
                 url: datedURL,
                 token: managementAPIKey,
-                timeout: 1,
+                timeout: 4,
                 session: session,
                 clientTitle: nil,
                 referer: nil,
@@ -675,6 +724,26 @@ nonisolated enum OpenRouterUsageFetcher {
         default:
             return "Request failed"
         }
+    }
+
+    private static func localizedDiagnostic(_ diagnostic: String?, language: AppLanguage) -> String {
+        let chinese: String
+        switch diagnostic {
+        case "Request timed out": chinese = "请求超时"
+        case "Request failed": chinese = "请求失败"
+        case "Response was invalid": chinese = "返回的数据无效"
+        case "Management API key not configured": chinese = "未配置管理 API Key"
+        case "Management API key required": chinese = "需要管理 API Key"
+        case let value? where value.hasPrefix("Request returned HTTP "):
+            chinese = "请求失败（HTTP \(value.dropFirst("Request returned HTTP ".count))）"
+        default: chinese = "暂时不可用"
+        }
+        return AppLocalization.text(chinese, diagnostic ?? "Unavailable right now", language: language)
+    }
+
+    private static func isOfficialAPIBase(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https" && url.host?.lowercased() == "openrouter.ai"
+            && (url.port == nil || url.port == 443) && url.path == "/api/v1"
     }
 
     private static func cleaned(_ raw: String?) -> String? {

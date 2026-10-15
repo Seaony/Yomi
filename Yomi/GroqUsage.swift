@@ -323,11 +323,15 @@ nonisolated enum GroqUsageFetcher {
 
     static func parsePrometheusScalar(_ data: Data) throws -> Double {
         do {
-            let response = try JSONDecoder().decode(PrometheusResponse.self, from: data)
-            guard response.status == "success" else {
-                throw GroqUsageError.metricsAPIError(response.error ?? "query failed")
+            let payload = try JSONDecoder().decode(PrometheusResponse.self, from: data).data
+            return try payload.result.reduce(0) { total, series in
+                guard let values = series.value, values.count == 2,
+                      values[0].doubleValue?.isFinite == true,
+                      let value = values[1].doubleValue, value >= 0, (total + value).isFinite else {
+                    throw GroqUsageError.metricsParseFailed(AppLocalization.text("指标样本无效", "invalid metric sample"))
+                }
+                return total + value
             }
-            return response.data?.result.compactMap { $0.value?.last?.doubleValue }.reduce(0, +) ?? 0
         } catch let error as GroqUsageError {
             throw error
         } catch {
@@ -591,13 +595,22 @@ nonisolated enum GroqUsageFetcher {
             baseURL: baseURL,
             session: session
         )
-        return try await GroqMetricsUsageSnapshot(
+        let snapshot = try await GroqMetricsUsageSnapshot(
             requestRatePerSecond: requests,
             inputTokenRatePerSecond: input,
             outputTokenRatePerSecond: output,
             promptCacheHitRatePerSecond: cache,
             updatedAt: now
         )
+        let perMinuteRates = [
+            snapshot.requestRatePerSecond * 60,
+            (snapshot.inputTokenRatePerSecond + snapshot.outputTokenRatePerSecond) * 60,
+            snapshot.promptCacheHitRatePerSecond * 60,
+        ]
+        guard perMinuteRates.allSatisfy(\.isFinite) else {
+            throw GroqUsageError.metricsParseFailed(AppLocalization.text("每分钟速率超出范围", "non-finite per-minute rates"))
+        }
+        return snapshot
     }
 
     private static func queryScalar(
@@ -859,29 +872,28 @@ private nonisolated struct StytchResponse: Decodable {
 private nonisolated struct PrometheusResponse: Decodable {
     struct Payload: Decodable { let result: [Series] }
     struct Series: Decodable { let value: [PrometheusValue]? }
-    enum PrometheusValue: Decodable {
-        case number(Double)
-        case string(String)
+    struct PrometheusValue: Decodable {
+        let doubleValue: Double?
 
         init(from decoder: Decoder) throws {
             let container = try decoder.singleValueContainer()
-            if let number = try? container.decode(Double.self) {
-                self = .number(number)
-            } else {
-                self = try .string(container.decode(String.self))
-            }
-        }
-
-        var doubleValue: Double? {
-            switch self {
-            case let .number(value): value
-            case let .string(value): Double(value)
-            }
+            self.doubleValue = (try? container.decode(Double.self)) ??
+                (try? container.decode(String.self)).flatMap(Double.init)
         }
     }
-    let status: String
-    let data: Payload?
-    let error: String?
+    let data: Payload
+
+    private enum CodingKeys: String, CodingKey {
+        case status, data, error
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard try container.decode(String.self, forKey: .status) == "success" else {
+            throw GroqUsageError.metricsAPIError((try? container.decode(String.self, forKey: .error)) ?? "query failed")
+        }
+        self.data = try container.decode(Payload.self, forKey: .data)
+    }
 }
 
 private nonisolated struct ModelAccumulator {

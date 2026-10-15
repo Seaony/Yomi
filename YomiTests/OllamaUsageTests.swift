@@ -173,24 +173,27 @@ struct OllamaUsageTests {
         let recorder = OllamaRequestRecorder()
         let session = makeSession { request in
             recorder.append(request)
-            if request.url?.path == "/api/web_search" {
-                #expect(Self.requestBody(request) == Data(#"{"query":""}"#.utf8))
-                return Self.response(request, status: 400, body: #"{"error":"query required"}"#)
-            }
-            return Self.response(request, status: 200, body: #"{"models":[{}]}"#)
+            #expect(Self.requestBody(request) == nil)
+            return Self.response(
+                request,
+                status: 200,
+                body: #"{"included":{"allowance_usd":60,"balance_usd":"52.50"},"purchased":{"balance_usd":"18.25"}}"#
+            )
         }
 
         let usage = try await OllamaUsageFetcher.fetchAPI(apiKey: "live-key", session: session)
 
-        #expect(usage.windows.isEmpty)
+        #expect(usage.windows.map(\.id) == ["ollama-monthly"])
+        #expect(usage.windows.map(\.usedFraction) == [0.125])
         #expect(usage.plan == nil)
-        #expect(usage.details.isEmpty)
+        #expect(usage.details.map(\.value) == ["$18.25", "$7.50"])
+        #expect(usage.balance == "$18.25")
         #expect(usage.message == nil)
-        #expect(recorder.requests.map { $0.url?.path } == ["/api/web_search", "/api/tags"])
+        #expect(recorder.requests.map { $0.url?.path } == ["/api/balance"])
         #expect(recorder.requests.allSatisfy {
             $0.value(forHTTPHeaderField: "Authorization") == "Bearer live-key"
         })
-        #expect(recorder.requests.first?.httpMethod == "POST")
+        #expect(recorder.requests.first?.httpMethod == "GET")
     }
 
     @Test(arguments: [401, 403])
@@ -208,7 +211,7 @@ struct OllamaUsageTests {
 
     @Test func unauthorizedCatalogIsRejectedAfterSuccessfulValidation() async {
         let session = makeSession { request in
-            let status = request.url?.path == "/api/web_search" ? 400 : 401
+            let status = request.url?.path == "/api/balance" ? 401 : 400
             return Self.response(request, status: status, body: "{}")
         }
         await #expect(throws: OllamaUsageError.apiUnauthorized) {
@@ -220,8 +223,8 @@ struct OllamaUsageTests {
         let recorder = OllamaRequestRecorder()
         let session = makeSession { request in
             recorder.append(request)
-            let body = request.url?.lastPathComponent == "tags" ? #"{"models":[]}"# : "{}"
-            let status = request.url?.lastPathComponent == "tags" ? 200 : 400
+            let body = request.url?.lastPathComponent == "balance" ? #"{"purchased":{"balance_usd":18.25}}"# : "{}"
+            let status = request.url?.lastPathComponent == "balance" ? 200 : 400
             return Self.response(request, status: status, body: body)
         }
         _ = try await OllamaUsageFetcher.fetchAPI(
@@ -230,8 +233,7 @@ struct OllamaUsageTests {
             session: session
         )
         #expect(recorder.requests.map { $0.url?.absoluteString } == [
-            "https://private.example/prefix/api/web_search",
-            "https://private.example/prefix/api/tags",
+            "https://private.example/prefix/api/balance",
         ])
     }
 

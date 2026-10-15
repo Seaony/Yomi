@@ -49,7 +49,7 @@ struct FactoryUsageTests {
         #expect(usage.balance == "$12.34")
         #expect(usage.providerCost?.used == 12.34)
         #expect(usage.providerCost?.period == "Extra usage balance")
-        #expect(usage.plan == "Factory Team - Pro")
+        #expect(usage.plan == "Factory Team - Pro - " + AppLocalization.text("超额后使用：standard", "Fallback: standard"))
         #expect(usage.details.isEmpty)
     }
 
@@ -124,7 +124,7 @@ struct FactoryUsageTests {
         {"usage":{"standard":{"userTokens":25000000,"totalAllowance":1000000000001}}}
         """.utf8)
         let usage = try FactoryUsageFetcher.parseLegacyUsage(data: data, authData: Data("{}".utf8))
-        #expect(usage.windows[0].usedFraction == 0.25)
+        #expect(usage.windows.isEmpty)
     }
 
     @Test

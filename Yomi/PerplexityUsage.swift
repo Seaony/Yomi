@@ -182,8 +182,9 @@ nonisolated enum PerplexityUsageFetcher {
                     label: "Credits",
                     usedFraction: PerplexityUsageFetcher.fraction(used: recurringUsed, total: recurringTotal),
                     resetsAt: renewalDate,
-                    detail: "\(PerplexityUsageFetcher.integer(recurringUsed))/"
-                        + "\(PerplexityUsageFetcher.integer(recurringTotal)) credits"
+                    detail: PerplexityUsageFetcher.creditDescription(
+                        used: recurringUsed, total: recurringTotal, unit: "credits"
+                    )
                 ))
             } else if promoTotal <= 0, purchasedTotal <= 0 {
                 windows.append(UsageWindow(
@@ -195,10 +196,12 @@ nonisolated enum PerplexityUsageFetcher {
                 ))
             }
 
-            var promoDetail = "\(PerplexityUsageFetcher.integer(promoUsed))/"
-                + "\(PerplexityUsageFetcher.integer(promoTotal)) bonus"
-            if let promoExpiration {
-                promoDetail += " · exp. \(PerplexityUsageFetcher.promoExpiryFormatter.string(from: promoExpiration))"
+            var promoDetail = PerplexityUsageFetcher.creditDescription(
+                used: promoUsed, total: promoTotal, unit: "bonus"
+            )
+            if let promoExpiration, let description = promoDetail {
+                promoDetail = "\(description) · exp. "
+                    + PerplexityUsageFetcher.promoExpiryFormatter.string(from: promoExpiration)
             }
             windows.append(UsageWindow(
                 id: "perplexity-promotional",
@@ -216,8 +219,9 @@ nonisolated enum PerplexityUsageFetcher {
                     ? PerplexityUsageFetcher.fraction(used: purchasedUsed, total: purchasedTotal)
                     : 1,
                 resetsAt: nil,
-                detail: "\(PerplexityUsageFetcher.integer(purchasedUsed))/"
-                    + "\(PerplexityUsageFetcher.integer(purchasedTotal)) credits"
+                detail: PerplexityUsageFetcher.creditDescription(
+                    used: purchasedUsed, total: purchasedTotal, unit: "credits"
+                )
             ))
 
             return ProviderUsage(
@@ -417,7 +421,8 @@ nonisolated enum PerplexityUsageFetcher {
     }
 
     private static func cookiePairs(_ raw: String) -> [(name: String, value: String)] {
-        raw.split(separator: ";").compactMap { part in
+        let header = raw.lowercased().hasPrefix("cookie:") ? String(raw.dropFirst(7)) : raw
+        return header.split(separator: ";").compactMap { part in
             let pair = part.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let separator = pair.firstIndex(of: "=") else { return nil }
             let name = String(pair[..<separator]).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -495,7 +500,16 @@ nonisolated enum PerplexityUsageFetcher {
         return min(1, max(0, used / total))
     }
 
-    private static func integer(_ value: Double) -> String {
-        String(Int(value.rounded()))
+    private static func creditDescription(used: Double, total: Double, unit: String) -> String? {
+        guard used.isFinite, total.isFinite else { return nil }
+        let roundedUsed = used.rounded()
+        let truncatedTotal = total.rounded(.towardZero)
+        let counts = String(
+            format: "%.0f/%.0f",
+            locale: Locale(identifier: "en_US_POSIX"),
+            roundedUsed == 0 ? 0 : roundedUsed,
+            truncatedTotal == 0 ? 0 : truncatedTotal
+        )
+        return "\(counts) \(unit)"
     }
 }

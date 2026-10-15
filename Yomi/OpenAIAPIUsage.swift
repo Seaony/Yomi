@@ -419,16 +419,14 @@ enum OpenAIAPIUsageFetcher {
             for result in bucket.results {
                 let input = result.inputTokens ?? 0
                 let cached = result.inputCachedTokens ?? 0
-                let audioInput = result.inputAudioTokens ?? 0
                 let output = result.outputTokens ?? 0
-                let audioOutput = result.outputAudioTokens ?? 0
                 let requests = result.numModelRequests ?? 0
-                let total = input + audioInput + output + audioOutput
+                let total = input + output
                 let name = cleaned(result.model) ?? "Responses and Chat Completions"
                 accumulator.requests += requests
-                accumulator.inputTokens += input + audioInput
+                accumulator.inputTokens += input
                 accumulator.cachedInputTokens += cached
-                accumulator.outputTokens += output + audioOutput
+                accumulator.outputTokens += output
                 accumulator.totalTokens += total
                 var model = accumulator.models[name] ?? OpenAIAPIUsageSnapshot.Model(
                     name: name,
@@ -439,9 +437,9 @@ enum OpenAIAPIUsageFetcher {
                     totalTokens: 0
                 )
                 model.requests += requests
-                model.inputTokens += input + audioInput
+                model.inputTokens += input
                 model.cachedInputTokens += cached
-                model.outputTokens += output + audioOutput
+                model.outputTokens += output
                 model.totalTokens += total
                 accumulator.models[name] = model
             }
@@ -536,6 +534,13 @@ private struct CostResult: Decodable {
                 value = Double(text)
             } else {
                 value = nil
+            }
+            if let value, !value.isFinite {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .value,
+                    in: container,
+                    debugDescription: "OpenAI cost amount must be finite."
+                )
             }
         }
     }

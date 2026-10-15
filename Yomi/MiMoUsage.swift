@@ -876,11 +876,15 @@ nonisolated enum MiMoLocalUsageFallback {
     }
 
     private static func integer(_ value: Any?) -> Int {
-        if let value = value as? Int { return max(0, value) }
-        if let value = value as? Double, value.isFinite, value >= 0, value <= Double(Int.max) {
-            return Int(value)
+        if let number = value as? NSNumber {
+            if let integer = Int(number.stringValue) {
+                return max(0, integer)
+            }
+            let numeric = number.doubleValue
+            guard numeric >= 0 else { return 0 }
+            return Int(exactly: numeric.rounded(.towardZero)) ?? 0
         }
-        if let value = value as? String, let number = Int(value) { return max(0, number) }
+        if let string = value as? String, let integer = Int(string) { return max(0, integer) }
         return 0
     }
 

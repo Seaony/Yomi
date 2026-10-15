@@ -86,11 +86,9 @@ struct AntigravityUsageTests {
         }
         """.utf8)
 
-        let usage = try AntigravityUsageFetcher.parseQuotaSummary(data: data)
-
-        #expect(usage.windows.first?.usedFraction == 0)
-        #expect(usage.additionalWindows.allSatisfy { $0.usedFraction == 0 })
-        #expect(usage.additionalWindows.allSatisfy { $0.detail != nil })
+        #expect(throws: AntigravityUsageError.unreadableResponse("missing quota buckets")) {
+            _ = try AntigravityUsageFetcher.parseQuotaSummary(data: data)
+        }
     }
 
     @Test
@@ -136,13 +134,9 @@ struct AntigravityUsageTests {
         }
         """.utf8)
 
-        let usage = try AntigravityUsageFetcher.parseModelResponse(data: data)
-
-        #expect(usage.windows.isEmpty)
-        #expect(usage.additionalWindows.map(\.id) == ["antigravity-gemini"])
-        #expect(usage.additionalWindows.first?.label == "Gemini Models")
-        #expect(usage.additionalWindows.first?.usedFraction == 0)
-        #expect(usage.additionalWindows.first?.resetsAt == ISO8601DateFormatter().date(from: "2030-01-01T00:00:00Z"))
+        #expect(throws: AntigravityUsageError.unreadableResponse("missing quota models")) {
+            _ = try AntigravityUsageFetcher.parseModelResponse(data: data)
+        }
     }
 
     @Test
@@ -273,11 +267,17 @@ struct AntigravityUsageTests {
         #expect(usage.plan == "Paid")
         #expect(usage.details.isEmpty)
         #expect(protocolStub.requests.map { $0.url?.path } == [
-            "/v1internal:loadCodeAssist", "/v1internal:fetchAvailableModels",
+            "/v1internal:loadCodeAssist", "/v1internal:retrieveUserQuotaSummary",
+            "/v1internal:fetchAvailableModels",
         ])
+        #if arch(arm64)
+        let expectedUserAgent = "antigravity/hub/2.9.1 darwin/arm64"
+        #else
+        let expectedUserAgent = "antigravity/hub/2.9.1 darwin/amd64"
+        #endif
         #expect(protocolStub.requests.allSatisfy {
             $0.value(forHTTPHeaderField: "Authorization") == "Bearer token"
-                && $0.value(forHTTPHeaderField: "User-Agent") == "antigravity"
+                && $0.value(forHTTPHeaderField: "User-Agent") == expectedUserAgent
         })
         let request = try AntigravityUsageFetcher.remoteRequest(
             path: "/v1internal:fetchAvailableModels",

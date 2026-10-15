@@ -73,6 +73,7 @@ nonisolated struct KiroCLIUsage: Sendable, Equatable {
     let creditsUsed: Double
     let creditsTotal: Double
     let creditsPercent: Double
+    let hasUsageMetrics: Bool
     let bonusCreditsUsed: Double?
     let bonusCreditsTotal: Double?
     let bonusExpiryDays: Int?
@@ -88,6 +89,10 @@ nonisolated struct KiroCLIUsage: Sendable, Equatable {
 
 nonisolated enum KiroUsageFetcher {
     static let usageLimitsEndpoint = URL(string: "https://codewhisperer.us-east-1.amazonaws.com/")!
+    private static let profileEndpoints = [
+        "us-east-1": usageLimitsEndpoint,
+        "eu-central-1": URL(string: "https://q.eu-central-1.amazonaws.com/")!,
+    ]
     private static let target = "AmazonCodeWhispererService.GetUsageLimits"
     private static let contentType = "application/x-amz-json-1.0"
     private static let resetRange: ClosedRange<Double> = 1_000_000_000...4_102_444_800
@@ -225,7 +230,6 @@ nonisolated enum KiroUsageFetcher {
         do {
             limits = try await fetchUsageLimits(
                 databaseURL: databaseURL,
-                endpoint: usageLimitsEndpoint,
                 session: session
             )
         } catch is CancellationError {
@@ -321,7 +325,7 @@ nonisolated enum KiroUsageFetcher {
             creditsTotal = Double(stripped[totalRange])
         }
 
-        if parsedPlan.matchedNewFormat, managed, percent == nil, creditsUsed == nil {
+        if parsedPlan.matchedNewFormat, managed || parsedPlan.isSummary, percent == nil, creditsUsed == nil {
             return KiroCLIUsage(
                 planName: parsedPlan.name,
                 accountEmail: cleaned(accountEmail),
@@ -329,6 +333,7 @@ nonisolated enum KiroUsageFetcher {
                 creditsUsed: 0,
                 creditsTotal: 0,
                 creditsPercent: 0,
+                hasUsageMetrics: false,
                 bonusCreditsUsed: parseBonus(stripped).used,
                 bonusCreditsTotal: parseBonus(stripped).total,
                 bonusExpiryDays: parseBonus(stripped).expiryDays,
@@ -355,6 +360,7 @@ nonisolated enum KiroUsageFetcher {
             creditsUsed: used,
             creditsTotal: total,
             creditsPercent: computedPercent,
+            hasUsageMetrics: true,
             bonusCreditsUsed: bonus.used,
             bonusCreditsTotal: bonus.total,
             bonusExpiryDays: bonus.expiryDays,
@@ -459,16 +465,19 @@ nonisolated enum KiroUsageFetcher {
     ) -> ProviderUsage {
         let report = limits.map { applying(limits: $0, to: report) } ?? report
         let remaining = max(0, report.creditsTotal - report.creditsUsed)
-        var windows = [UsageWindow(
-            id: "kiro-credits",
-            label: AppLocalization.text("额度", "Credits"),
-            usedFraction: report.creditsPercent / 100,
-            resetsAt: report.resetsAt,
-            detail: AppLocalization.text(
-                "剩余 \(formatCredits(remaining)) / \(formatCredits(report.creditsTotal)) 点额度",
-                "\(formatCredits(remaining)) of \(formatCredits(report.creditsTotal)) credits left"
-            )
-        )]
+        var windows: [UsageWindow] = []
+        if report.hasUsageMetrics {
+            windows.append(UsageWindow(
+                id: "kiro-credits",
+                label: AppLocalization.text("额度", "Credits"),
+                usedFraction: report.creditsPercent / 100,
+                resetsAt: report.resetsAt,
+                detail: AppLocalization.text(
+                    "剩余 \(formatCredits(remaining)) / \(formatCredits(report.creditsTotal)) 点额度",
+                    "\(formatCredits(remaining)) of \(formatCredits(report.creditsTotal)) credits left"
+                )
+            ))
+        }
 
         if let used = report.bonusCreditsUsed,
            let total = report.bonusCreditsTotal,
@@ -500,13 +509,14 @@ nonisolated enum KiroUsageFetcher {
             ))
         }
 
-        var details = [
-            UsageDetail(
+        var details: [UsageDetail] = []
+        if report.hasUsageMetrics {
+            details.append(UsageDetail(
                 id: "kiro-used",
                 label: AppLocalization.text("已用额度", "Credits used"),
                 value: formatCredits(report.creditsUsed)
-            ),
-        ]
+            ))
+        }
         let overagesEnabled: Bool
         if let limits, let enabled = limits.overageEnabled {
             overagesEnabled = enabled && limits.overageCap != nil
@@ -554,10 +564,10 @@ nonisolated enum KiroUsageFetcher {
             state: .ready,
             windows: windows,
             additionalWindows: additional,
-            balance: AppLocalization.text(
+            balance: report.hasUsageMetrics ? AppLocalization.text(
                 "\(formatCredits(remaining)) 点额度",
                 "\(formatCredits(remaining)) credits"
-            ),
+            ) : nil,
             plan: report.displayPlanName,
             providerCost: providerCost,
             details: details,
@@ -580,18 +590,17 @@ nonisolated enum KiroUsageFetcher {
     }
 
     private static func applying(limits: KiroUsageLimits, to report: KiroCLIUsage) -> KiroCLIUsage {
-        let keepCLIPlan = limits.hasUnseparatedBonus
+        let hasPlanMetrics = !limits.hasUnseparatedBonus && limits.planLimit > 0
         let estimatedCost = limits.overageCharges
             ?? (limits.currencyCode.uppercased() == "USD" ? report.estimatedOverageCostUSD : nil)
         return KiroCLIUsage(
             planName: report.planName,
             accountEmail: report.accountEmail,
             authMethod: report.authMethod,
-            creditsUsed: keepCLIPlan ? report.creditsUsed : limits.planUsed,
-            creditsTotal: keepCLIPlan ? report.creditsTotal : limits.planLimit,
-            creditsPercent: keepCLIPlan || limits.planLimit <= 0
-                ? report.creditsPercent
-                : limits.planUsed / limits.planLimit * 100,
+            creditsUsed: hasPlanMetrics ? limits.planUsed : report.creditsUsed,
+            creditsTotal: hasPlanMetrics ? limits.planLimit : report.creditsTotal,
+            creditsPercent: hasPlanMetrics ? limits.planUsed / limits.planLimit * 100 : report.creditsPercent,
+            hasUsageMetrics: report.hasUsageMetrics || hasPlanMetrics,
             bonusCreditsUsed: report.bonusCreditsUsed,
             bonusCreditsTotal: report.bonusCreditsTotal,
             bonusExpiryDays: report.bonusExpiryDays,
@@ -638,10 +647,16 @@ nonisolated enum KiroUsageFetcher {
 
     private static func fetchUsageLimits(
         databaseURL: URL,
-        endpoint: URL,
         session: URLSession
     ) async throws -> KiroUsageLimits {
         let identity = try readIdentity(databaseURL: databaseURL)
+        let arn = identity.profileARN.split(separator: ":", maxSplits: 5, omittingEmptySubsequences: false)
+        guard arn.count == 6, arn[0] == "arn", arn[1] == "aws", arn[2] == "codewhisperer",
+              arn[5].hasPrefix("profile/"), arn[5].count > "profile/".count,
+              identity.profileARN.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil,
+              let endpoint = profileEndpoints[String(arn[3])] else {
+            throw KiroUsageError.credentialsUnavailable("unsupported profile ARN")
+        }
         let request = try makeUsageLimitsRequest(
             identity: identity,
             endpoint: endpoint
@@ -926,7 +941,13 @@ nonisolated enum KiroUsageFetcher {
         return Account(authMethod: method, email: email)
     }
 
-    private static func parsePlanName(_ text: String) -> (name: String, matchedNewFormat: Bool) {
+    private static func parsePlanName(_ text: String) -> (name: String, matchedNewFormat: Bool, isSummary: Bool) {
+        if let name = firstCapture(
+            in: text,
+            pattern: #"(?m)^[ \t]*Plan:[ \t]*([^|\r\n]+?)[ \t]*\|[ \t]*[0-9]+[ \t]+usage breakdowns?[ \t]*$"#
+        )?.trimmingCharacters(in: .whitespaces), !name.isEmpty {
+            return (name, true, true)
+        }
         var name = "Kiro"
         var newFormat = false
         if let match = firstCapture(in: text, pattern: #"\|[ \t]*(KIRO[ \t]+\w+)"#) {
@@ -942,7 +963,7 @@ nonisolated enum KiroUsageFetcher {
             name = match.components(separatedBy: .newlines).first.map(cleanInline) ?? match
             newFormat = true
         }
-        return (name, newFormat)
+        return (name, newFormat, false)
     }
 
     private static func parseBonus(_ text: String) -> (used: Double?, total: Double?, expiryDays: Int?) {

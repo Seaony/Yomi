@@ -800,6 +800,9 @@ private struct ProviderConfigurationView: View {
                         || descriptor.id.rawValue == "clawrouter"
                         || descriptor.id.rawValue == "sub2api"
                         || descriptor.id.rawValue == "wayfinder"
+                        || descriptor.id.rawValue == "llmman"
+                        || descriptor.id.rawValue == "aixy"
+                        || descriptor.id.rawValue == "bifrost"
                         || descriptor.id.rawValue == "llmproxy"
                         || descriptor.id.rawValue == "litellm" {
                         SettingsTextField(
@@ -822,6 +825,12 @@ private struct ProviderConfigurationView: View {
                                 ? "LLM Proxy Base URL"
                                 : descriptor.id.rawValue == "litellm"
                                 ? "LiteLLM Base URL"
+                                : descriptor.id.rawValue == "llmman"
+                                ? copy.text("llmman 地址（可选）", "llmman address (optional)")
+                                : descriptor.id.rawValue == "aixy"
+                                ? copy.text("Aixy Base URL（可选）", "Aixy Base URL (optional)")
+                                : descriptor.id.rawValue == "bifrost"
+                                ? copy.text("Bifrost Base URL（或 BIFROST_BASE_URL）", "Bifrost Base URL (or BIFROST_BASE_URL)")
                                 : copy.text("接口地址", "Endpoint URL"),
                             text: $configuration.endpoint
                         )
@@ -834,6 +843,8 @@ private struct ProviderConfigurationView: View {
                                 ? copy.text("Codex CLI 可执行文件路径（可选）", "Codex CLI executable path (optional)")
                                 : descriptor.id.rawValue == "claude"
                                 ? copy.text("Claude CLI 可执行文件路径（可选）", "Claude CLI executable path (optional)")
+                                : descriptor.id.rawValue == "coderabbit"
+                                ? copy.text("CodeRabbit CLI 可执行文件路径（可选）", "CodeRabbit CLI executable path (optional)")
                                 : copy.text(
                                     "输出 JSON 或百分比的命令",
                                     "Command that outputs JSON or percentages"
@@ -919,6 +930,7 @@ private struct ProviderConfigurationView: View {
                         && descriptor.id.rawValue != "t3chat"
                         && descriptor.id.rawValue != "zed"
                         && descriptor.id.rawValue != "windsurf"
+                        && descriptor.id.rawValue != "muse"
                         || descriptor.id.rawValue == "openai"
                         || descriptor.id.rawValue == "azureopenai"
                         || descriptor.id.rawValue == "opencode"
@@ -929,11 +941,19 @@ private struct ProviderConfigurationView: View {
                         || descriptor.id.rawValue == "copilot"
                         || descriptor.id.rawValue == "devin"
                         || descriptor.id.rawValue == "kilo"
+                        || descriptor.id.rawValue == "kimi"
                         || descriptor.id.rawValue == "zai"
                         || descriptor.id.rawValue == "minimax"
                         || descriptor.id.rawValue == "jetbrains"
                         || descriptor.id.rawValue == "deepgram"
                         || descriptor.id.rawValue == "xai"
+                        || descriptor.id.rawValue == "exa"
+                        || descriptor.id.rawValue == "cosmic"
+                        || descriptor.id.rawValue == "flora"
+                        || descriptor.id.rawValue == "v0"
+                        || descriptor.id.rawValue == "gitkraken"
+                        || descriptor.id.rawValue == "claudeplatform"
+                        || descriptor.id.rawValue == "helmcode" && configuration.source == .cookie
                         || descriptor.id.rawValue == "stepfun" && configuration.source != .token
                         || descriptor.id.rawValue == "claude" && configuration.source == .cookie {
                         SettingsTextField(
@@ -1016,8 +1036,8 @@ private struct ProviderConfigurationView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
                             Text(copy.text(
-                                "管理 API Key 用于读取最近 30 天活动；也可设置 OPENROUTER_MANAGEMENT_API_KEY。",
-                                "The management API key enables 30-day activity; OPENROUTER_MANAGEMENT_API_KEY is also supported."
+                                "上方 API Key 必填，可使用普通或管理密钥。官方接口上的管理密钥会读取最近 30 个完整 UTC 日活动；这里的可选管理密钥只用于单独指定活动凭据，也可设置 OPENROUTER_MANAGEMENT_API_KEY。",
+                                "The API key above is required and accepts a regular or Management key. Management keys on the official API load the last 30 completed UTC days of Activity. This optional key only selects a separate Activity credential; OPENROUTER_MANAGEMENT_API_KEY is also supported."
                             ))
                             .font(.system(size: 10.5))
                             .foregroundStyle(SettingsPalette.tertiary)
@@ -1091,6 +1111,52 @@ private struct ProviderConfigurationView: View {
     }
 
     private var secretLabel: String {
+        if descriptor.id.rawValue == "langdock" {
+            return copy.text("Cookie 标头（包含 auth_token）", "Cookie header (including auth_token)")
+        }
+        if descriptor.id.rawValue == "xapi" {
+            return copy.text("Cookie 标头（包含 auth_token 和 ct0）", "Cookie header (including auth_token and ct0)")
+        }
+        if descriptor.id.rawValue == "raycast" {
+            return copy.text("Cookie 标头（包含 __raycast_session）", "Cookie header (including __raycast_session)")
+        }
+        if ["museai", "tinyapi", "lithosai", "workbuddy", "parallel", "replicate", "typesafe", "helmcode"].contains(descriptor.id.rawValue) {
+            return copy.text("Cookie 标头", "Cookie header")
+        }
+        if descriptor.id.rawValue == "claudeplatform" {
+            return copy.text("Cookie 标头（包含 sessionKey）", "Cookie header (including sessionKey)")
+        }
+        if descriptor.id.rawValue == "bifrost" {
+            return copy.text("Bifrost 虚拟 Key", "Bifrost virtual key")
+        }
+        if descriptor.id.rawValue == "nous" {
+            return copy.text("Portal 访问令牌（可选）", "Portal access token (optional)")
+        }
+        if descriptor.id.rawValue == "muse" {
+            return configuration.source == .token
+                ? copy.text("Muse 登录令牌（dca:）", "Muse login token (dca:)")
+                : copy.text("Muse 登录令牌（dca:，可选）", "Muse login token (dca:, optional)")
+        }
+        if descriptor.id.rawValue == "hyper" {
+            return configuration.source == .cookie
+                ? copy.text("Cookie 标头", "Cookie header")
+                : "Hyper API Key"
+        }
+        if descriptor.id.rawValue == "aerostack" {
+            return copy.text("Aerostack 账户 JWT", "Aerostack account JWT")
+        }
+        if descriptor.id.rawValue == "exa" {
+            return copy.text("Exa 服务密钥", "Exa service key")
+        }
+        if descriptor.id.rawValue == "cosmic" {
+            return copy.text("个人访问令牌", "Personal Access Token")
+        }
+        if descriptor.id.rawValue == "fal" {
+            return "fal API Key (billing:usage:read)"
+        }
+        if descriptor.id.rawValue == "llmman" {
+            return copy.text("API Key（可选）", "API key (optional)")
+        }
         if descriptor.id.rawValue == "codex" {
             return switch configuration.source {
             case .token: "Codex PAT"
@@ -1114,7 +1180,7 @@ private struct ProviderConfigurationView: View {
             return copy.text("API Key 或 Cookie（可选）", "API key or Cookie (optional)")
         }
         if descriptor.id.rawValue == "openrouter" {
-            return "OpenRouter API Key"
+            return copy.text("OpenRouter API Key（必填）", "OpenRouter API key (required)")
         }
         if descriptor.id.rawValue == "elevenlabs" {
             return "API Key (xi-...)"
@@ -1235,6 +1301,18 @@ private struct ProviderConfigurationView: View {
     }
 
     private func sourceTitle(_ source: ProviderSource) -> String {
+        if ["langdock", "xapi", "museai", "tinyapi", "raycast", "lithosai", "workbuddy", "parallel", "claudeplatform"].contains(descriptor.id.rawValue) {
+            return source == .automatic
+                ? copy.text("自动（使用已填 Cookie）", "Auto (configured Cookie)")
+                : copy.text("手动 Cookie", "Manual Cookie")
+        }
+        if descriptor.id.rawValue == "muse" {
+            return switch source {
+            case .account: copy.text("本地 auth.json", "Local auth.json")
+            case .token: copy.text("登录令牌", "Login token")
+            default: source.title(language: language)
+            }
+        }
         if descriptor.id.rawValue == "codex" {
             return switch source {
             case .automatic: copy.text("自动", "Auto")
@@ -1346,7 +1424,9 @@ private struct ProviderConfigurationView: View {
     }
 
     private var showsAuthenticationCard: Bool {
-        if descriptor.id.rawValue == "zed" { return false }
+        if descriptor.id.rawValue == "coderabbit" { return false }
+        if descriptor.id.rawValue == "helmcode" { return configuration.source == .cookie }
+        if descriptor.id.rawValue == "zed" { return configuration.source == .cookie }
         if descriptor.id.rawValue == "codex" {
             return configuration.source == .automatic
                 || configuration.source == .token
@@ -1356,6 +1436,7 @@ private struct ProviderConfigurationView: View {
             return configuration.source != .account && configuration.source != .command
         }
         if descriptor.id.rawValue == "amp", configuration.source == .account { return false }
+        if descriptor.id.rawValue == "muse", configuration.source == .account { return false }
         if descriptor.id.rawValue == "windsurf" {
             return configuration.source != .account
                 && configuration.account == WindsurfSessionSource.manual.rawValue
@@ -1389,11 +1470,19 @@ private struct ProviderConfigurationView: View {
         case "copilot": copy.text("企业主机（可选）", "Enterprise host (optional)")
         case "devin": copy.text("组织 slug 或 URL（可选）", "Organization slug or URL (optional)")
         case "kilo": copy.text("Organization ID（可选）", "Organization ID (optional)")
+        case "kimi": copy.text("区域（china 或 international）", "Region (china or international)")
         case "zai": copy.text("API 区域（global 或 bigmodel-cn）", "API region (global or bigmodel-cn)")
         case "minimax": copy.text("MiniMax 区域（global 或 cn）", "MiniMax region (global or cn)")
         case "jetbrains": copy.text("IDE 配置目录（可选）", "IDE configuration directory (optional)")
         case "deepgram": copy.text("Project ID（可选；留空汇总全部项目）", "Project ID (optional; blank aggregates all projects)")
         case "xai": copy.text("Team ID", "Team ID")
+        case "exa": copy.text("API Key ID（或 EXA_API_KEY_ID）", "API key ID (or EXA_API_KEY_ID)")
+        case "cosmic": copy.text("Project ID（或 COSMIC_PROJECT_ID）", "Project ID (or COSMIC_PROJECT_ID)")
+        case "flora": copy.text("Workspace ID（或 FLORA_WORKSPACE_ID）", "Workspace ID (or FLORA_WORKSPACE_ID)")
+        case "v0": copy.text("项目范围（可选）", "Scope (optional)")
+        case "gitkraken": copy.text("API 组织 ID（可选）", "API organization ID (optional)")
+        case "claudeplatform": copy.text("Organization ID（可选）", "Organization ID (optional)")
+        case "helmcode": copy.text("Cookie 租户（nanBuilders；留空使用 Helmcode Cloud）", "Cookie tenant (nanBuilders; blank for Helmcode Cloud)")
         case "stepfun": copy.text("用户名", "Username")
         default: copy.text("账号标识（可选）", "Account identifier (optional)")
         }

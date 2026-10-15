@@ -180,7 +180,7 @@ nonisolated enum T3ChatUsageFetcher {
         }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.timeoutInterval = 15
+        request.timeoutInterval = 60
         request.setValue("*/*", forHTTPHeaderField: "Accept")
         request.setValue("application/jsonl", forHTTPHeaderField: "trpc-accept")
         request.setValue("web-client", forHTTPHeaderField: "x-trpc-source")

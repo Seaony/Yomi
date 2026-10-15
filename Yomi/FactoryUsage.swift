@@ -283,12 +283,11 @@ nonisolated enum FactoryUsageFetcher {
             }
         }
 
+        let otherBrowsers = Browser.defaultImportOrder.filter { $0 != .safari }
         let browserAttempts: [(factory: Bool, browsers: [Browser])] = [
             (true, [.safari]),
             (false, [.safari]),
-            (true, [.chrome, .firefox]),
-            (false, [.chrome, .firefox]),
-        ]
+        ] + otherBrowsers.map { (true, [$0]) } + otherBrowsers.map { (false, [$0]) }
         for attempt in browserAttempts {
             if attempt.factory {
                 for cookies in importedCookieSessions(domains: factoryCookieDomains, browsers: attempt.browsers) {
@@ -576,21 +575,25 @@ nonisolated enum FactoryUsageFetcher {
             id: ProviderID(rawValue: "factory"),
             state: .ready,
             windows: [
-                UsageWindow(
-                    id: "factory-standard",
-                    label: "Standard",
-                    usedFraction: legacyFraction(standard),
-                    resetsAt: periodEnd,
-                    detail: legacyDetail(standard)
-                ),
-                UsageWindow(
-                    id: "factory-premium",
-                    label: "Premium",
-                    usedFraction: legacyFraction(premium),
-                    resetsAt: periodEnd,
-                    detail: legacyDetail(premium)
-                ),
-            ],
+                legacyFraction(standard).map { fraction in
+                    UsageWindow(
+                        id: "factory-standard",
+                        label: "Standard",
+                        usedFraction: fraction,
+                        resetsAt: periodEnd,
+                        detail: legacyDetail(standard)
+                    )
+                },
+                legacyFraction(premium).map { fraction in
+                    UsageWindow(
+                        id: "factory-premium",
+                        label: "Premium",
+                        usedFraction: fraction,
+                        resetsAt: periodEnd,
+                        detail: legacyDetail(premium)
+                    )
+                },
+            ].compactMap { $0 },
             balance: nil,
             plan: displayPlan(auth: auth, overagePreference: nil),
             details: [],
@@ -599,7 +602,7 @@ nonisolated enum FactoryUsageFetcher {
         )
     }
 
-    private static func legacyFraction(_ usage: TokenUsage?) -> Double {
+    private static func legacyFraction(_ usage: TokenUsage?) -> Double? {
         let used = usage?.userTokens ?? 0
         let allowance = usage?.totalAllowance ?? 0
         let unlimitedThreshold: Int64 = 1_000_000_000_000
@@ -609,8 +612,7 @@ nonisolated enum FactoryUsageFetcher {
             let allowanceReliable = allowance > 0 && allowance <= unlimitedThreshold
             if !allowanceReliable, ratio >= -0.1, ratio <= 100.1 { return min(1, max(0, ratio / 100)) }
         }
-        if allowance > unlimitedThreshold { return min(1, Double(used) / 100_000_000) }
-        guard allowance > 0 else { return 0 }
+        guard allowance > 0, allowance <= unlimitedThreshold else { return nil }
         return min(1, max(0, Double(used) / Double(allowance)))
     }
 
@@ -619,7 +621,7 @@ nonisolated enum FactoryUsageFetcher {
         return "\(usage.userTokens ?? 0) / \(usage.totalAllowance ?? 0) tokens used"
     }
 
-    private static func displayPlan(auth: AuthResponse, overagePreference _: String?) -> String? {
+    private static func displayPlan(auth: AuthResponse, overagePreference: String?) -> String? {
         var parts: [String] = []
         if let tier = cleanedValue(auth.organization?.subscription?.factoryTier) {
             parts.append("Factory \(tier.capitalized)")
@@ -627,6 +629,9 @@ nonisolated enum FactoryUsageFetcher {
         if let plan = cleanedValue(auth.organization?.subscription?.orbSubscription?.plan?.name),
            !plan.lowercased().contains("factory") {
             parts.append(plan)
+        }
+        if let overagePreference = cleanedValue(overagePreference) {
+            parts.append(AppLocalization.text("超额后使用：\(overagePreference)", "Fallback: \(overagePreference)"))
         }
         return parts.isEmpty ? nil : parts.joined(separator: " - ")
     }

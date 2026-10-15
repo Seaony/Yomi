@@ -84,6 +84,7 @@ nonisolated enum MiniMaxUsageFetcher {
         var subscriptionExpiresAt: Date?
         var subscriptionRenewsAt: Date?
         var billingDetails: [UsageDetail]
+        var hasDetailedQuotas = true
         let updatedAt: Date
 
         func toProviderUsage() -> ProviderUsage {
@@ -117,6 +118,21 @@ nonisolated enum MiniMaxUsageFetcher {
             let pointsText = pointsBalance.flatMap { value in
                 value.isFinite ? "\(Self.number(value)) points" : nil
             }
+            var details = billingDetails
+            if let subscriptionExpiresAt {
+                details.append(UsageDetail(
+                    id: "minimax-subscription-expires",
+                    label: AppLocalization.text("订阅到期", "Subscription expires"),
+                    value: subscriptionExpiresAt.formatted(date: .numeric, time: .shortened)
+                ))
+            }
+            if let subscriptionRenewsAt {
+                details.append(UsageDetail(
+                    id: "minimax-subscription-renews",
+                    label: AppLocalization.text("订阅续费", "Subscription renews"),
+                    value: subscriptionRenewsAt.formatted(date: .numeric, time: .shortened)
+                ))
+            }
             return ProviderUsage(
                 id: ProviderID(rawValue: "minimax"),
                 state: .ready,
@@ -126,7 +142,7 @@ nonisolated enum MiniMaxUsageFetcher {
                 today: todayTokens.map { DailyTokenUsage(tokens: $0, valueUSD: nil) },
                 last30Days: last30DaysTokens.map { DailyTokenUsage(tokens: $0, valueUSD: nil) },
                 providerCost: providerCost,
-                details: billingDetails,
+                details: details,
                 updatedAt: updatedAt,
                 message: nil
             )
@@ -213,24 +229,27 @@ nonisolated enum MiniMaxUsageFetcher {
         if let environmentCookie = cookieValue(environment: environment) {
             webCredentials.append(credential(from: environmentCookie))
         }
-        webCredentials += automaticCredentials()
         var lastError: Error?
-        for item in deduplicated(webCredentials) {
-            guard let cookie = item.cookie else { continue }
-            do {
-                return try await fetchWeb(
-                    cookie: cookie,
-                    bearer: item.bearerToken,
-                    groupID: item.groupID,
-                    region: region,
-                    session: session,
-                    now: now,
-                    environment: environment
-                ).toProviderUsage()
-            } catch MiniMaxUsageError.invalidCredentials {
-                lastError = MiniMaxUsageError.invalidCredentials
-            } catch MiniMaxUsageError.parseFailed {
-                lastError = MiniMaxUsageError.parseFailed("浏览器会话未返回可用额度")
+        var seen = Set<String>()
+        for candidates in [AnySequence(webCredentials), automaticCredentials()] {
+            for item in candidates {
+                guard let cookie = item.cookie,
+                      seen.insert(cookie + "|" + (item.bearerToken ?? "")).inserted else { continue }
+                do {
+                    return try await fetchWeb(
+                        cookie: cookie,
+                        bearer: item.bearerToken,
+                        groupID: item.groupID,
+                        region: region,
+                        session: session,
+                        now: now,
+                        environment: environment
+                    ).toProviderUsage()
+                } catch MiniMaxUsageError.invalidCredentials {
+                    lastError = MiniMaxUsageError.invalidCredentials
+                } catch MiniMaxUsageError.parseFailed {
+                    lastError = MiniMaxUsageError.parseFailed("浏览器会话未返回可用额度")
+                }
             }
         }
         if let lastError { throw lastError }
@@ -297,7 +316,7 @@ nonisolated enum MiniMaxUsageFetcher {
             } catch {
                 if let cancellation = cancellationError(error) { throw cancellation }
                 lastError = error
-                if index == 0 { continue }
+                if index == 0, (error as NSError).domain == NSURLErrorDomain { continue }
                 throw error
             }
         }
@@ -335,14 +354,11 @@ nonisolated enum MiniMaxUsageFetcher {
                 session: session
             )
             snapshot = try parseWebResponse(data: data, now: now)
-        } catch MiniMaxUsageError.invalidCredentials {
-            throw MiniMaxUsageError.invalidCredentials
-        } catch {
-            if let cancellation = cancellationError(error) { throw cancellation }
+        } catch MiniMaxUsageError.parseFailed {
             snapshot = nil
         }
 
-        if snapshot?.quotas.isEmpty != false {
+        if snapshot?.hasDetailedQuotas != true {
             var remainsError: Error?
             for url in try remainsURLs(region: region, environment: environment) {
                 do {
@@ -365,6 +381,9 @@ nonisolated enum MiniMaxUsageFetcher {
                 } catch {
                     if let cancellation = cancellationError(error) { throw cancellation }
                     remainsError = error
+                    if let error = error as? MiniMaxUsageError, !shouldTryLegacy(after: error) {
+                        break
+                    }
                 }
             }
             if snapshot?.quotas.isEmpty != false, let remainsError { throw remainsError }
@@ -382,7 +401,7 @@ nonisolated enum MiniMaxUsageFetcher {
                     session: session,
                     environment: environment
                 )
-                if result.plan == nil { result.plan = metadata.plan }
+                if let plan = metadata.plan { result.plan = plan }
                 result.subscriptionExpiresAt = metadata.expiresAt
                 result.subscriptionRenewsAt = metadata.renewsAt
             } catch {
@@ -468,11 +487,13 @@ nonisolated enum MiniMaxUsageFetcher {
         }
         guard !quotas.isEmpty else { throw MiniMaxUsageError.parseFailed("未找到有效额度窗口") }
         let plan = firstString(payload, keys: [
-            "current_subscribe_title", "plan_name", "combo_title", "current_plan_title",
-        ]) ?? dictionary(payload["current_combo_card"]).flatMap { string($0["title"]) }
+            "current_subscribe_title", "currentSubscribeTitle", "plan_name", "planName",
+            "combo_title", "comboTitle", "current_plan_title", "currentPlanTitle",
+        ]) ?? dictionary(payload["current_combo_card"] ?? payload["currentComboCard"]).flatMap { string($0["title"]) }
             ?? inferredPlan(remains)
         let points = firstNumber(payload, keys: [
-            "points_balance", "point_balance", "credits_balance", "credit_balance", "balance",
+            "points_balance", "pointsBalance", "point_balance", "credits_balance", "creditsBalance",
+            "credit_balance", "balance",
         ])
         return Snapshot(
             plan: plan,
@@ -595,7 +616,11 @@ nonisolated enum MiniMaxUsageFetcher {
         if let first = data.first, first == UInt8(ascii: "{") { return try parse(data: data, now: now) }
         let html = String(decoding: data, as: UTF8.self)
         if looksSignedOut(html) { throw MiniMaxUsageError.invalidCredentials }
-        if let next = nextData(in: html), let result = try? parse(data: next, now: now) { return result }
+        if let next = nextData(in: html),
+           let object = try? JSONSerialization.jsonObject(with: next),
+           let payload = codingPlanPayload(in: object),
+           let data = try? JSONSerialization.data(withJSONObject: payload),
+           let result = try? parse(data: data, now: now) { return result }
         let text = visibleText(html)
         let plan = firstMatch(#"(?i)Coding\s*Plan\s*([A-Za-z0-9][A-Za-z0-9\s._-]{0,32})"#, in: text)
         guard let amountRaw = firstMatch(
@@ -614,13 +639,16 @@ nonisolated enum MiniMaxUsageFetcher {
                     subscriptionExpiresAt: nil,
                     subscriptionRenewsAt: nil,
                     billingDetails: [],
+                    hasDetailedQuotas: false,
                     updatedAt: now
                 )
             }
             throw MiniMaxUsageError.parseFailed("页面未包含 Coding Plan 数据")
         }
-        let percent = firstMatch(#"(?i)([0-9]{1,3}(?:\.[0-9]+)?)\s*%\s*used"#, in: text)
-            .flatMap(Double.init)
+        let percent = (
+            firstMatch(#"(?i)([0-9]{1,3}(?:\.[0-9]+)?)\s*%\s*used"#, in: text)
+                ?? firstMatch(#"(?i)used\s*([0-9]{1,3}(?:\.[0-9]+)?)\s*%"#, in: text)
+        ).flatMap(Double.init).flatMap { (0...100).contains($0) ? $0 : nil }
         guard let percent else {
             return Snapshot(
                 plan: plan,
@@ -633,10 +661,15 @@ nonisolated enum MiniMaxUsageFetcher {
                 subscriptionExpiresAt: nil,
                 subscriptionRenewsAt: nil,
                 billingDetails: [],
+                hasDetailedQuotas: false,
                 updatedAt: now
             )
         }
-        let used = Int((Double(amount) * percent / 100).rounded())
+        guard let used = Int(exactly: (Double(amount) * percent / 100).rounded()) else {
+            throw MiniMaxUsageError.parseFailed(AppLocalization.text(
+                "页面用量数值超出范围", "Page usage is outside the supported range"
+            ))
+        }
         return Snapshot(
             plan: plan,
             quotas: [Quota(
@@ -658,8 +691,23 @@ nonisolated enum MiniMaxUsageFetcher {
             subscriptionExpiresAt: nil,
             subscriptionRenewsAt: nil,
             billingDetails: [],
+            hasDetailedQuotas: false,
             updatedAt: now
         )
+    }
+
+    private static func codingPlanPayload(in value: Any) -> [String: Any]? {
+        if let root = dictionary(value) {
+            if root["model_remains"] != nil || root["modelRemains"] != nil { return root }
+            for nested in root.values {
+                if let payload = codingPlanPayload(in: nested) { return payload }
+            }
+        } else if let values = value as? [Any] {
+            for nested in values {
+                if let payload = codingPlanPayload(in: nested) { return payload }
+            }
+        }
+        return nil
     }
 
     private static func parseServicePayload(_ root: [String: Any], now: Date) -> Snapshot? {
@@ -761,7 +809,7 @@ nonisolated enum MiniMaxUsageFetcher {
         let limitValue: Int
         if let remainingPercent {
             usedFraction = min(1, max(0, (100 - remainingPercent) / 100))
-            limitValue = boostPermille.map { max(1, Int((Double($0) / 10).rounded())) } ?? 100
+            limitValue = boostPermille.flatMap { $0 > 0 ? max(1, Int((Double($0) / 10).rounded())) : nil } ?? 100
             usedValue = Int((usedFraction * Double(limitValue)).rounded())
         } else if let total, total > 0, let remaining {
             limitValue = total
@@ -853,7 +901,7 @@ nonisolated enum MiniMaxUsageFetcher {
             return nil
         }.min { lhs, rhs in
             lhs.0 == rhs.0 ? lhs.1.count < rhs.1.count : lhs.0 < rhs.0
-        }?.1
+        }?.1 ?? strings.first { ["plus", "max", "ultra"].contains(clean($0).lowercased()) }
     }
 
     private static func collectCurrentSubscriptionStrings(_ value: Any) -> [String] {
@@ -978,45 +1026,41 @@ nonisolated enum MiniMaxUsageFetcher {
         )
     }
 
-    private static func automaticCredentials() -> [Credential] {
+    private static func automaticCredentials() -> AnySequence<Credential> {
+        AnySequence(Browser.defaultImportOrder.lazy.flatMap { automaticCredentials(in: $0) })
+    }
+
+    private static func automaticCredentials(in browser: Browser) -> [Credential] {
         let client = BrowserCookieClient()
         let query = BrowserCookieQuery(domains: cookieDomains)
-        let chromiumBrowsers: [Browser] = [
-            .chrome, .chromeBeta, .chromeCanary, .edge, .edgeBeta, .edgeCanary,
-            .brave, .braveBeta, .braveNightly, .vivaldi, .arc, .arcBeta, .arcCanary,
-            .dia, .chatgptAtlas, .chromium, .helium,
-        ]
-        let browsers = chromiumBrowsers + [.firefox, .safari]
-        let storageTokens = automaticStorageTokens(browsers: chromiumBrowsers)
+        guard let sources = try? client.records(matching: query, in: browser) else { return [] }
+        let storageTokens = automaticStorageTokens(browsers: [browser])
         var result: [Credential] = []
-        for browser in browsers {
-            guard let sources = try? client.records(matching: query, in: browser) else { continue }
-            let groups = Dictionary(grouping: sources, by: { $0.store.profile.id })
-            for group in groups.values {
-                let sourceLabel = normalizedStorageLabel(group.map(\.label).min() ?? "")
-                let cookies = group.flatMap {
-                    BrowserCookieClient.makeHTTPCookies($0.records, origin: query.origin)
-                }
-                guard !cookies.isEmpty else { continue }
-                let header = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
-                let cookieBearer = cookies.first { $0.name == "HERTZ-SESSION" }?.value
-                let cookieGroupID = cookies.first { $0.name == "minimax_group_id_v2" }?.value
-                for stored in storageTokens where normalizedStorageLabel(stored.label) == sourceLabel {
-                    result.append(Credential(
-                        cookie: header,
-                        bearerToken: stored.token,
-                        groupID: stored.groupID ?? cookieGroupID,
-                        apiToken: nil
-                    ))
-                }
+        let groups = Dictionary(grouping: sources, by: { $0.store.profile.id })
+        for group in groups.values {
+            let sourceLabel = normalizedStorageLabel(group.map(\.label).min() ?? "")
+            let cookies = group.flatMap {
+                BrowserCookieClient.makeHTTPCookies($0.records, origin: query.origin)
+            }
+            guard !cookies.isEmpty else { continue }
+            let header = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+            let cookieBearer = cookies.first { $0.name == "HERTZ-SESSION" }?.value
+            let cookieGroupID = cookies.first { $0.name == "minimax_group_id_v2" }?.value
+            for stored in storageTokens where normalizedStorageLabel(stored.label) == sourceLabel {
                 result.append(Credential(
                     cookie: header,
-                    bearerToken: cookieBearer,
-                    groupID: cookieGroupID ?? cookieBearer.flatMap(groupIDFromJWT),
+                    bearerToken: stored.token,
+                    groupID: stored.groupID ?? cookieGroupID,
                     apiToken: nil
                 ))
-                result.append(Credential(cookie: header, bearerToken: nil, groupID: cookieGroupID, apiToken: nil))
             }
+            result.append(Credential(
+                cookie: header,
+                bearerToken: cookieBearer,
+                groupID: cookieGroupID ?? cookieBearer.flatMap(groupIDFromJWT),
+                apiToken: nil
+            ))
+            result.append(Credential(cookie: header, bearerToken: nil, groupID: cookieGroupID, apiToken: nil))
         }
         return result
     }
@@ -1207,14 +1251,6 @@ nonisolated enum MiniMaxUsageFetcher {
         return nil
     }
 
-    private static func deduplicated(_ values: [Credential]) -> [Credential] {
-        var seen = Set<String>()
-        return values.filter { value in
-            guard let cookie = value.cookie else { return false }
-            return seen.insert(cookie + "|" + (value.bearerToken ?? "")).inserted
-        }
-    }
-
     private static func remainsURLs(
         region: MiniMaxRegion,
         environment: [String: String]
@@ -1352,12 +1388,7 @@ nonisolated enum MiniMaxUsageFetcher {
     private static func integer(_ value: Any?) -> Int? {
         if let value = value as? Int { return value }
         if let value = value as? NSNumber {
-            let number = value.doubleValue
-            guard number.isFinite,
-                  number >= Double(Int.min),
-                  number <= Double(Int.max)
-            else { return nil }
-            return Int(number)
+            return Int(exactly: value.doubleValue.rounded(.towardZero))
         }
         if let value = value as? String { return Int(clean(value)) }
         return nil
@@ -1406,6 +1437,7 @@ nonisolated enum MiniMaxUsageFetcher {
             string(item["model_name"])?.lowercased() == "video"
                 && integer(item["current_interval_status"]) == 3
                 && (integer(item["current_interval_total_count"]) ?? 0) == 0
+                && (integer(item["current_interval_usage_count"]) ?? 0) == 0
                 && (number(item["current_interval_remaining_percent"]) ?? 0) >= 100
         }
         return hasText && unavailableVideo ? "Plus" : nil

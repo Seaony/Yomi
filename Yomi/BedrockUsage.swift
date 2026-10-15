@@ -542,9 +542,11 @@ nonisolated enum BedrockUsageFetcher {
         let formatter = dayFormatter()
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: until))!
+        let earliest = calendar.date(byAdding: .month, value: -13, to: monthStart) ?? monthStart
         let inclusiveEnd = calendar.date(byAdding: .day, value: 1, to: until) ?? until
         let pages = try await costExplorerPages(
-            startDate: formatter.string(from: since),
+            startDate: formatter.string(from: max(since, earliest)),
             endDate: formatter.string(from: inclusiveEnd),
             granularity: "DAILY",
             credentials: credentials,
@@ -764,10 +766,10 @@ nonisolated enum BedrockCloudWatchUsageFetcher {
         } while nextToken != nil
         func value(_ metric: Metric) throws -> Int {
             let total = totals[metric] ?? 0
-            guard total.isFinite, total >= 0, total <= Double(Int.max) else {
+            guard total >= 0, let count = Int(exactly: total.rounded()) else {
                 throw BedrockUsageError.cloudWatchParseFailed("invalid metric total")
             }
-            return Int(total.rounded())
+            return count
         }
         return try BedrockClaudeActivity(
             inputTokens: value(.inputTokens),

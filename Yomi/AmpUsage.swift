@@ -48,9 +48,11 @@ nonisolated enum AmpUsageFetcher {
     struct Subscription: Sendable, Equatable {
         let plan: String
         let otherUsedFraction: Double
-        let orbUsedFraction: Double
+        let orbUsedFraction: Double?
         let resetsAt: Date
         let resetDescription: String
+        let agentRemaining: Double?
+        let orbHoursRemaining: Double?
     }
 
     struct Snapshot: Sendable, Equatable {
@@ -158,6 +160,9 @@ nonisolated enum AmpUsageFetcher {
             #"(?im)^\s*Subscription\s+(.+?):"# + subscriptionSuffix,
             #"(?im)^\s*Amp\s+(.+?)\s+Subscription:"# + subscriptionSuffix,
         ]
+        let tierPattern = #"(?im)^\s*Amp\s+([^\r\n]+?)\s+Tier:\s*agent\s+usage\s+\$"# + amount
+            + #"\s+of\s+\$"# + amount + #"\s+remaining\b([^\r\n]*?)resets\s+upon\s+renewal\s+in\s+"#
+            + #"([0-9][0-9,]*)\s+(days?|months?)\b"#
 
         let legacyFree: FreeUsage? = {
             guard let fields = captures(legacyFreePattern, in: text),
@@ -193,6 +198,35 @@ nonisolated enum AmpUsageFetcher {
             return WorkspaceBalance(name: name, remaining: remaining)
         }
         let subscription: Subscription? = {
+            if let fields = captures(tierPattern, in: text),
+               let remaining = number(fields[1]),
+               let limit = number(fields[2]), limit > 0 {
+                let period = tierPeriod(in: fields[3])
+                let renewalText = fields[4].replacingOccurrences(of: ",", with: "")
+                let renewalValue = Int(renewalText)
+                guard let resetsAt = period?.end
+                    ?? renewalValue.flatMap({ subscriptionResetDate(value: $0, unit: fields[5], now: now) })
+                else { return nil }
+                let orbPattern = #"(?i)\borb\s+usage\s+"# + amount + #"h\s+of\s+"# + amount
+                    + #"h\s+a1\.small\s+orb\s+hours\s+remaining\b"#
+                let orb = captures(orbPattern, in: fields[3])
+                let orbRemaining = orb.flatMap { number($0[0]) }
+                let orbLimit = orb.flatMap { number($0[1]) }.flatMap { $0 > 0 ? $0 : nil }
+                let orbUsedFraction: Double? = if let orbRemaining, let orbLimit {
+                    min(1, max(0, (orbLimit - orbRemaining) / orbLimit))
+                } else {
+                    nil
+                }
+                return Subscription(
+                    plan: fields[0],
+                    otherUsedFraction: min(1, max(0, (limit - remaining) / limit)),
+                    orbUsedFraction: orbUsedFraction,
+                    resetsAt: resetsAt,
+                    resetDescription: "renews in \(renewalValue.map(String.init) ?? renewalText) \(fields[5].lowercased())",
+                    agentRemaining: remaining,
+                    orbHoursRemaining: orbLimit == nil ? nil : orbRemaining
+                )
+            }
             guard let fields = subscriptionPatterns.lazy.compactMap({ captures($0, in: text) }).first,
                   fields.count == 5,
                   let plan = nonEmpty(fields[0]),
@@ -207,7 +241,9 @@ nonisolated enum AmpUsageFetcher {
                 otherUsedFraction: (100 - min(100, max(0, otherRemaining))) / 100,
                 orbUsedFraction: (100 - min(100, max(0, orbRemaining))) / 100,
                 resetsAt: resetsAt,
-                resetDescription: "renews in \(renewalValue) \(singular)\(renewalValue == 1 ? "" : "s")"
+                resetDescription: "renews in \(renewalValue) \(singular)\(renewalValue == 1 ? "" : "s")",
+                agentRemaining: nil,
+                orbHoursRemaining: nil
             )
         }()
 
@@ -268,28 +304,45 @@ nonisolated enum AmpUsageFetcher {
         var primary: [UsageWindow] = []
         var additional: [UsageWindow] = []
         if let subscription = snapshot.subscription {
-            primary = [
-                UsageWindow(
-                    id: "amp-other",
-                    label: "Other usage",
-                    usedFraction: subscription.otherUsedFraction,
-                    resetsAt: subscription.resetsAt,
-                    detail: nil
-                ),
-                UsageWindow(
+            primary = [UsageWindow(
+                id: "amp-other",
+                label: subscription.agentRemaining == nil ? "Other usage" : "Agent usage",
+                usedFraction: subscription.otherUsedFraction,
+                resetsAt: subscription.resetsAt,
+                detail: nil
+            )]
+            if let orbUsedFraction = subscription.orbUsedFraction {
+                primary.append(UsageWindow(
                     id: "amp-orb",
                     label: "Orb usage",
-                    usedFraction: subscription.orbUsedFraction,
+                    usedFraction: orbUsedFraction,
                     resetsAt: subscription.resetsAt,
                     detail: nil
-                ),
-            ]
+                ))
+            }
         }
         if let freeWindow = freeWindow(snapshot, now: now) {
             if snapshot.subscription == nil { primary = [freeWindow] }
             else { additional = [freeWindow] }
         }
         var details: [UsageDetail] = []
+        if let remaining = snapshot.subscription?.agentRemaining {
+            details.append(UsageDetail(
+                id: "amp-agent-allowance",
+                label: "Monthly agent allowance",
+                value: usd(remaining)
+            ))
+        }
+        if let remaining = snapshot.subscription?.orbHoursRemaining {
+            let hours = remaining > 0 && remaining < 1
+                ? "< 1h"
+                : "\(remaining.rounded(.down).formatted(.number.precision(.fractionLength(0))))h"
+            details.append(UsageDetail(
+                id: "amp-orb-allowance",
+                label: "Monthly Orb allowance",
+                value: "\(hours) · a1.small"
+            ))
+        }
         if let credits = snapshot.individualCredits {
             details.append(UsageDetail(
                 id: "amp-individual-credits",
@@ -532,7 +585,9 @@ nonisolated enum AmpUsageFetcher {
         let reset: Date? = {
             if snapshot.freeResetDescription == "resets daily" { return nextDailyReset(after: now) }
             guard quota > 0, let hourly = snapshot.hourlyReplenishment, hourly > 0 else { return nil }
-            return now.addingTimeInterval(max(0, used / hourly) * 3600)
+            let seconds = max(0, used / hourly * 3600)
+            guard Int(exactly: seconds.rounded(.towardZero)) != nil else { return nil }
+            return now.addingTimeInterval(seconds)
         }()
         return UsageWindow(
             id: "amp-free",
@@ -589,8 +644,25 @@ nonisolated enum AmpUsageFetcher {
             .first.flatMap(number)
     }
 
+    private static func tierPeriod(in text: String) -> (start: Date, end: Date)? {
+        let pattern = #"\bperiod\s+(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})\b"#
+        guard let dates = captures(pattern, in: text) else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.isLenient = false
+        guard let start = formatter.date(from: dates[0]), let end = formatter.date(from: dates[1]),
+              formatter.string(from: start) == dates[0], formatter.string(from: end) == dates[1],
+              end > start else { return nil }
+        return (start, end)
+    }
+
     private static func subscriptionResetDate(value: Int, unit: String, now: Date) -> Date? {
-        if unit.lowercased().hasPrefix("month") {
+        let isMonth = unit.lowercased().hasPrefix("month")
+        let secondsPerUnit = (isMonth ? 31 : 1) * 24 * 60 * 60
+        guard value <= Int.max / secondsPerUnit else { return nil }
+        if isMonth {
             return Calendar(identifier: .gregorian).date(byAdding: .month, value: value, to: now)
         }
         return now.addingTimeInterval(TimeInterval(value) * 24 * 60 * 60)

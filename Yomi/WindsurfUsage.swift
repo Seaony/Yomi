@@ -479,11 +479,7 @@ nonisolated enum WindsurfSessionImporter {
     }
 
     static let preferredBrowsers: [Browser] = [.chrome]
-    static let fallbackBrowsers: [Browser] = [
-        .chromeBeta, .chromeCanary, .edge, .edgeBeta, .edgeCanary,
-        .brave, .braveBeta, .braveNightly, .vivaldi, .arc, .arcBeta,
-        .arcCanary, .dia, .chatgptAtlas, .chromium, .helium,
-    ]
+    static let fallbackBrowsers = Browser.defaultImportOrder.filter { $0 != .chrome && $0.usesChromiumProfileStore }
     static let localStorageOrigins = [
         URL(string: "https://app.devin.ai")!,
         URL(string: "https://windsurf.com")!,

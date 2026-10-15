@@ -64,6 +64,7 @@ struct CommandCodeUsageTests {
     @Test
     func planCatalogMatchesReference() {
         #expect(CommandCodePlanCatalog.plan(forID: "INDIVIDUAL-GO")?.monthlyCreditsUSD == 10)
+        #expect(CommandCodePlanCatalog.plan(forID: "individual-go-v1")?.monthlyCreditsUSD == 10)
         #expect(CommandCodePlanCatalog.plan(forID: "individual-goat")?.monthlyCreditsUSD == 70)
         #expect(CommandCodePlanCatalog.plan(forID: "individual-pro")?.monthlyCreditsUSD == 30)
         #expect(CommandCodePlanCatalog.plan(forID: "individual-pro-v1")?.monthlyCreditsUSD == 80)
@@ -79,7 +80,7 @@ struct CommandCodeUsageTests {
         #expect(cookie?.name == "__Secure-commandcode_prod_.session_token")
         #expect(cookie?.token == "current")
         #expect(CommandCodeCookieHeader.override(from: "bare")?.headerValue
-            == "__Secure-better-auth.session_token=bare")
+            == "__Secure-commandcode_prod_.session_token=bare")
         #expect(CommandCodeCookieHeader.override(from: "BETTER-AUTH.SESSION_TOKEN=value")?.name
             == "BETTER-AUTH.SESSION_TOKEN")
         #expect(CommandCodeCookieHeader.override(from: " ") == nil)
@@ -89,7 +90,7 @@ struct CommandCodeUsageTests {
     func creditsParserReadsRootRollingWindows() throws {
         let payload = try CommandCodeUsageFetcher.parseCredits(data: Data(#"""
         {
-          "credits":{"monthlyCredits":8.5,"purchasedCredits":2},
+          "credits":{"monthlyCredits":8.5,"monthlyCreditsGranted":20,"purchasedCredits":2},
           "windowLimits":{
             "fiveHour":{"cap":4,"used":1,"resetAt":1780000000000},
             "weekly":{"cap":"20","used":"4","resetAt":"1780100000"}
@@ -97,6 +98,7 @@ struct CommandCodeUsageTests {
         }
         """#.utf8))
         #expect(payload.monthlyCredits == 8.5)
+        #expect(payload.monthlyCreditsGranted == 20)
         #expect(payload.purchasedCredits == 2)
         #expect(payload.premiumMonthlyCredits == 0)
         #expect(payload.opensourceMonthlyCredits == 0)
@@ -260,18 +262,28 @@ struct CommandCodeUsageTests {
     }
 
     @Test
-    func unknownActivePlanFailsExplicitly() async {
+    func unknownActivePlanPreservesAPIUsageAndPlanLabel() async throws {
         let session = Self.session { request in
             let body = request.url?.path == CommandCodeUsageFetcher.creditsPath
-                ? Self.creditsJSON
+                ? #"""
+                {"credits":{"monthlyCredits":8,"monthlyCreditsGranted":20},
+                "windowLimits":{"fiveHour":{"used":1,"cap":4}}}
+                """#
                 : #"{"success":true,"data":{"planId":"individual-future","status":"active"}}"#
             return Self.response(request, status: 200, body: body)
         }
         defer { CommandCodeTestURLProtocol.handler = nil }
-        await #expect(throws: CommandCodeUsageError.unknownPlan("individual-future")) {
-            _ = try await CommandCodeUsageFetcher.fetchSnapshot(
-                cookieHeader: "session=valid", session: session)
-        }
+        let snapshot = try await CommandCodeUsageFetcher.fetchSnapshot(
+            cookieHeader: "session=valid", session: session)
+        let usage = snapshot.toProviderUsage()
+        #expect(snapshot.plan?.id == "individual-future")
+        #expect(snapshot.plan?.monthlyCreditsUSD == nil)
+        #expect(snapshot.monthlyCreditsRemaining == 8)
+        #expect(snapshot.monthlyCreditsTotal == 20)
+        #expect(snapshot.monthlyCreditsUsed == 12)
+        #expect(usage.plan == "individual-future")
+        #expect(usage.windows.map(\.id) == ["commandcode-five-hour", "commandcode-monthly"])
+        #expect(usage.windows.map(\.usedFraction) == [0.25, 0.6])
     }
 
     @Test
@@ -449,9 +461,9 @@ struct CommandCodeUsageTests {
             _ = try await CommandCodeUsageFetcher.fetch(
                 credential: "session=value", source: .command, session: session)
         }
-        await #expect(throws: CommandCodeUsageError.missingCredentials) {
+        await #expect(throws: CommandCodeUsageError.missingAPIKey) {
             _ = try await CommandCodeUsageFetcher.fetch(
-                credential: "session=value", source: .token, session: session)
+                credential: "", source: .token, session: session)
         }
         #expect(recorder.requests.isEmpty)
     }

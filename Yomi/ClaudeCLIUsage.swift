@@ -95,6 +95,7 @@ nonisolated struct ClaudeCLIUsageSnapshot: Sendable, Equatable {
     let accountEmail: String?
     let organization: String?
     let loginMethod: String?
+    var providerCost: ProviderCostSummary? = nil
 }
 
 nonisolated enum ClaudeCLIUsageFetcher {
@@ -151,10 +152,14 @@ nonisolated enum ClaudeCLIUsageFetcher {
         }
     }
 
-    static let fixedDirectArguments = ["/usage"]
+    static let probeSettingsArguments = [
+        "--settings", #"{"remoteControlAtStartup":false,"disableAllHooks":true}"#,
+    ]
+    static let fixedDirectArguments = probeSettingsArguments + ["/usage"]
 
     static func launchArguments(sessionID: UUID) -> [String] {
-        ["--allowed-tools", "", "--strict-mcp-config", "--session-id", sessionID.uuidString.lowercased()]
+        ["--allowed-tools", "", "--strict-mcp-config"] + probeSettingsArguments
+            + ["--session-id", sessionID.uuidString.lowercased()]
     }
 
     static func fetch(
@@ -217,6 +222,10 @@ nonisolated enum ClaudeCLIUsageFetcher {
             guard shouldTryDirect(after: error) else { throw error }
             let directTimeout = min(max(ptyTimeout / 3, 6), 8)
             let output = try await execute(binary, fixedDirectArguments, .direct, directTimeout, environment)
+            let clean = stripANSI(output)
+            if quotaPanel(clean) != clean, !usageComplete(clean) {
+                throw error
+            }
             return try parse(output)
         }
     }
@@ -266,10 +275,10 @@ nonisolated enum ClaudeCLIUsageFetcher {
         guard !clean.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ClaudeCLIUsageError.timedOut
         }
-        if let error = terminalError(clean) {
+        let panel = quotaPanel(latestUsagePanel(clean) ?? clean)
+        if let error = terminalError(panel) {
             throw error
         }
-        let panel = latestUsagePanel(clean) ?? clean
         if isStillLoading(panel) {
             throw ClaudeCLIUsageError.parseFailed("Claude CLI /usage is still loading usage data.")
         }
@@ -295,7 +304,7 @@ nonisolated enum ClaudeCLIUsageFetcher {
         let weeklyModels = Set(context.lines.compactMap(weeklyModelName).map(normalizeLabel))
         let hasWeekly = weeklyModels.contains(where: isAllModels)
         let status = stripANSI(statusText ?? "")
-        let identityText = clean + "\n" + status
+        let identityText = panel + "\n" + status
 
         return ClaudeCLIUsageSnapshot(
             sessionPercentLeft: sessionLeft,
@@ -310,7 +319,8 @@ nonisolated enum ClaudeCLIUsageFetcher {
             modelResetDescription: modelLabel.flatMap { extractReset(label: $0, context: context) },
             accountEmail: firstMatch(#"(?i)(?:Account|Email):\s+([^\s@]+@[^\s@]+)"#, in: identityText),
             organization: firstMatch(#"(?i)(?:Org|Organization):\s*([^\r\n]+)"#, in: identityText),
-            loginMethod: firstMatch(#"(?i)Login\s+method:\s*([^\r\n]+)"#, in: identityText)
+            loginMethod: firstMatch(#"(?i)Login\s+method:\s*([^\r\n]+)"#, in: identityText),
+            providerCost: spendCap(in: panel)
         )
     }
 
@@ -373,6 +383,7 @@ nonisolated enum ClaudeCLIUsageFetcher {
             windows: windows,
             additionalWindows: additional,
             plan: nil,
+            providerCost: snapshot.providerCost,
             details: [],
             updatedAt: now
         )
@@ -455,7 +466,7 @@ nonisolated enum ClaudeCLIUsageFetcher {
         case .pty:
             var master: Int32 = -1
             var slave: Int32 = -1
-            var size = winsize(ws_row: 50, ws_col: 160, ws_xpixel: 0, ws_ypixel: 0)
+            var size = winsize(ws_row: 200, ws_col: 160, ws_xpixel: 0, ws_ypixel: 0)
             guard openpty(&master, &slave, nil, nil, &size) == 0 else {
                 throw ClaudeCLIUsageError.commandFailed("openpty failed")
             }
@@ -557,8 +568,43 @@ nonisolated enum ClaudeCLIUsageFetcher {
     }
 
     private static func usageComplete(_ text: String) -> Bool {
-        let context = LabelContext(text)
+        let context = LabelContext(quotaPanel(latestUsagePanel(text) ?? text))
         return extractPercent(label: "Current session", context: context) != nil
+    }
+
+    private static func quotaPanel(_ text: String) -> String {
+        guard let range = text.range(
+            of: #"(?i)what['’]s\s*contributing\s*to\s*your\s*limits\s*usage\s*\?"#,
+            options: .regularExpression
+        ) else { return text }
+        return String(text[..<range.lowerBound])
+    }
+
+    private static func spendCap(in text: String) -> ProviderCostSummary? {
+        let lines = text.components(separatedBy: .newlines)
+        guard let header = lines.indices.last(where: {
+            let label = normalizeLabel(lines[$0])
+            return label.hasPrefix("usagecredits") && label.count <= 60
+        }) else { return nil }
+        let amount = #"((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]{1,4})?)"#
+        let pattern = #"(?i)(?<![\p{L}\p{N}\-+\x{2212}.,])\$\s*"# + amount
+            + #"\s*/\s*\$\s*"# + amount + #"\s*spent\b"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        for line in lines[header..<min(lines.count, header + 7)] {
+            guard let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+                  let usedRange = Range(match.range(at: 1), in: line),
+                  let limitRange = Range(match.range(at: 2), in: line),
+                  let used = Double(line[usedRange].replacingOccurrences(of: ",", with: "")),
+                  let limit = Double(line[limitRange].replacingOccurrences(of: ",", with: "")),
+                  used.isFinite, limit.isFinite, (0...1_000_000_000_000).contains(used),
+                  (0...1_000_000_000_000).contains(limit), limit > 0
+            else { continue }
+            return ProviderCostSummary(
+                used: used, limit: limit, currencyCode: "USD",
+                period: AppLocalization.text("每月消费上限", "Monthly cap"), balance: nil
+            )
+        }
+        return nil
     }
 
     private static func terminalError(_ text: String) -> ClaudeCLIUsageError? {

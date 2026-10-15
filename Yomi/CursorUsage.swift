@@ -26,7 +26,15 @@ enum CursorUsageFetcher {
         let summary = try await summaryData
         let user = await userData.flatMap { try? JSONDecoder().decode(CursorUser.self, from: $0) }
         let sand = await sandData.flatMap { try? JSONDecoder().decode(CursorSand.self, from: $0) }
-        let requestUsageData: Data? = if let userID = user?.sub ?? identity(from: cookie)?.subject {
+        let parsedSummary = try? JSONDecoder().decode(CursorSummary.self, from: summary)
+        let teamBudget: CursorTeamBudget? = if parsedSummary?.isTeamPlan == true, let email = user?.email {
+            try? await fetchTeamBudget(cookie: cookie, email: email, session: session)
+        } else {
+            nil
+        }
+        try Task.checkCancellation()
+        let requestUsageData: Data? = if teamBudget == nil,
+                                       let userID = user?.sub ?? identity(from: cookie)?.subject {
             await optionalRequest(
                 path: "/api/usage?user=\(userID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")",
                 cookie: cookie,
@@ -36,11 +44,13 @@ enum CursorUsageFetcher {
             nil
         }
         let legacy = requestUsageData.flatMap { try? JSONDecoder().decode(CursorLegacyUsage.self, from: $0) }
+        try Task.checkCancellation()
         return try parse(
             summaryData: summary,
             user: user,
             legacy: legacy,
             sand: sand,
+            teamBudget: teamBudget,
             now: now
         )
     }
@@ -50,6 +60,7 @@ enum CursorUsageFetcher {
         user: CursorUser? = nil,
         legacy: CursorLegacyUsage? = nil,
         sand: CursorSand? = nil,
+        teamBudget: CursorTeamBudget? = nil,
         now: Date = Date()
     ) throws -> ProviderUsage {
         let summary: CursorSummary
@@ -61,17 +72,20 @@ enum CursorUsageFetcher {
         let plan = summary.individualUsage?.plan
         let overall = summary.individualUsage?.overall
         let pooled = summary.teamUsage?.pooled
-        let planUsed = Double(plan?.used ?? 0)
-        let planLimit = Double(plan?.limit ?? 0)
+        let planUsed = plan?.used.map(Double.init)
+        let planLimit = plan?.limit.map(Double.init)
         let overallUsed = overall?.used.map(Double.init)
         let overallLimit = overall?.limit.map(Double.init)
         let pooledUsed = pooled?.used.map(Double.init)
         let pooledLimit = pooled?.limit.map(Double.init)
 
-        let autoPercent = plan?.autoPercentUsed.map(clampedPercent)
-        let apiPercent = plan?.apiPercentUsed.map(clampedPercent)
-        let totalPercent: Double
-        if let reported = plan?.totalPercentUsed {
+        let teamBudget = summary.isTeamPlan ? teamBudget : nil
+        let autoPercent = teamBudget == nil ? plan?.autoPercentUsed.map(clampedPercent) : nil
+        let apiPercent = teamBudget == nil ? plan?.apiPercentUsed.map(clampedPercent) : nil
+        let totalPercent: Double?
+        if let teamBudget {
+            totalPercent = clampedPercent(teamBudget.usedUSD / teamBudget.limitUSD * 100)
+        } else if let reported = plan?.totalPercentUsed {
             totalPercent = clampedPercent(reported)
         } else if let autoPercent, let apiPercent {
             totalPercent = clampedPercent((autoPercent + apiPercent) / 2)
@@ -79,29 +93,32 @@ enum CursorUsageFetcher {
             totalPercent = apiPercent
         } else if let autoPercent {
             totalPercent = autoPercent
-        } else if planLimit > 0 {
-            totalPercent = clampedPercent(planUsed / planLimit * 100)
+        } else if let used = planUsed, let limit = planLimit, limit > 0 {
+            totalPercent = clampedPercent(used / limit * 100)
         } else if let used = overallUsed, let limit = overallLimit, limit > 0 {
             totalPercent = clampedPercent(used / limit * 100)
         } else if let used = pooledUsed, let limit = pooledLimit, limit > 0 {
             totalPercent = clampedPercent(used / limit * 100)
         } else {
-            totalPercent = 0
+            totalPercent = nil
         }
 
         let reset = date(summary.billingCycleEnd)
         let legacyUsed = legacy?.gpt4?.numRequestsTotal ?? legacy?.gpt4?.numRequests
         let legacyLimit = legacy?.gpt4?.maxRequestUsage
-        let hasLegacy = (legacyLimit ?? 0) > 0
-        var windows = [UsageWindow(
-            id: "cursor-total",
-            label: "Total",
-            usedFraction: hasLegacy
-                ? Double(legacyUsed ?? 0) / Double(legacyLimit ?? 1)
-                : totalPercent / 100,
-            resetsAt: reset,
-            detail: hasLegacy ? "\(legacyUsed ?? 0) / \(legacyLimit ?? 0) requests" : nil
-        )]
+        let hasLegacy = teamBudget == nil && legacyUsed != nil && (legacyLimit ?? 0) > 0
+        var windows: [UsageWindow] = []
+        if hasLegacy || totalPercent != nil {
+            windows.append(UsageWindow(
+                id: "cursor-total",
+                label: "Total",
+                usedFraction: hasLegacy
+                    ? Double(legacyUsed ?? 0) / Double(legacyLimit ?? 1)
+                    : (totalPercent ?? 0) / 100,
+                resetsAt: reset,
+                detail: hasLegacy ? "\(legacyUsed ?? 0) / \(legacyLimit ?? 0) requests" : nil
+            ))
+        }
         if !hasLegacy, let autoPercent {
             windows.append(UsageWindow(
                 id: "cursor-auto",
@@ -121,12 +138,14 @@ enum CursorUsageFetcher {
             ))
         }
         var additional: [UsageWindow] = []
-        if !hasLegacy, sand?.hasNonZeroIncludedLimit == true, let percent = sand?.usagePercent {
+        let hasSandLimit = sand?.includedLimitZero.map { !$0 } ?? sand?.hasNonZeroIncludedLimit
+        let hasSandTrial = hasSandLimit != true && date(sand?.sandTrialExpiresAt).map { $0 > now } == true
+        if !hasLegacy, hasSandLimit == true || hasSandTrial, let percent = sand?.usagePercent {
             additional.append(UsageWindow(
                 id: "cursor-grok-bot",
                 label: "Grok Bot",
                 usedFraction: clampedPercent(percent) / 100,
-                resetsAt: date(sand?.nextResetTimestampUtc),
+                resetsAt: hasSandTrial ? nil : date(sand?.nextResetTimestampUtc),
                 detail: nil
             ))
         }
@@ -147,6 +166,14 @@ enum CursorUsageFetcher {
             ProviderCostSummary(
                 used: teamUsed ?? 0,
                 limit: teamLimit ?? 0,
+                currencyCode: "USD",
+                period: "Monthly",
+                balance: nil
+            )
+        } else if personalUsed > 0 {
+            ProviderCostSummary(
+                used: personalUsed,
+                limit: personalLimit ?? 0,
                 currencyCode: "USD",
                 period: "Monthly",
                 balance: nil
@@ -189,17 +216,20 @@ enum CursorUsageFetcher {
         path: String,
         method: String = "GET",
         cookie: String,
-        session: URLSession
+        session: URLSession,
+        body: [String: Any] = [:],
+        timeout: TimeInterval = 20
     ) async throws -> Data {
         var request = URLRequest(url: URL(string: "https://cursor.com\(path)")!)
         request.httpMethod = method
-        request.timeoutInterval = 20
+        request.timeoutInterval = timeout
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if method == "POST" {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.setValue("https://cursor.com", forHTTPHeaderField: "Origin")
-            request.httpBody = Data("{}".utf8)
+            request.setValue("https://cursor.com/dashboard", forHTTPHeaderField: "Referer")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -209,6 +239,49 @@ enum CursorUsageFetcher {
             throw UsageCollectionError.requestFailed(http.statusCode)
         }
         return data
+    }
+
+    private static func fetchTeamBudget(
+        cookie: String,
+        email: String,
+        session: URLSession
+    ) async throws -> CursorTeamBudget? {
+        let email = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !email.isEmpty else { return nil }
+        let deadline = Date().addingTimeInterval(10)
+        let teamsData = try await request(
+            path: "/api/dashboard/teams", method: "POST", cookie: cookie, session: session,
+            timeout: deadline.timeIntervalSinceNow
+        )
+        let teams = try JSONDecoder().decode(CursorTeams.self, from: teamsData)
+        guard let teamID = teams.selectedID(cookie: cookie) else { return nil }
+        var expectedPages: Int?
+        var budget: CursorTeamBudget?
+        for page in 1...20 {
+            try Task.checkCancellation()
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { throw URLError(.timedOut) }
+            let data = try await request(
+                path: "/api/dashboard/get-team-spend", method: "POST", cookie: cookie, session: session,
+                body: ["teamId": teamID, "page": page, "pageSize": 50, "sortBy": "name", "sortDirection": "asc"],
+                timeout: remaining
+            )
+            try Task.checkCancellation()
+            guard deadline.timeIntervalSinceNow > 0 else { throw URLError(.timedOut) }
+            let spend = try JSONDecoder().decode(CursorTeamSpend.self, from: data)
+            guard let pages = spend.totalPages, (1...20).contains(pages),
+                  expectedPages == nil || expectedPages == pages,
+                  !spend.teamMemberSpend.isEmpty, spend.teamMemberSpend.count <= 50,
+                  page == pages || spend.teamMemberSpend.count == 50 else { return nil }
+            expectedPages = pages
+            for member in spend.teamMemberSpend where member.email?
+                .trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(email) == .orderedSame {
+                guard budget == nil, let memberBudget = member.budget else { return nil }
+                budget = memberBudget
+            }
+            if page == pages { return budget }
+        }
+        return nil
     }
 
     private static func optionalRequest(
@@ -294,6 +367,53 @@ struct CursorSand: Decodable {
     var nextResetTimestampUtc: String?
     var usagePercent: Double?
     var hasNonZeroIncludedLimit: Bool?
+    var includedLimitZero: Bool?
+    var sandTrialExpiresAt: String?
+}
+
+struct CursorTeamBudget {
+    var usedUSD: Double
+    var limitUSD: Double
+}
+
+private struct CursorTeams: Decodable {
+    struct Team: Decodable { var id: Int }
+    var teams: [Team]
+
+    func selectedID(cookie: String) -> Int? {
+        let ids = Set(teams.map(\.id).filter { $0 > 0 })
+        guard ids.count == teams.count else { return nil }
+        let cookies = cookie.split(separator: ";").map {
+            $0.trimmingCharacters(in: .whitespaces).split(separator: "=", maxSplits: 1)
+        }
+        for name in ["portal-selected-team-id", "team_id"] {
+            let values = cookies.filter { $0.first == Substring(name) }
+            if !values.isEmpty {
+                guard values.count == 1, values[0].count == 2,
+                      let id = Int(values[0][1]), ids.contains(id) else { return nil }
+                return id
+            }
+        }
+        return ids.count == 1 ? ids.first : nil
+    }
+}
+
+private struct CursorTeamSpend: Decodable {
+    struct Member: Decodable {
+        var email: String?
+        var overallSpendCents: Double?
+        var effectivePerUserLimitDollars: Double?
+        var monthlyLimitDollars: Double?
+
+        var budget: CursorTeamBudget? {
+            guard let used = overallSpendCents, used.isFinite, used >= 0,
+                  let limit = effectivePerUserLimitDollars ?? monthlyLimitDollars,
+                  limit.isFinite, limit > 0 else { return nil }
+            return CursorTeamBudget(usedUSD: used / 100, limitUSD: limit)
+        }
+    }
+    var teamMemberSpend: [Member]
+    var totalPages: Int?
 }
 
 private struct CursorIdentity {
@@ -319,6 +439,12 @@ private struct CursorSummary: Decodable {
     var billingCycleStart: String?
     var billingCycleEnd: String?
     var membershipType: String?
+    var limitType: String?
     var individualUsage: UsageBlock?
     var teamUsage: UsageBlock?
+
+    var isTeamPlan: Bool {
+        ["enterprise", "business", "team", "teams"].contains(membershipType?.lowercased() ?? "")
+            || limitType?.lowercased() == "team"
+    }
 }

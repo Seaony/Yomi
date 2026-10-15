@@ -71,7 +71,7 @@ nonisolated struct ChutesQuotaWindow: Sendable, Equatable {
 
     private static func amount(_ value: Double) -> String {
         let rounded = value.rounded()
-        if abs(value - rounded) < 0.0001 { return String(Int(rounded)) }
+        if abs(value - rounded) < 0.0001, let integer = Int(exactly: rounded) { return String(integer) }
         var text = String(format: "%.2f", value)
         while text.contains("."), text.hasSuffix("0") { text.removeLast() }
         if text.hasSuffix(".") { text.removeLast() }
@@ -419,19 +419,19 @@ private nonisolated enum ChutesUsageParser {
     }
 
     private static func windowMinutes(_ object: [String: Any]) -> Int? {
-        if let value = firstDouble(object, windowMinuteKeys) { return Int(value.rounded()) }
-        if let value = firstDouble(object, windowHourKeys) { return Int((value * 60).rounded()) }
-        if let value = firstDouble(object, windowDayKeys) { return Int((value * 1440).rounded()) }
-        if let value = firstDouble(object, windowSecondKeys) { return Int((value / 60).rounded()) }
+        if let value = firstDouble(object, windowMinuteKeys) { return Int(exactly: value.rounded()) }
+        if let value = firstDouble(object, windowHourKeys) { return Int(exactly: (value * 60).rounded()) }
+        if let value = firstDouble(object, windowDayKeys) { return Int(exactly: (value * 1440).rounded()) }
+        if let value = firstDouble(object, windowSecondKeys) { return Int(exactly: (value / 60).rounded()) }
         guard let raw = firstString(object, windowStringKeys) else { return nil }
         let compact = raw.lowercased().replacingOccurrences(of: " ", with: "")
         let scanner = Scanner(string: compact)
         guard let value = scanner.scanDouble(), value > 0 else { return nil }
         let suffix = String(compact[scanner.currentIndex...])
-        if suffix.hasPrefix("min") || suffix == "m" { return Int(value.rounded()) }
-        if suffix.hasPrefix("hour") || suffix.hasPrefix("hr") || suffix == "h" { return Int((value * 60).rounded()) }
-        if suffix.hasPrefix("day") || suffix == "d" { return Int((value * 1440).rounded()) }
-        if suffix.hasPrefix("month") || suffix == "mo" { return Int((value * 43200).rounded()) }
+        if suffix.hasPrefix("min") || suffix == "m" { return Int(exactly: value.rounded()) }
+        if suffix.hasPrefix("hour") || suffix == "hr" || suffix == "h" { return Int(exactly: (value * 60).rounded()) }
+        if suffix.hasPrefix("day") || suffix == "d" { return Int(exactly: (value * 1440).rounded()) }
+        if suffix.hasPrefix("month") || suffix == "mo" { return Int(exactly: (value * 43200).rounded()) }
         return nil
     }
 

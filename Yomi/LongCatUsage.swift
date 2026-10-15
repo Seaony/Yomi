@@ -68,31 +68,28 @@ nonisolated struct LongCatUsageSnapshot: Sendable, Equatable {
         if let totalQuota,
            totalQuota.isFinite,
            totalQuota > 0,
-           totalQuota <= Double(Int.max) {
-            let used = min(totalQuota, resolvedUsed(total: totalQuota))
+           let used = resolvedUsed(total: totalQuota) {
             windows.append(UsageWindow(
                 id: "longcat-quota",
                 label: "Quota",
                 usedFraction: min(1, used / totalQuota),
                 resetsAt: nil,
-                detail: "\(Int(used))/\(Int(totalQuota))"
+                detail: "\(whole(used))/\(whole(totalQuota))"
             ))
         }
+        let remaining = fuelPackRemaining ?? fuelPackTotal ?? 0
+        let fuelUsed = max(0, (fuelPackTotal ?? 0) - remaining)
         if let fuelPackTotal,
            fuelPackTotal.isFinite,
            fuelPackTotal > 0,
-           fuelPackTotal <= Double(Int.max) {
-            let remaining = min(
-                fuelPackTotal,
-                fuelPackRemaining.flatMap { $0.isFinite ? max(0, $0) : nil } ?? fuelPackTotal
-            )
-            let used = max(0, fuelPackTotal - remaining)
+           remaining.isFinite,
+           fuelUsed.isFinite {
             windows.append(UsageWindow(
                 id: "longcat-fuel-pack",
                 label: "Fuel Pack",
-                usedFraction: min(1, used / fuelPackTotal),
+                usedFraction: min(1, fuelUsed / fuelPackTotal),
                 resetsAt: nearestFuelExpiry,
-                detail: "Fuel pack: \(Int(remaining))/\(Int(fuelPackTotal))"
+                detail: "Fuel pack: \(whole(remaining))/\(whole(fuelPackTotal))"
             ))
         }
         return ProviderUsage(
@@ -105,10 +102,18 @@ nonisolated struct LongCatUsageSnapshot: Sendable, Equatable {
         )
     }
 
-    private func resolvedUsed(total: Double) -> Double {
-        if let usedQuota, usedQuota.isFinite { return max(0, usedQuota) }
-        if let remainingQuota, remainingQuota.isFinite { return max(0, total - remainingQuota) }
+    private func resolvedUsed(total: Double) -> Double? {
+        if let usedQuota { return usedQuota.isFinite ? max(0, usedQuota) : nil }
+        if let remainingQuota {
+            let used = max(0, total - remainingQuota)
+            return remainingQuota.isFinite && used.isFinite ? used : nil
+        }
         return 0
+    }
+
+    private func whole(_ value: Double) -> String {
+        let whole = value.rounded(.towardZero)
+        return String(format: "%.0f", whole == 0 ? 0 : whole)
     }
 }
 
@@ -456,10 +461,15 @@ nonisolated enum LongCatUsageFetcher {
         guard let object = raw as? [String: Any] else {
             throw LongCatUsageError.parseFailed("response was not a JSON object")
         }
-        if let code = integer(object["code"]), code != 0, code != 200 {
-            let message = string(object["message"]) ?? string(object["msg"]) ?? "code \(code)"
-            if code == 401 || code == 403 { throw LongCatUsageError.invalidSession }
-            throw LongCatUsageError.apiError(message)
+        if let rawCode = object["code"] {
+            guard let code = integer(rawCode) else {
+                throw LongCatUsageError.parseFailed("response code was not a valid integer")
+            }
+            if code != 0, code != 200 {
+                let message = string(object["message"]) ?? string(object["msg"]) ?? "code \(code)"
+                if code == 401 || code == 403 { throw LongCatUsageError.invalidSession }
+                throw LongCatUsageError.apiError(message)
+            }
         }
         return object["data"] ?? object
     }
@@ -534,19 +544,13 @@ nonisolated enum LongCatUsageFetcher {
     }
 
     private static func integer(_ value: Any?) -> Int? {
-        let parsed: Double? = switch value {
-        case let value as Int: Double(value)
-        case let value as Double: value
-        case let value as String: Double(value)
-        case let value as NSNumber: value.doubleValue
+        switch value {
+        case let value as Int: value
+        case let value as Double: Int(exactly: value.rounded(.towardZero))
+        case let value as String: Int(value) ?? Double(value).flatMap { Int(exactly: $0.rounded(.towardZero)) }
+        case let value as NSNumber: Int(exactly: value.doubleValue.rounded(.towardZero))
         default: nil
         }
-        guard let parsed,
-              parsed.isFinite,
-              parsed >= Double(Int.min),
-              parsed <= Double(Int.max)
-        else { return nil }
-        return Int(parsed)
     }
 
     private static func string(_ value: Any?) -> String? {
@@ -568,10 +572,14 @@ nonisolated enum LongCatUsageFetcher {
     private static func parseDate(_ value: Any?) -> Date? {
         if let number = number(value) {
             let seconds = number > 1_000_000_000_000 ? number / 1_000 : number
-            if seconds > 1_000_000_000 { return Date(timeIntervalSince1970: seconds) }
+            if seconds > 1_000_000_000, seconds <= 8_640_000_000_000 {
+                return Date(timeIntervalSince1970: seconds)
+            }
         }
         if let string = string(value) {
             let iso = ISO8601DateFormatter()
+            if let date = iso.date(from: string) { return date }
+            iso.formatOptions.insert(.withFractionalSeconds)
             if let date = iso.date(from: string) { return date }
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")

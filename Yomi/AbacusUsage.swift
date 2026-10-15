@@ -134,6 +134,7 @@ nonisolated enum AbacusUsageFetcher {
             } catch let error as AbacusUsageError where error.shouldTryNextImportedSession {
                 lastError = error
             } catch {
+                if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
                 lastError = .networkError(error.localizedDescription)
             }
         }
@@ -308,10 +309,11 @@ nonisolated enum AbacusUsageFetcher {
     }
 
     private static func number(_ value: Any?) -> Double? {
-        if let double = value as? Double { return double }
-        if let integer = value as? Int { return Double(integer) }
-        if let number = value as? NSNumber { return number.doubleValue }
-        return nil
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.isFinite
+        else { return nil }
+        return number.doubleValue
     }
 
     private static func parseDate(_ value: String?) -> Date? {

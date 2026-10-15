@@ -76,6 +76,7 @@ enum OpenCodeGoUsageFetcher {
     }
 
     static func parseWeb(text: String, now: Date) throws -> ProviderUsage {
+        if let usage = parseConsoleGoStatus(text: text, now: now) { return usage }
         if let data = text.data(using: .utf8),
            let object = try? JSONSerialization.jsonObject(with: data),
            let snapshot = parseJSON(object, inheritedRenewal: nil, now: now) {
@@ -104,6 +105,46 @@ enum OpenCodeGoUsageFetcher {
             renewal: nil,
             zenBalance: nil
         ), now: now)
+    }
+
+    static func parseConsoleGoStatus(text: String, now: Date) -> ProviderUsage? {
+        guard let data = text.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let access = root["access"] as? [String: Any],
+              let meters = access["meters"] as? [String: Any],
+              let rolling = meters["fiveHour"] as? [String: Any]
+        else { return nil }
+        let renewal = dateValue(access["endsAt"])
+        let weekly = meters["week"] as? [String: Any]
+        if let weekly, window(weekly, fraction: false, now: now) == nil { return nil }
+        var monthly = meters["month"] as? [String: Any]
+        if monthly?["resetsAt"] == nil || monthly?["resetsAt"] is NSNull {
+            monthly?["resetsAt"] = access["endsAt"]
+        }
+        guard let snapshot = snapshot(
+            rolling: rolling, weekly: weekly, monthly: monthly,
+            renewal: renewal, directPercentIsFraction: false, now: now
+        ) else { return nil }
+        return providerUsage(snapshot, now: now)
+    }
+
+    static func parseConsoleBalance(text: String) throws -> Double? {
+        guard let data = text.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let billingMode = root["billingMode"] as? String,
+              ["prepaid", "legacy", "seat", "credit"].contains(billingMode),
+              let mode = root["mode"] as? String,
+              ["pay-as-you-go", "invoiceable"].contains(mode)
+        else { throw UsageCollectionError.unreadableResponse }
+        guard billingMode == "prepaid", mode == "pay-as-you-go" else { return nil }
+        guard let raw = root["balanceMicroCents"] as? String else {
+            throw UsageCollectionError.unreadableResponse
+        }
+        let digits = raw.hasPrefix("-") ? raw.dropFirst() : raw[...]
+        guard !digits.isEmpty, digits.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+              let balance = Double(raw), balance.isFinite
+        else { throw UsageCollectionError.unreadableResponse }
+        return balance / 100_000_000
     }
 
     static func parseZenBalance(text: String) -> Double? {
@@ -151,12 +192,38 @@ enum OpenCodeGoUsageFetcher {
         if let configured = OpenCodeUsageFetcher.normalizeWorkspaceID(rawWorkspaceID) {
             workspaceID = configured
         } else {
-            workspaceID = try await OpenCodeUsageFetcher.fetchWorkspaceID(cookie: cookie, session: session)
+            workspaceID = try await consoleOrLegacy(cookie: cookie) {
+                try await OpenCodeUsageFetcher.fetchConsoleWorkspaceID(cookie: cookie, session: session)
+            } legacy: {
+                try await OpenCodeUsageFetcher.fetchWorkspaceID(cookie: cookie, session: session)
+            }
         }
         let goURL = URL(string: "https://opencode.ai/workspace/\(workspaceID)/go")!
-        async let goText = pageText(url: goURL, cookie: cookie, session: session)
         async let balance = zenBalance(workspaceID: workspaceID, cookie: cookie, session: session)
-        var usage = try parseWeb(text: await goText, now: now)
+        var usage: ProviderUsage
+        do {
+            usage = try await consoleOrLegacy(cookie: cookie) {
+                let text = try await consoleText(
+                    path: "/console/api/go/status", workspaceID: workspaceID, cookie: cookie, session: session
+                )
+                if let data = text.data(using: .utf8),
+                   let root = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]),
+                   root is NSNull || (root as? [String: Any])?["access"] is NSNull {
+                    throw OpenCodeGoWebError.noSubscription
+                }
+                guard let usage = parseConsoleGoStatus(text: text, now: now) else {
+                    throw UsageCollectionError.unreadableResponse
+                }
+                return usage
+            } legacy: {
+                let text = try await pageText(url: goURL, cookie: cookie, session: session)
+                do { return try parseWeb(text: text, now: now) }
+                catch UsageCollectionError.unreadableResponse { throw OpenCodeGoWebError.noSubscription }
+            }
+        } catch OpenCodeGoWebError.noSubscription {
+            guard let resolvedBalance = try? await balance else { throw OpenCodeGoWebError.noSubscription }
+            return balanceUsage(resolvedBalance, now: now)
+        }
         if let resolvedBalance = try? await balance {
             usage.providerCost = ProviderCostSummary(
                 used: resolvedBalance,
@@ -175,11 +242,86 @@ enum OpenCodeGoUsageFetcher {
         cookie: String,
         session: URLSession
     ) async throws -> Double? {
-        let root = URL(string: "https://opencode.ai/workspace/\(workspaceID)")!
-        let text = try await pageText(url: root, cookie: cookie, session: session)
-        if let balance = parseZenBalance(text: text) { return balance }
-        let billing = try await billingText(workspaceID: workspaceID, cookie: cookie, session: session)
-        return parseBillingBalance(text: billing)
+        try await consoleOrLegacy(cookie: cookie, isUsableLegacyValue: { $0 != nil }) {
+            let text = try await consoleText(
+                path: "/console/api/billing/status", workspaceID: workspaceID, cookie: cookie, session: session
+            )
+            return try parseConsoleBalance(text: text)
+        } legacy: {
+            let root = URL(string: "https://opencode.ai/workspace/\(workspaceID)")!
+            let text = try await pageText(url: root, cookie: cookie, session: session)
+            if let balance = parseZenBalance(text: text) { return balance }
+            let billing = try await billingText(workspaceID: workspaceID, cookie: cookie, session: session)
+            return parseBillingBalance(text: billing)
+        }
+    }
+
+    static func consoleText(
+        path: String, workspaceID: String?, cookie: String, session: URLSession
+    ) async throws -> String {
+        var request = URLRequest(url: URL(string: path, relativeTo: baseURL)!.absoluteURL)
+        request.timeoutInterval = 18
+        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let workspaceID { request.setValue(workspaceID, forHTTPHeaderField: "x-org-id") }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw UsageCollectionError.unreadableResponse }
+        if http.statusCode == 401 { throw UsageCollectionError.missingCredential }
+        guard http.statusCode == 200 else { throw UsageCollectionError.requestFailed(http.statusCode) }
+        guard let text = String(data: data, encoding: .utf8) else { throw UsageCollectionError.unreadableResponse }
+        return text
+    }
+
+    static func consoleOrLegacy<Value>(
+        cookie: String,
+        isUsableLegacyValue: (Value) -> Bool = { _ in true },
+        console: () async throws -> Value,
+        legacy: () async throws -> Value
+    ) async throws -> Value {
+        do { return try await console() }
+        catch {
+            try Task.checkCancellation()
+            if error is OpenCodeGoWebError || (error as? URLError)?.code == .cancelled { throw error }
+            let hasLegacy = cookie.split(separator: ";").contains {
+                let pair = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                return pair.hasPrefix("auth=") || pair.hasPrefix("__Host-auth=")
+            }
+            let recoverableNetworkErrors: [URLError.Code] = [
+                .timedOut, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost,
+                .dnsLookupFailed, .notConnectedToInternet, .resourceUnavailable,
+            ]
+            guard hasLegacy, error is UsageCollectionError
+                    || (error as? URLError).map({ recoverableNetworkErrors.contains($0.code) }) == true
+            else { throw error }
+            let consoleError = error
+            let preserveConsoleError = cookie.contains("__Host-console_session=")
+                && (consoleError as? UsageCollectionError).map {
+                    if case .missingCredential = $0 { return false }
+                    return true
+                } != false
+            do {
+                let value = try await legacy()
+                if preserveConsoleError, !isUsableLegacyValue(value) { throw consoleError }
+                return value
+            } catch {
+                try Task.checkCancellation()
+                if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                    throw CancellationError()
+                }
+                if preserveConsoleError { throw consoleError }
+                throw error
+            }
+        }
+    }
+
+    private static func balanceUsage(_ balance: Double, now: Date) -> ProviderUsage {
+        ProviderUsage(
+            id: ProviderID(rawValue: "opencodego"), state: .ready, windows: [],
+            balance: String(format: "$%.2f", balance),
+            providerCost: ProviderCostSummary(used: balance, limit: 0, currencyCode: "USD", period: "Zen balance", balance: balance),
+            updatedAt: now, message: nil
+        )
     }
 
     private static func pageText(url: URL, cookie: String, session: URLSession) async throws -> String {
@@ -223,19 +365,19 @@ enum OpenCodeGoUsageFetcher {
             id: "opencodego-rolling",
             label: "5-hour",
             usedFraction: snapshot.rollingPercent / 100,
-            resetsAt: now.addingTimeInterval(TimeInterval(snapshot.rollingReset)),
+            resetsAt: snapshot.rollingReset.map { now.addingTimeInterval(TimeInterval($0)) },
             detail: nil
         )]
-        if let percent = snapshot.weeklyPercent, let reset = snapshot.weeklyReset {
+        if let percent = snapshot.weeklyPercent {
             windows.append(UsageWindow(
                 id: "opencodego-weekly", label: "Weekly", usedFraction: percent / 100,
-                resetsAt: now.addingTimeInterval(TimeInterval(reset)), detail: nil
+                resetsAt: snapshot.weeklyReset.map { now.addingTimeInterval(TimeInterval($0)) }, detail: nil
             ))
         }
-        if let percent = snapshot.monthlyPercent, let reset = snapshot.monthlyReset {
+        if let percent = snapshot.monthlyPercent {
             windows.append(UsageWindow(
                 id: "opencodego-monthly", label: "Monthly", usedFraction: percent / 100,
-                resetsAt: now.addingTimeInterval(TimeInterval(reset)), detail: nil
+                resetsAt: snapshot.monthlyReset.map { now.addingTimeInterval(TimeInterval($0)) }, detail: nil
             ))
         }
         let cost = snapshot.zenBalance.map {
@@ -245,7 +387,14 @@ enum OpenCodeGoUsageFetcher {
             id: ProviderID(rawValue: "opencodego"), state: .ready, windows: windows,
             additionalWindows: [],
             balance: snapshot.zenBalance.map { String(format: "$%.2f", $0) },
-            providerCost: cost, updatedAt: now, message: nil
+            providerCost: cost,
+            details: snapshot.renewal.map { date in
+                [UsageDetail(
+                    id: "opencodego-renewal", label: AppLocalization.text("订阅续期", "Subscription renewal"),
+                    value: date.formatted(.dateTime.locale(AppLocalization.currentLanguage.locale))
+                )]
+            } ?? [],
+            updatedAt: now, message: nil
         )
     }
 
@@ -285,7 +434,7 @@ enum OpenCodeGoUsageFetcher {
 
     private static func nestedWindow(
         _ dict: [String: Any]?, fraction: Bool, now: Date
-    ) -> (percent: Double, reset: Int)? {
+    ) -> (percent: Double, reset: Int?)? {
         guard let dict else { return nil }
         if let direct = window(dict, fraction: fraction, now: now) { return direct }
         for child in dict.values {
@@ -297,11 +446,11 @@ enum OpenCodeGoUsageFetcher {
 
     private static func window(
         _ dict: [String: Any], fraction: Bool, now: Date
-    ) -> (percent: Double, reset: Int)? {
+    ) -> (percent: Double, reset: Int?)? {
         var percent = numeric(dict, keys: percentKeys)
         let direct = percent != nil
-        if percent == nil, let used = numeric(dict, keys: ["used", "usage", "consumed", "count", "usedTokens"]),
-           let limit = numeric(dict, keys: ["limit", "total", "quota", "max", "cap", "tokenLimit"]), limit > 0 {
+        if percent == nil, let used = numeric(dict, keys: ["used", "usage", "consumed", "count", "usedTokens", "usedMicroCents"]),
+           let limit = numeric(dict, keys: ["limit", "total", "quota", "max", "cap", "tokenLimit", "limitMicroCents"]), limit > 0 {
             percent = used / limit * 100
         }
         guard var percent else { return nil }
@@ -312,7 +461,7 @@ enum OpenCodeGoUsageFetcher {
             let interval = date.timeIntervalSince(now)
             if interval.isFinite, interval < Double(Int.max) { reset = max(0, Int(interval)) }
         }
-        return (percent, max(0, reset ?? 0))
+        return (percent, reset.map { max(0, $0) })
     }
 
     private static func dictionary(_ dict: [String: Any], keys: [String]) -> [String: Any]? {
@@ -405,11 +554,19 @@ enum OpenCodeGoUsageFetcher {
 
 private struct OpenCodeGoSnapshot {
     let rollingPercent: Double
-    let rollingReset: Int
+    let rollingReset: Int?
     let weeklyPercent: Double?
     let weeklyReset: Int?
     let monthlyPercent: Double?
     let monthlyReset: Int?
     let renewal: Date?
     let zenBalance: Double?
+}
+
+private enum OpenCodeGoWebError: LocalizedError {
+    case noSubscription
+
+    var errorDescription: String? {
+        AppLocalization.text("没有 OpenCode Go 订阅或可用的预付余额", "No OpenCode Go subscription or supported prepaid balance is available")
+    }
 }

@@ -197,7 +197,7 @@ nonisolated enum DoubaoUsageFetcher {
             : (!configured.isEmpty ? configured : firstValue(environment, keys: apiKeyEnvironmentKeys))
         let accessKeyID = configured.hasPrefix("AKLT")
             ? configured
-            : firstValue(environment, keys: accessKeyIDEnvironmentKeys)
+            : (configured.isEmpty ? firstValue(environment, keys: accessKeyIDEnvironmentKeys) : nil)
         let secretAccessKey = clean(configuredSecretAccessKey ?? "").nilIfEmpty
             ?? firstValue(environment, keys: secretAccessKeyEnvironmentKeys)
         let region = clean(configuredRegion ?? "").nilIfEmpty

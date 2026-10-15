@@ -55,14 +55,16 @@ nonisolated enum SyntheticUsageFetcher {
                 if quota.resetsAt == nil, let minutes = quota.windowMinutes, minutes > 0 {
                     details.append(SyntheticUsageFetcher.windowDescription(minutes))
                 }
-                if let fraction = quota.nextRegenFraction {
-                    let percent = Int((fraction * 100).rounded())
-                    details.append(AppLocalization.text("下次恢复 \(percent)%", "\(percent)% after next regen"))
+                var regenFraction = quota.nextRegenFraction
+                if let cost = quota.cost, cost.limit > 0,
+                   let amount = cost.nextRegenAmount, amount > 0 {
+                    regenFraction = amount / cost.limit
                 }
-                if let amount = quota.cost?.nextRegenAmount {
+                if quota.resetsAt != nil, let fraction = regenFraction, fraction > 0 {
+                    let percent = Int((min(1, 1 - quota.usedFraction + fraction) * 100).rounded())
                     details.append(AppLocalization.text(
-                        "下次恢复 $\(SyntheticUsageFetcher.number(amount))",
-                        "$\(SyntheticUsageFetcher.number(amount)) after next regen"
+                        "下次恢复后剩余 \(percent)%",
+                        "\(percent)% left after next regen"
                     ))
                 }
                 return UsageWindow(
@@ -73,22 +75,11 @@ nonisolated enum SyntheticUsageFetcher {
                     detail: details.isEmpty ? nil : details.joined(separator: " · ")
                 )
             }
-            let cost = slots.compactMap { $0?.cost }.first
             return ProviderUsage(
                 id: ProviderID(rawValue: "synthetic"),
                 state: .ready,
                 windows: windows,
-                balance: cost?.remaining.map { "$\(SyntheticUsageFetcher.number($0))" },
                 plan: plan,
-                providerCost: cost.map {
-                    ProviderCostSummary(
-                        used: $0.used,
-                        limit: $0.limit,
-                        currencyCode: "USD",
-                        period: "Weekly",
-                        balance: $0.remaining
-                    )
-                },
                 updatedAt: updatedAt,
                 message: nil
             )
@@ -160,12 +151,12 @@ nonisolated enum SyntheticUsageFetcher {
         }
         let dataObject = root["data"] as? [String: Any]
         let known: [[String: Any]?] = [
-            root["rollingFiveHourLimit"] as? [String: Any]
-                ?? dataObject?["rollingFiveHourLimit"] as? [String: Any],
-            root["weeklyTokenLimit"] as? [String: Any]
-                ?? dataObject?["weeklyTokenLimit"] as? [String: Any],
-            (root["search"] as? [String: Any])?["hourly"] as? [String: Any]
-                ?? (dataObject?["search"] as? [String: Any])?["hourly"] as? [String: Any],
+            knownQuota(root["rollingFiveHourLimit"])
+                ?? knownQuota(dataObject?["rollingFiveHourLimit"]),
+            knownQuota(root["weeklyTokenLimit"])
+                ?? knownQuota(dataObject?["weeklyTokenLimit"]),
+            knownQuota((root["search"] as? [String: Any])?["hourly"])
+                ?? knownQuota((dataObject?["search"] as? [String: Any])?["hourly"]),
         ]
         let usesKnownSlots = known.contains { candidate in candidate.map(isQuota) == true }
         let slots: [Quota?]
@@ -254,6 +245,11 @@ nonisolated enum SyntheticUsageFetcher {
         return dictionary.keys.sorted().flatMap { collect(dictionary[$0]) }
     }
 
+    private static func knownQuota(_ value: Any?) -> [String: Any]? {
+        guard let value = value as? [String: Any], isQuota(value) else { return nil }
+        return value
+    }
+
     private static func isQuota(_ value: [String: Any]) -> Bool {
         [limitKeys, usedKeys, remainingKeys, percentUsedKeys, percentRemainingKeys]
             .contains { firstNumber(value, keys: $0) != nil }
@@ -307,7 +303,7 @@ nonisolated enum SyntheticUsageFetcher {
                 let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                     .replacingOccurrences(of: "$", with: "")
                     .replacingOccurrences(of: ",", with: "")
-                if let result = Double(cleaned) { return result }
+                if let result = Double(cleaned), result.isFinite { return result }
             } else if let result = number(value[key]) {
                 return result
             }
@@ -354,15 +350,6 @@ nonisolated enum SyntheticUsageFetcher {
             return "\(hours) hour\(hours == 1 ? "" : "s") window"
         }
         return "\(minutes) minute\(minutes == 1 ? "" : "s") window"
-    }
-
-    private static func number(_ value: Double) -> String {
-        if value.rounded() == value,
-           value >= Double(Int.min),
-           value <= Double(Int.max) {
-            return String(Int(value))
-        }
-        return String(format: "%.2f", value)
     }
 
     private static func cleanQuoted(_ value: String?) -> String? {

@@ -71,17 +71,70 @@ nonisolated enum QwenCloudUsageFetcher {
         now: Date = Date(),
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) async throws -> ProviderUsage {
-        let headers: CookieHeaders
+        var headers: CookieHeaders
+        let usesAutomaticCookies: Bool
         if let manual = normalizedCookie(rawCredential) {
             headers = CookieHeaders(api: manual, dashboard: manual)
+            usesAutomaticCookies = false
         } else if let supplied = normalizedCookie(environment["QWEN_CLOUD_COOKIE"]) {
             headers = CookieHeaders(api: supplied, dashboard: supplied)
+            usesAutomaticCookies = false
         } else if let imported = automaticCookieHeaders(environment: environment) {
             headers = imported
+            usesAutomaticCookies = true
         } else {
             throw UsageCollectionError.missingCredential
         }
 
+        var teamError: Error?
+        if environment["QWEN_CLOUD_HOST"] == nil, environment["QWEN_CLOUD_QUOTA_URL"] == nil {
+            do {
+                if let team = try await fetchTeam(headers: headers, session: session, now: now) { return team }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                try Task.checkCancellation()
+                teamError = error
+                if usesAutomaticCookies, let error = error as? QwenCloudUsageError,
+                   error == .loginRequired || error == .invalidCredentials,
+                   let refreshed = automaticCookieHeaders(environment: environment) {
+                    headers = refreshed
+                    do {
+                        if let team = try await fetchTeam(headers: headers, session: session, now: now) { return team }
+                        teamError = nil
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        teamError = error
+                    }
+                }
+            }
+        }
+        try Task.checkCancellation()
+        do {
+            var usage = try await fetchIndividual(
+                headers: headers, session: session, now: now, environment: environment
+            )
+            if let teamError {
+                usage.message = AppLocalization.text(
+                    "Team 用量不可用：\(teamError.localizedDescription)",
+                    "Team usage unavailable: \(teamError.localizedDescription)"
+                )
+            }
+            return usage
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw teamError ?? error
+        }
+    }
+
+    private static func fetchIndividual(
+        headers: CookieHeaders,
+        session: URLSession,
+        now: Date,
+        environment: [String: String]
+    ) async throws -> ProviderUsage {
         let secToken = try await resolveSECToken(
             cookieHeader: headers.dashboard,
             apiURL: resolveAPIURL(api: usageAPI, environment: environment),
@@ -188,7 +241,7 @@ nonisolated enum QwenCloudUsageFetcher {
     ) -> CookieHeaders? {
         let client = BrowserCookieClient()
         let query = BrowserCookieQuery(domains: cookieDomains)
-        for browser in [Browser.chrome, Browser.brave] {
+        for browser in Browser.defaultImportOrder {
             guard let sources = try? client.records(matching: query, in: browser) else { continue }
             for source in sources {
                 let cookies = BrowserCookieClient.makeHTTPCookies(source.records, origin: query.origin)
@@ -291,8 +344,7 @@ nonisolated enum QwenCloudUsageFetcher {
         guard let paramsJSON = String(data: paramsData, encoding: .utf8) else {
             throw QwenCloudUsageError.parseFailed("Could not encode request parameters")
         }
-        var form = URLComponents()
-        form.queryItems = [
+        let form = [
             URLQueryItem(name: "product", value: consoleProduct),
             URLQueryItem(name: "action", value: consoleAction),
             URLQueryItem(name: "sec_token", value: secToken),
@@ -304,7 +356,7 @@ nonisolated enum QwenCloudUsageFetcher {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 30
-        request.httpBody = Data((form.percentEncodedQuery ?? "").utf8)
+        request.httpBody = formBody(form)
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
         request.setValue(headers.api, forHTTPHeaderField: "Cookie")
@@ -423,6 +475,165 @@ nonisolated enum QwenCloudUsageFetcher {
         return try await session.data(for: request, delegate: delegate)
     }
 
+    private static func fetchTeam(
+        headers: CookieHeaders,
+        session: URLSession,
+        now: Date
+    ) async throws -> ProviderUsage? {
+        let dashboard = URL(string: gatewayBaseURLString + "/analytics/token-plan/team")!
+        let apiURL = URL(string: gatewayBaseURLString + "/data/api.json")!
+        var infoRequest = URLRequest(url: URL(string: gatewayBaseURLString + "/tool/user/info.json")!)
+        infoRequest.timeoutInterval = 8
+        infoRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+        infoRequest.setValue(dashboard.absoluteString, forHTTPHeaderField: "Referer")
+        infoRequest.setValue(headers.dashboard, forHTTPHeaderField: "Cookie")
+        let teamHeaders = CookieHeaders(api: headers.dashboard, dashboard: headers.dashboard)
+        let (infoData, infoResponse) = try await routedData(
+            request: infoRequest, session: session, apiURL: apiURL,
+            dashboardURL: dashboard, headers: teamHeaders
+        )
+        let info = try teamResponse(data: infoData, response: infoResponse)
+        guard let token = string((info["data"] as? [String: Any])?["secToken"]) else {
+            throw QwenCloudUsageError.loginRequired
+        }
+        let human = try await requestTeam(
+            product: "ea-service", action: "LoadHumanInfo", parameters: [:],
+            region: "ap-southeast-1", secToken: token, headers: teamHeaders, session: session
+        )
+        var parameters = ["productCode": "sfm_tokenplanteams_dp_intl"]
+        let humanData = human["Data"] as? [String: Any]
+        if let nbid = (humanData?["SellerInfoDto"] as? [String: Any])?["Nbid"],
+           !(nbid is NSNull), (nbid as? String) != "" {
+            guard let selector = string(nbid) else { throw teamParseError() }
+            parameters["Nbid"] = selector
+        }
+        let summary = try await requestTeam(
+            product: "BssOpenAPI-V3", action: "GetSeatSubscriptionSummary", parameters: parameters,
+            region: "cn-hangzhou", secToken: token, headers: teamHeaders, session: session
+        )
+        return try parseTeam(summary: summary, now: now)
+    }
+
+    private static func requestTeam(
+        product: String,
+        action: String,
+        parameters: [String: String],
+        region: String,
+        secToken: String,
+        headers: CookieHeaders,
+        session: URLSession
+    ) async throws -> [String: Any] {
+        var url = URLComponents(string: gatewayBaseURLString + "/data/api.json")!
+        url.queryItems = [URLQueryItem(name: "product", value: product), URLQueryItem(name: "action", value: action)]
+        var fields = [
+            URLQueryItem(name: "product", value: product),
+            URLQueryItem(name: "action", value: action),
+            URLQueryItem(name: "sec_token", value: secToken),
+            URLQueryItem(name: "region", value: region),
+            URLQueryItem(name: "params", value: String(decoding: try JSONSerialization.data(withJSONObject: parameters), as: UTF8.self)),
+        ]
+        if action == "GetSeatSubscriptionSummary" { fields.append(URLQueryItem(name: "language", value: "zh-CN")) }
+        var request = URLRequest(url: url.url!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 8
+        request.httpBody = formBody(fields)
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(gatewayBaseURLString, forHTTPHeaderField: "Origin")
+        let dashboard = URL(string: gatewayBaseURLString + "/analytics/token-plan/team")!
+        request.setValue(dashboard.absoluteString, forHTTPHeaderField: "Referer")
+        request.setValue(headers.dashboard, forHTTPHeaderField: "Cookie")
+        let (data, response) = try await routedData(
+            request: request, session: session, apiURL: url.url!, dashboardURL: dashboard, headers: headers
+        )
+        let root = try teamResponse(data: data, response: response)
+        guard bool(root["successResponse"]) == true || string(root["code"]) == "200",
+              let result = root["data"] as? [String: Any] else { throw teamParseError() }
+        return result
+    }
+
+    private static func teamResponse(data: Data, response: URLResponse) throws -> [String: Any] {
+        guard let http = response as? HTTPURLResponse else {
+            throw QwenCloudUsageError.networkError(AppLocalization.text("响应无效", "Invalid response"))
+        }
+        if http.statusCode == 401 || http.statusCode == 403 { throw QwenCloudUsageError.invalidCredentials }
+        guard http.statusCode == 200 else { throw QwenCloudUsageError.apiError("HTTP \(http.statusCode)") }
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw teamParseError() }
+        try throwIfError(root)
+        return root
+    }
+
+    private static func parseTeam(summary: [String: Any], now: Date) throws -> ProviderUsage? {
+        if summary["Data"] is NSNull { return nil }
+        guard let data = summary["Data"] as? [String: Any],
+              let groups = data["SubscriptionGroupList"] as? [[String: Any]] else { throw teamParseError() }
+        if groups.isEmpty { return nil }
+        guard let start = teamNumber(data["StartTime"]), let end = teamNumber(data["EndTime"]),
+              start.rounded() == start, end.rounded() == end, start > 0, end > start else { throw teamParseError() }
+        let milliseconds = now.timeIntervalSince1970 * 1000
+        guard milliseconds >= start, milliseconds < end else { return nil }
+        guard data["ProductCode"] as? String == "sfm_tokenplanteams_dp_intl", groups.count == 1,
+              let group = groups.first, let equities = group["EquityList"] as? [[String: Any]] else { throw teamParseError() }
+        let credits = equities.filter { $0["EquityCode"] as? String == "credit_value" }
+        guard credits.count == 1, let equity = credits.first,
+              let total = teamNumber(equity["TotalValue"]), let remaining = teamNumber(equity["SurplusValue"]),
+              total > 0, remaining <= total else { throw teamParseError() }
+        var reset: Date?
+        if let rawReset = group["NextCycleFlushTime"], !(rawReset is NSNull) {
+            guard let value = teamNumber(rawReset), value.rounded() == value, value > 0 else { throw teamParseError() }
+            reset = Date(timeIntervalSince1970: value / 1000)
+        }
+        let used = total - remaining
+        var details = [
+            UsageDetail(id: "qwencloud-team-remaining", label: AppLocalization.text("剩余额度", "Remaining"),
+                        value: AppLocalization.text("\(format(remaining)) 信用点", "\(format(remaining)) credits")),
+        ]
+        if let assigned = group["SubscriptionAssignedNumber"] as? NSNumber,
+           let seats = group["SubscriptionTotalNumber"] as? NSNumber,
+           CFGetTypeID(assigned) != CFBooleanGetTypeID(), CFGetTypeID(seats) != CFBooleanGetTypeID(),
+           let assignedValue = teamNumber(assigned), let seatValue = teamNumber(seats),
+           assignedValue.rounded() == assignedValue, seatValue.rounded() == seatValue, seatValue >= assignedValue {
+            details.append(UsageDetail(id: "qwencloud-team-seats", label: AppLocalization.text("席位", "Seats"),
+                                       value: "\(format(assignedValue)) / \(format(seatValue))"))
+        }
+        let spec = string(group["SpecType"])
+        let validSpec = spec?.range(of: #"^[a-z][a-z0-9_-]{0,39}$"#, options: .regularExpression) != nil
+        let plan = validSpec ? AppLocalization.text(
+            "\(spec!.prefix(1).uppercased())\(spec!.dropFirst()) 团队套餐",
+            "\(spec!.prefix(1).uppercased())\(spec!.dropFirst()) Team"
+        )
+            : AppLocalization.text("Team Token 套餐", "Team Token Plan")
+        return ProviderUsage(
+            id: ProviderID(rawValue: "qwencloud"), state: .ready,
+            windows: [UsageWindow(id: "qwencloud-team", label: AppLocalization.text("团队", "Team"),
+                                  usedFraction: used / total, resetsAt: reset,
+                                  detail: AppLocalization.text("\(format(used)) / \(format(total)) 信用点已用",
+                                                               "\(format(used)) / \(format(total)) credits used"))],
+            plan: plan, details: details, updatedAt: now
+        )
+    }
+
+    private static func teamNumber(_ value: Any?) -> Double? {
+        if let value = value as? String,
+           value.range(of: #"^\d+(?:\.\d+)?$"#, options: .regularExpression) == nil { return nil }
+        guard let value = number(value), value >= 0, value <= 9_007_199_254_740_991 else { return nil }
+        return value
+    }
+
+    private static func teamParseError() -> QwenCloudUsageError {
+        .parseFailed(AppLocalization.text("Team 订阅数据无效，请检查用量页面", "Invalid Team subscription data. Check Usage Dashboard."))
+    }
+
+    private static func formBody(_ fields: [URLQueryItem]) -> Data {
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "+&=")
+        return Data(fields.map { field in
+            let name = field.name.addingPercentEncoding(withAllowedCharacters: allowed) ?? field.name
+            let value = field.value ?? ""
+            return "\(name)=\(value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value)"
+        }.joined(separator: "&").utf8)
+    }
+
     private static func parseCurrent(
         usageData: Data,
         subscriptionData: Data?,
@@ -432,12 +643,13 @@ nonisolated enum QwenCloudUsageFetcher {
         guard let raw = try? JSONSerialization.jsonObject(with: usageData) else { return nil }
         let expanded = expand(raw)
         guard let usage = findDictionary(
-            containing: ["per5HourPercentage", "per1WeekPercentage"],
+            containing: ["per5HourPercentage", "per1WeekPercentage", "per1MonthPercentage"],
             in: expanded
         ) else { return nil }
         let fiveHour = ratio(usage["per5HourPercentage"])
         let weekly = ratio(usage["per1WeekPercentage"])
-        guard fiveHour != nil || weekly != nil else { return nil }
+        let monthly = ratio(usage["per1MonthPercentage"])
+        guard fiveHour != nil || weekly != nil || monthly != nil else { return nil }
 
         let planCode = subscriptionData.flatMap { data -> String? in
             guard let raw = try? JSONSerialization.jsonObject(with: data) else { return nil }
@@ -446,13 +658,14 @@ nonisolated enum QwenCloudUsageFetcher {
                 in: expand(raw)
             )?.lowercased()
         }
-        let totals = quotaConfigData.flatMap { data -> (fiveHour: Double?, weekly: Double?)? in
+        let totals = quotaConfigData.flatMap { data -> (fiveHour: Double?, weekly: Double?, monthly: Double?)? in
             guard let planCode, let raw = try? JSONSerialization.jsonObject(with: data),
                   let value = findFirstValue(keys: [planCode], in: expand(raw)),
                   let quota = value as? [String: Any] else { return nil }
             let five = number(quota["five_hour"] ?? quota["fiveHour"])
             let week = number(quota["weekly"])
-            return five != nil || week != nil ? (five, week) : nil
+            let month = number(quota["monthly"])
+            return five != nil || week != nil || month != nil ? (five, week, month) : nil
         }
         var windows: [UsageWindow] = []
         if let fiveHour {
@@ -473,10 +686,25 @@ nonisolated enum QwenCloudUsageFetcher {
                 detail: quotaDetail(fraction: weekly, total: totals?.weekly)
             ))
         }
+        let monthlyWindow = monthly.map { fraction in
+            UsageWindow(
+                id: "qwencloud-monthly", label: "Monthly", usedFraction: fraction,
+                resetsAt: date(usage["per1MonthResetTime"]),
+                detail: totals?.monthly.flatMap { total in
+                    total > 0 ? AppLocalization.text(
+                        "\(format(total * fraction)) / \(format(total)) 信用点已用",
+                        "\(format(total * fraction)) / \(format(total)) credits used"
+                    ) : nil
+                }
+            )
+        }
+        let monthlyIsPrimary = windows.isEmpty
+        if monthlyIsPrimary, let monthlyWindow { windows.append(monthlyWindow) }
         return ProviderUsage(
             id: ProviderID(rawValue: "qwencloud"),
             state: .ready,
             windows: windows,
+            additionalWindows: monthlyIsPrimary ? [] : monthlyWindow.map { [$0] } ?? [],
             balance: nil,
             plan: planCode.map(displayPlan),
             updatedAt: now,

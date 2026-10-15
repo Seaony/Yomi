@@ -20,6 +20,12 @@ nonisolated struct ModelPricingCatalogLoadResult: Sendable {
 nonisolated struct ModelPricingCatalog: Codable, Sendable {
     private static let cacheLifetime: TimeInterval = 24 * 60 * 60
     private static let retryInterval: TimeInterval = 15 * 60
+    private static let openAILongContextModels: Set<String> = [
+        "gpt-5.4", "gpt-5.4-pro", "gpt-5.5", "gpt-5.5-pro",
+        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+        "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6-astra",
+        "gpt-5.6", "gpt-reserve", "gpt-daybreak-blue-latest",
+    ]
 
     private nonisolated struct Provider: Codable, Sendable {
         var models: [String: Model]
@@ -36,6 +42,7 @@ nonisolated struct ModelPricingCatalog: Codable, Sendable {
         var cacheRead: Double?
         var cacheWrite: Double?
         var contextOver200K: ContextCost?
+        var tiers: [ContextCost]?
 
         enum CodingKeys: String, CodingKey {
             case input
@@ -43,20 +50,28 @@ nonisolated struct ModelPricingCatalog: Codable, Sendable {
             case cacheRead = "cache_read"
             case cacheWrite = "cache_write"
             case contextOver200K = "context_over_200k"
+            case tiers
         }
     }
 
-    private nonisolated struct ContextCost: Codable, Sendable {
+    private nonisolated struct ContextCost: Codable, Equatable, Sendable {
         var input: Double?
         var output: Double?
         var cacheRead: Double?
         var cacheWrite: Double?
+        var tier: ContextTier?
+
+        nonisolated struct ContextTier: Codable, Equatable, Sendable {
+            var type: String
+            var size: Int
+        }
 
         enum CodingKeys: String, CodingKey {
             case input
             case output
             case cacheRead = "cache_read"
             case cacheWrite = "cache_write"
+            case tier
         }
     }
 
@@ -87,18 +102,28 @@ nonisolated struct ModelPricingCatalog: Codable, Sendable {
         for candidate in modelCandidates(modelID) {
             let model = provider.models[candidate]
                 ?? provider.models.values.first { $0.id == candidate }
-            guard let cost = model?.cost,
+            guard let model,
+                  let cost = model.cost,
                   let input = cost.input,
                   let output = cost.output
             else { continue }
 
             let unit = 1_000_000.0
+            let contextThreshold = cost.tiers?.first {
+                var rates = $0
+                rates.tier = nil
+                return $0.tier?.type == "context" && ($0.tier?.size ?? 0) > 0
+                    && rates == cost.contextOver200K
+            }?.tier?.size
+            let documentedThreshold = normalizedProvider == "openai"
+                && modelCandidates(model.id).contains(where: Self.openAILongContextModels.contains)
+                ? 272_000 : nil
             return ModelTokenRates(
                 input: input / unit,
                 cacheRead: cost.cacheRead.map { $0 / unit },
                 cacheWrite: cost.cacheWrite.map { $0 / unit },
                 output: output / unit,
-                threshold: cost.contextOver200K == nil ? nil : 200_000,
+                threshold: cost.contextOver200K == nil ? nil : contextThreshold ?? documentedThreshold ?? 200_000,
                 inputAboveThreshold: cost.contextOver200K?.input.map { $0 / unit },
                 cacheReadAboveThreshold: cost.contextOver200K?.cacheRead.map { $0 / unit },
                 cacheWriteAboveThreshold: cost.contextOver200K?.cacheWrite.map { $0 / unit },

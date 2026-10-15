@@ -93,8 +93,8 @@ struct ElevenLabsUsageTests {
     @Test
     func planOnlyShowsTheRealSubscriptionTier() {
         #expect(makeSnapshot(tier: "growing_business", status: "active").providerUsage().plan == "Growing Business")
-        #expect(makeSnapshot(tier: "creator", status: "past_due").providerUsage().plan == "Creator")
-        #expect(makeSnapshot(tier: "  ", status: "trialing").providerUsage().plan == nil)
+        #expect(makeSnapshot(tier: "creator", status: "past_due").providerUsage().plan == "Creator · past_due")
+        #expect(makeSnapshot(tier: "  ", status: "trialing").providerUsage().plan == "trialing")
         #expect(makeSnapshot(tier: nil, status: nil).providerUsage().plan == nil)
     }
 
@@ -231,7 +231,8 @@ struct ElevenLabsUsageTests {
         }
         defer { ElevenLabsTestURLProtocol.handler = nil }
 
-        await #expect(throws: ElevenLabsUsageError.missingCredentials) {
+        let expectedError: ElevenLabsUsageError = status == 401 ? .authenticationFailed : .accessDenied
+        await #expect(throws: expectedError) {
             _ = try await ElevenLabsUsageFetcher.fetch(
                 apiKey: "xi-test",
                 session: session,

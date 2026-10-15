@@ -82,21 +82,26 @@ struct ProviderDetailCard: View {
 
     private var headlineCaption: String {
         let cost = usage.todayRequests?.valueUSD ?? usage.today?.valueUSD
-        let value = cost.map { String(format: "$%.2f", $0) } ?? "$—"
-        let label = descriptor.id.rawValue == "opencodego"
-            ? copy.text("今日请求", "Requests today")
-            : copy.text("今日 Token", "Tokens today")
-        return label + " · \(value)"
+        return cost.map { "≈ " + compactDollarValue($0) } ?? "$—"
+    }
+
+    private var displayedBalance: String? {
+        guard let balance = usage.balance else { return nil }
+        guard descriptor.id.rawValue == "codex" else { return balance }
+        let raw = balance.replacingOccurrences(of: " credits", with: "")
+            .replacingOccurrences(of: " 积分", with: "")
+        guard let value = Double(raw), value.isFinite else { return balance }
+        return value.formatted(.number.locale(Locale(identifier: "en_US")).precision(.fractionLength(0...2)))
     }
 
     private var overviewCaption: String {
-        let cost = usage.today?.valueUSD.map { "≈ " + compactDollarValue($0) } ?? "$—"
+        let cost = usage.last30Days?.valueUSD.map { "≈ " + compactDollarValue($0) } ?? "$—"
         let tokens = usage.last30Days.map {
             compactTokenCount($0.tokens, language: language)
         } ?? "—"
         return copy.text(
-            "\(cost) 今日 · \(tokens) Token · 30 天",
-            "\(cost) Today · \(tokens) Tokens · 30d"
+            "\(tokens) Token · \(cost) · 30 天",
+            "\(tokens) Tokens · \(cost) · 30d"
         )
     }
 
@@ -223,9 +228,16 @@ struct ProviderDetailCard: View {
         let layout = isOverview
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 7))
+        let todayCost = usage.today?.valueUSD.map { "≈ " + compactDollarValue($0) } ?? "$—"
+        let todayCostText = Text(todayCost)
+            .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+            .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.48))
+        let headline = isOverview
+            ? Text("\(Text(headlineValue)) \(todayCostText)")
+            : Text(headlineValue)
 
         return layout {
-            Text(headlineValue)
+            headline
                 .font(
                     .system(
                         size: isOverview ? 30 : 26,
@@ -234,6 +246,8 @@ struct ProviderDetailCard: View {
                     )
                 )
                 .monospacedDigit()
+                .lineLimit(isOverview ? 1 : nil)
+                .minimumScaleFactor(isOverview ? 0.75 : 1)
                 .contentTransition(.numericText(value: Double(usage.todayRequests?.requests ?? usage.today?.tokens ?? 0)))
 
             Text(isOverview ? overviewCaption : headlineCaption)
@@ -301,6 +315,25 @@ struct ProviderDetailCard: View {
                     )
             }
 
+            if descriptor.id.rawValue == "codex", let credits = usage.codexResetCredits {
+                let now = Date()
+                let count = credits.filter { $0.expiresAt.map { $0 > now } ?? true }.count
+                HStack(spacing: 3) {
+                    Image(systemName: "creditcard")
+                    Text("\(count)")
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(copy.text("重置卡 \(count)", "Resets \(count)"))
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    AppTheme.primaryText(for: colorScheme).opacity(0.045),
+                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                )
+            }
+
             Button(action: refresh) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 9.5, weight: .semibold))
@@ -355,13 +388,13 @@ struct ProviderDetailCard: View {
 
     private var providerSummaryContent: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if let balance = usage.balance,
+            if let balance = displayedBalance,
                !usage.details.contains(where: {
                    let label = $0.label.lowercased()
                    return label.contains("balance") || label.contains("余额")
                }) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(copy.usageLabel("Balance"))
+                    Text(copy.usageLabel(descriptor.id.rawValue == "codex" ? "Credits" : "Balance"))
                         .font(.system(size: 10.5, weight: .semibold))
                         .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.42))
                     Spacer(minLength: 8)
@@ -400,29 +433,26 @@ struct ProviderDetailCard: View {
     }
 
     private var footer: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
             Text("\(last30DaysValue) · \(last30DaysCostValue)")
-                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentTransition(
                     .numericText(value: Double(usage.last30DaysRequests?.requests ?? usage.last30Days?.tokens ?? 0))
                 )
 
+            Spacer(minLength: 12)
+
             Text("\(weeklyEstimateValue) " + copy.text("每周估算", "Weekly estimate"))
-                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .frame(maxWidth: .infinity, alignment: .trailing)
                 .contentTransition(.numericText(value: usage.weeklyEstimate?.valueUSD ?? 0))
                 .help(copy.text(
                     "根据本地用量、模型价格和官方已用比例推算的每周金额，不是官方金额额度。",
                     "Estimated weekly amount from local usage, model prices, and the reported usage fraction; not an official monetary allowance."
                 ))
         }
+        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
         .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.42))
         .padding(.top, 2)
     }

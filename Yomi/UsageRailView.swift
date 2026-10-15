@@ -531,50 +531,70 @@ private struct UsageRailHitShape: Shape {
 enum ProviderBrandColors {
     private static let values: [String: UInt32] = [
         "abacus": 0x38BDF8,
+        "aerostack": 0x6366F1,
         "aiand": 0xE25C2B,
+        "aixy": 0x123650,
         "alibaba": 0xFF6A00,
         "alibabatokenplan": 0xFF6A00,
         "amp": 0xDC2626,
         "antigravity": 0x60BA7E,
+        "atlascloud": 0x5975F5,
         "augment": 0x6366F1,
         "azureopenai": 0x0078D4,
         "bedrock": 0xFF9900,
+        "bifrost": 0x33C09E,
         "chutes": 0x3184FF,
         "claude": 0xCC7C5E,
+        "claudeplatform": 0xCC7C5E,
         "clawrouter": 0x596EF6,
         "clinepass": 0x61A3FA,
         "codebuff": 0x44FF00,
+        "coderabbit": 0xFF5C35,
         "codex": 0x49A3B0,
         "commandcode": 0xA04DFD,
         "copilot": 0xA855F7,
         "crof": 0x2EAB94,
+        "cosmic": 0x29ABE2,
         "cursor": 0x00BFA5,
         "deepgram": 0x6467F2,
         "deepinfra": 0x2A3275,
         "deepseek": 0x527DF0,
         "devin": 0x46B482,
+        "devpass": 0x2563EB,
         "doubao": 0x3370FF,
         "elevenlabs": 0xEBEBE6,
+        "exa": 0x0143D9,
+        "fal": 0x7C3AED,
         "factory": 0xFF6B35,
         "fireworks": 0xF25B1C,
         "gemini": 0xAB87EA,
+        "gitkraken": 0x179287,
         "grok": 0x10A37F,
         "groq": 0xF56844,
+        "helmcode": 0x4934E1,
+        "huggingface": 0xFFD21E,
         "ibmbob": 0x0E61FA,
+        "hyper": 0xFF60FF,
         "jetbrains": 0xFF3399,
+        "langdock": 0x5A4AE7,
         "kilo": 0xF27027,
         "kimi": 0xFE603C,
         "kiro": 0xFF9900,
         "litellm": 0x4C89F0,
+        "lithosai": 0x6B7280,
         "llmproxy": 0x24B47E,
+        "llmman": 0x6CC5B0,
         "longcat": 0xFFD100,
         "manus": 0x34322D,
         "mimo": 0xFF6900,
         "minimax": 0xFE603C,
+        "muse": 0x0668E1,
+        "museai": 0x0668E1,
         "mistral": 0xFF500F,
         "moonshot": 0x205DEB,
         "neuralwatt": 0x38D98C,
         "notion": 0x337EA9,
+        "nous": 0xD6A55C,
         "ollama": 0x888888,
         "openai": 0x0F826E,
         "opencode": 0x3B82F6,
@@ -584,17 +604,25 @@ enum ProviderBrandColors {
         "poe": 0x5D5CDE,
         "qoder": 0x10B981,
         "qwencloud": 0x615CED,
+        "raycast": 0xFF6363,
         "sakana": 0x2975DB,
+        "sailresearch": 0x2C4681,
+        "sofya": 0xB0B820,
         "stepfun": 0x2196F2,
         "sub2api": 0x2DC6D8,
         "synthetic": 0x141414,
         "t3chat": 0xF56647,
+        "tavily": 0x78B0A1,
+        "tinyapi": 0xF97316,
         "venice": 0x3399FF,
         "vertexai": 0x4285F4,
         "warp": 0x938BB4,
         "wayfinder": 0x10A37F,
         "windsurf": 0x34E8BB,
+        "workbuddy": 0x0DC8A6,
+        "xkiro": 0x52C99B,
         "xai": 0x8E8E93,
+        "xapi": 0x71767B,
         "zai": 0xE85A6A,
         "zed": 0x084EFF,
         "zenmux": 0x6C5CE7,
@@ -603,6 +631,9 @@ enum ProviderBrandColors {
     ]
 
     static func color(for id: ProviderID) -> Color {
+        if ["vercel", "linkup", "replicate", "v0", "typesafe", "parallel", "flora"].contains(id.rawValue) {
+            return .primary
+        }
         let value = values[id.rawValue] ?? 0xFFFFFF
         return Color(
             red: Double((value >> 16) & 0xFF) / 255,
@@ -648,6 +679,40 @@ private struct ProviderRailItem: View {
     }
 
     private var headlineWindow: UsageWindow? {
+        if descriptor.id.rawValue == "opencodego" {
+            return usage.windows.max { $0.clampedFraction < $1.clampedFraction }
+        }
+        if descriptor.id.rawValue == "clinepass",
+           let blocked = usage.windows.filter({
+               ($0.id == "clinepass-weekly" || $0.id == "clinepass-monthly") && $0.clampedFraction >= 1
+           }).max(by: {
+               ($0.resetsAt ?? .distantPast) < ($1.resetsAt ?? .distantPast)
+           }) {
+            return blocked
+        }
+        if descriptor.id.rawValue == "kimi" {
+            let monthly = usage.additionalWindows.first { $0.id == "kimi-monthly" }
+            let weekly = usage.windows.first { $0.id == "kimi-weekly" }
+            let session = usage.windows.first { $0.id == "kimi-session" }
+            if let blocked = [monthly, weekly, session].compactMap({ $0 }).first(where: {
+                $0.clampedFraction >= 1
+            }) {
+                return blocked
+            }
+            return session ?? weekly ?? monthly
+        }
+        if descriptor.id.rawValue == "doubao" {
+            return usage.windows.first
+                ?? usage.additionalWindows.first { $0.id == "doubao-agent-5h" }
+        }
+        if descriptor.id.rawValue == "warp",
+           let primary = usage.windows.first,
+           primary.clampedFraction >= 1,
+           let bonus = usage.additionalWindows.first(where: {
+               $0.id == "add-on-credits" && $0.clampedFraction < 1
+           }) {
+            return bonus
+        }
         if descriptor.id.rawValue == "deepseek",
            let balance = usage.additionalWindows.first(where: { $0.id == "deepseek-balance" }) {
             return balance

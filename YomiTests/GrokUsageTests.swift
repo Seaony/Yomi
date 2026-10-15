@@ -276,7 +276,7 @@ struct GrokUsageTests {
         let grpc = try #require(recorder.requests.first { $0.url?.host == "grok.com" })
         #expect(grpc.url?.path == "/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig")
         #expect(grpc.httpMethod == "POST")
-        #expect(grpc.httpBody == Data([0, 0, 0, 0, 0]))
+        #expect(grpc.httpBody == Data([0, 0, 0, 0, 2, 8, 0]))
         #expect(grpc.value(forHTTPHeaderField: "Authorization") == "Bearer oauth-token")
         #expect(grpc.value(forHTTPHeaderField: "Cookie") == nil)
         #expect(grpc.value(forHTTPHeaderField: "Origin") == "https://grok.com")
@@ -440,7 +440,7 @@ struct GrokUsageTests {
             allowBrowserImport: false,
             session: Self.session(),
             environment: ["GROK_HOME": root.path],
-            cliLoader: { _ in throw GrokUsageError.cliFailure("Method not found: x.ai/billing") })
+            cliLoader: { _ in throw GrokUsageError.cliFailure("Method not found: x.ai/billing", code: -32601) })
         #expect(usage.windows.isEmpty)
         #expect(usage.details.isEmpty)
         #expect(usage.message == GrokUsageError.teamUsageUnsupported.errorDescription)

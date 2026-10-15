@@ -33,7 +33,56 @@ enum ClaudeWebUsageFetcher {
             string: "https://claude.ai/api/organizations/\(organization.uuid)/usage"
         )!
         let usageData = try await get(usageURL, sessionKey: sessionKey, session: session)
-        var usage = try UsageParser.parse(usageData, descriptor: descriptor, claudeWeb: true)
+        let parsedUsage = try? UsageParser.parse(usageData, descriptor: descriptor, claudeWeb: true)
+        var cost = parsedUsage?.providerCost
+        if cost == nil,
+           let extra = try await supplementalJSON(
+               organizationID: organization.uuid, path: "overage_spend_limit",
+               sessionKey: sessionKey, session: session
+           ),
+           extra["is_enabled"] as? Bool == true,
+           let used = number(extra["used_credits"]),
+           let limit = number(extra["monthly_credit_limit"]),
+           let currency = extra["currency"] as? String,
+           !currency.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            cost = ProviderCostSummary(
+                used: used / 100, limit: limit / 100, currencyCode: currency,
+                period: AppLocalization.text("每月消费上限", "Monthly cap"), balance: nil
+            )
+        }
+        var balance: String?
+        if let prepaid = try await supplementalJSON(
+            organizationID: organization.uuid, path: "prepaid/credits",
+            sessionKey: sessionKey, session: session, timeout: 2
+        ),
+           let amount = number(prepaid["amount"]),
+           let currency = prepaid["currency"] as? String {
+            let code = currency.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            if !code.isEmpty {
+                balance = String(format: "%.2f %@", amount / 100, code)
+                if cost?.currencyCode.caseInsensitiveCompare(code) == .orderedSame {
+                    cost?.balance = amount / 100
+                }
+            }
+        }
+        guard parsedUsage != nil || cost != nil || balance != nil else {
+            throw UsageCollectionError.unreadableResponse
+        }
+        var usage = parsedUsage ?? ProviderUsage(
+            id: descriptor.id, state: .ready, windows: [], updatedAt: Date()
+        )
+        usage.providerCost = cost
+        usage.balance = balance
+        if usage.windows.isEmpty, let cost, cost.limit > 0 {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+            usage.windows = [UsageWindow(
+                id: "claude-spend-limit", label: AppLocalization.text("消费上限", "Spend limit"),
+                usedFraction: cost.used / cost.limit,
+                resetsAt: calendar.dateInterval(of: .month, for: usage.updatedAt ?? Date())?.end,
+                detail: String(format: "%.2f / %.2f %@", cost.used, cost.limit, cost.currencyCode)
+            )]
+        }
         do {
             let accountData = try await get(
                 URL(string: "https://claude.ai/api/account")!,
@@ -75,14 +124,42 @@ enum ClaudeWebUsageFetcher {
         return trimmed
     }
 
+    private static func supplementalJSON(
+        organizationID: String,
+        path: String,
+        sessionKey: String,
+        session: URLSession,
+        timeout: TimeInterval = 15
+    ) async throws -> [String: Any]? {
+        do {
+            let data = try await get(
+                URL(string: "https://claude.ai/api/organizations/\(organizationID)/\(path)")!,
+                sessionKey: sessionKey, session: session, timeout: timeout
+            )
+            return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                throw error
+            }
+            return nil
+        }
+    }
+
+    private static func number(_ value: Any?) -> Double? {
+        let parsed = (value as? NSNumber)?.doubleValue ?? (value as? String).flatMap(Double.init)
+        guard let parsed, parsed.isFinite, parsed >= 0 else { return nil }
+        return parsed
+    }
+
     private static func get(
         _ url: URL,
         sessionKey: String,
-        session: URLSession
+        session: URLSession,
+        timeout: TimeInterval = 15
     ) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.timeoutInterval = 15
+        request.timeoutInterval = timeout
         request.setValue("sessionKey=\(sessionKey)", forHTTPHeaderField: "Cookie")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, response) = try await session.data(for: request)

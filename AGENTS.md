@@ -33,6 +33,7 @@ Yomi 是原生 macOS SwiftUI 应用，用悬浮侧边栏展示多个 Provider �
 - 所有新增界面文案必须同时适配简体中文和英文。
 - 所有界面改动必须同时适配深色、浅色和系统外观模式，并复用现有颜色与组件。
 - 交互控件需要保持现有 hover、指针和按压反馈。
+- 图标与相邻数量使用明确的紧凑间距，不依赖 Label 的默认间距。
 - 自动更新使用 Sparkle 和 Yomi 自己的 GitHub Release `appcast.xml`，不引入 CodexBar 或 Moni 作为依赖。
 
 ## 验证

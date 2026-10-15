@@ -71,7 +71,12 @@ struct XAIUsageTests {
         let usage = try await XAIUsageFetcher.fetch(
             apiKey: "fixture-key", teamID: "team-1234", session: Self.session(), environment: [:], now: now
         )
-        #expect(recorder.requests.count == 2)
+        #expect(recorder.requests.count == 3)
+        #expect(recorder.requests.compactMap { $0.url?.path } == [
+            "/v1/billing/teams/team-1234/prepaid/balance",
+            "/v1/billing/teams/team-1234/postpaid/invoice/preview",
+            "/v1/billing/teams/team-1234/usage",
+        ])
         #expect(recorder.requests.allSatisfy { $0.url?.host == "management-api.x.ai" })
         #expect(recorder.requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-key" })
         #expect(usage.balance == "$10.00")

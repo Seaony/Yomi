@@ -34,7 +34,10 @@ struct MoonshotUsageTests {
         )
 
         #expect(usage.windows.isEmpty)
-        #expect(usage.details.first?.value == "$49.58 · $0.42 in deficit")
+        #expect(usage.details.first?.value == AppLocalization.text(
+            "$49.58 · 欠款 $0.42",
+            "$49.58 · $0.42 in deficit"
+        ))
     }
 
     @Test
@@ -177,7 +180,7 @@ struct MoonshotUsageTests {
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer live-token")
         #expect(request.value(forHTTPHeaderField: "Accept") == "application/json")
         #expect(request.timeoutInterval == 15)
-        #expect(usage.balance == "$9.87")
+        #expect(usage.balance == "CN¥9.87")
         #expect(usage.windows.isEmpty)
     }
 

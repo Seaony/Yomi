@@ -22,9 +22,12 @@ struct ZedUsageTests {
         let usage = ZedUsageFetcher.providerUsage(response, now: Self.now)
 
         #expect(usage.plan == "Zed Free")
-        #expect(usage.windows.map(\.label) == ["Edit predictions"])
+        #expect(usage.windows.map(\.label) == ["Edit predictions", "Billing cycle"])
         #expect(usage.windows[0].usedFraction == 0.5)
         #expect(usage.windows[0].detail == "10 / 20 predictions")
+        let cycle = try #require(usage.windows.first { $0.id == "zed-billing-cycle" })
+        #expect(cycle.usedFraction == 14.0 / 31.0)
+        #expect(cycle.resetsAt == Date(timeIntervalSince1970: 1_769_904_000))
         #expect(usage.details.isEmpty)
     }
 
@@ -50,7 +53,7 @@ struct ZedUsageTests {
 
         #expect(over.windows[0].usedFraction == 1)
         #expect(over.windows[0].detail == "25 / 25 predictions")
-        #expect(zero.windows.isEmpty)
+        #expect(zero.windows.map(\.label) == ["Billing cycle"])
     }
 
     @Test
@@ -63,7 +66,12 @@ struct ZedUsageTests {
         ))
         let usage = ZedUsageFetcher.providerUsage(response, now: Self.now)
 
-        #expect(usage.details.isEmpty)
+        #expect(usage.details == [UsageDetail(
+            id: "zed-overdue-invoices",
+            label: AppLocalization.text("账单", "Billing"),
+            value: AppLocalization.text("有逾期账单", "Overdue invoices")
+        )])
+        #expect(usage.message == AppLocalization.text("有逾期账单", "Overdue invoices"))
         #expect(usage.additionalWindows.isEmpty)
     }
 

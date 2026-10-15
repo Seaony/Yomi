@@ -102,16 +102,9 @@ nonisolated enum PoeUsageFetcher {
         }
         if !entries.isEmpty {
             let calendar = utcCalendar
-            let grouped = Dictionary(grouping: entries) { entry in
-                calendar.startOfDay(for: entry.date)
-            }
-            let orderedDays = grouped.keys.sorted()
-            let summaries = Dictionary(uniqueKeysWithValues: grouped.map { day, values in
-                (day, summarize(values))
-            })
-            let today = summarize(grouped[calendar.startOfDay(for: now)] ?? [])
-            let seven = summarizeDays(Array(orderedDays.suffix(7)), summaries: summaries)
-            let thirty = summarizeDays(Array(orderedDays.suffix(30)), summaries: summaries)
+            let today = summarize(entries.filter { calendar.isDate($0.date, inSameDayAs: now) })
+            let seven = summarize(entries.filter { $0.date >= now.addingTimeInterval(-7 * 86_400) })
+            let thirty = summarize(entries)
             details.append(summaryDetail(id: "poe-today", label: "Today", summary: today))
             details.append(summaryDetail(id: "poe-seven", label: "Last 7 days", summary: seven))
             details.append(summaryDetail(id: "poe-thirty", label: "Last 30 days", summary: thirty))
@@ -178,9 +171,16 @@ nonisolated enum PoeUsageFetcher {
 
     private static func entryDate(_ value: Any?) -> Date? {
         if let number = try? optionalNumber(value, field: "date") {
-            if number > 100_000_000_000_000 { return Date(timeIntervalSince1970: number / 1_000_000) }
-            if number > 1_000_000_000_000 { return Date(timeIntervalSince1970: number / 1_000) }
-            return Date(timeIntervalSince1970: number)
+            let seconds: Double
+            if number > 100_000_000_000_000 {
+                seconds = number / 1_000_000
+            } else if number > 1_000_000_000_000 {
+                seconds = number / 1_000
+            } else {
+                seconds = number
+            }
+            guard abs(seconds) <= 8_640_000_000_000 else { return nil }
+            return Date(timeIntervalSince1970: seconds)
         }
         guard let string = value as? String else { return nil }
         let fractional = ISO8601DateFormatter()
@@ -198,18 +198,6 @@ nonisolated enum PoeUsageFetcher {
             if let cost = entry.costUSD {
                 result.cost += max(0, cost)
                 result.hasCost = true
-            }
-        }
-    }
-
-    private static func summarizeDays(_ days: [Date], summaries: [Date: Summary]) -> Summary {
-        days.reduce(into: Summary()) { total, day in
-            guard let value = summaries[day] else { return }
-            total.points += value.points
-            total.requests += value.requests
-            if value.hasCost {
-                total.cost += value.cost
-                total.hasCost = true
             }
         }
     }

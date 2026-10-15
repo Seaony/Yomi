@@ -134,23 +134,35 @@ nonisolated enum AlibabaTokenPlanFetcher {
     }
 
     static func parseCLI(data: Data, now: Date = Date()) throws -> ProviderUsage {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        let root = try rootObject(data)
+        guard let frame = findDictionary(
+            containing: ["per5HourPercentage", "per1WeekPercentage", "per1MonthPercentage"], in: root
+        ) else {
             throw UsageCollectionError.unreadableResponse
         }
-        let fiveHour = ratio(root["per5HourPercentage"])
-        let weekly = ratio(root["per1WeekPercentage"])
-        guard fiveHour != nil || weekly != nil else { throw UsageCollectionError.unreadableResponse }
+        let fiveHour = cliRatio(frame["per5HourPercentage"])
+        let weekly = cliRatio(frame["per1WeekPercentage"])
+        let monthly = cliRatio(frame["per1MonthPercentage"])
+        guard fiveHour != nil || weekly != nil || monthly != nil else {
+            throw UsageCollectionError.unreadableResponse
+        }
         var windows: [UsageWindow] = []
         if let fiveHour {
             windows.append(UsageWindow(
                 id: "alibaba-token-plan-5h", label: "5-hour", usedFraction: fiveHour,
-                resetsAt: millisecondsDate(root["per5HourResetTime"]), detail: nil
+                resetsAt: millisecondsDate(frame["per5HourResetTime"]), detail: nil
             ))
         }
         if let weekly {
             windows.append(UsageWindow(
                 id: "alibaba-token-plan-weekly", label: "7-day", usedFraction: weekly,
-                resetsAt: millisecondsDate(root["per1WeekResetTime"]), detail: nil
+                resetsAt: millisecondsDate(frame["per1WeekResetTime"]), detail: nil
+            ))
+        }
+        if let monthly {
+            windows.append(UsageWindow(
+                id: "alibaba-token-plan-monthly", label: "Monthly", usedFraction: monthly,
+                resetsAt: millisecondsDate(frame["per1MonthResetTime"]), detail: nil
             ))
         }
         return usage(windows: windows, plan: "Token Plan", now: now)
@@ -197,22 +209,28 @@ nonisolated enum AlibabaTokenPlanFetcher {
         let root = try rootObject(usageData)
         try throwIfError(root)
         guard let frame = findDictionary(
-            containing: ["per5HourPercentage", "per1WeekPercentage"], in: root
+            containing: ["per5HourPercentage", "per1WeekPercentage", "per1MonthPercentage"], in: root
         ) else { throw UsageCollectionError.unreadableResponse }
         let fiveHour = ratio(frame["per5HourPercentage"])
         let weekly = ratio(frame["per1WeekPercentage"])
-        guard fiveHour != nil || weekly != nil else { throw UsageCollectionError.unreadableResponse }
+        let monthly = ratio(frame["per1MonthPercentage"])
+        guard fiveHour != nil || weekly != nil || monthly != nil else {
+            throw UsageCollectionError.unreadableResponse
+        }
 
         let planCode = subscriptionData.flatMap { data -> String? in
             guard let root = try? rootObject(data) else { return nil }
             return findString(keys: ["specCode", "spec_code", "planName", "plan_name"], in: root)?.lowercased()
         }
-        let totals = quotaConfigData.flatMap { data -> (Double?, Double?)? in
+        let totals = quotaConfigData.flatMap { data -> (Double?, Double?, Double?)? in
             guard let planCode, let root = try? rootObject(data),
                   let planValue = findValue(key: planCode, in: root),
                   let quota = planValue as? [String: Any]
             else { return nil }
-            return (number(quota["five_hour"] ?? quota["fiveHour"]), number(quota["weekly"]))
+            return (
+                number(quota["five_hour"] ?? quota["fiveHour"]),
+                number(quota["weekly"]), number(quota["monthly"])
+            )
         }
         var windows: [UsageWindow] = []
         if let fiveHour {
@@ -229,6 +247,13 @@ nonisolated enum AlibabaTokenPlanFetcher {
                 detail: quotaDetail(fraction: weekly, total: totals?.1)
             ))
         }
+        if let monthly {
+            windows.append(UsageWindow(
+                id: "alibaba-token-plan-monthly", label: "Monthly", usedFraction: monthly,
+                resetsAt: parsedDate(frame["per1MonthResetTime"]),
+                detail: quotaDetail(fraction: monthly, total: totals?.2)
+            ))
+        }
         return usage(windows: windows, plan: planCode.map(displayPlan) ?? "Personal", now: now)
     }
 
@@ -243,8 +268,11 @@ nonisolated enum AlibabaTokenPlanFetcher {
     }
 
     static func cliArguments(region: Region) -> [String] {
-        [
-            "usage", "token-plan", "--console-region", region.currentRegionID,
+        let command = region.isPersonal
+            ? ["console", "call", "--api", personalUsageAPI, "--data", "{}"]
+            : ["usage", "token-plan"]
+        return command + [
+            "--console-region", region.currentRegionID,
             "--console-site", region.cliConsoleSite, "--output", "json",
         ]
     }
@@ -273,8 +301,8 @@ nonisolated enum AlibabaTokenPlanFetcher {
         try await Task.detached(priority: .utility) {
             let environment = ProcessInfo.processInfo.environment
             let path = environment["PATH"] ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-            guard let binary = path.split(separator: ":", omittingEmptySubsequences: false)
-                .map({ $0.isEmpty ? "." : String($0) })
+            let directories = path.split(separator: ":").map(String.init).filter { $0.hasPrefix("/") }
+            guard let binary = directories
                 .map({ URL(fileURLWithPath: $0).appending(path: "bl").path })
                 .first(where: FileManager.default.isExecutableFile(atPath:))
             else { throw UsageCollectionError.missingCredential }
@@ -290,6 +318,7 @@ nonisolated enum AlibabaTokenPlanFetcher {
                 "http_proxy", "https_proxy", "all_proxy", "no_proxy",
             ])
             process.environment = environment.filter { allowed.contains($0.key) }
+            process.environment?["PATH"] = directories.joined(separator: ":")
             process.standardOutput = output
             process.standardError = errors
             try process.run()
@@ -332,7 +361,8 @@ nonisolated enum AlibabaTokenPlanFetcher {
             URLQueryItem(name: "region", value: region.currentRegionID),
         ] + (secToken.map { [URLQueryItem(name: "sec_token", value: $0)] } ?? [])
         let data = try await post(
-            url: components.url!, body: Data((body.percentEncodedQuery ?? "").utf8),
+            url: components.url!,
+            body: Data((body.percentEncodedQuery ?? "").replacingOccurrences(of: "+", with: "%2B").utf8),
             cookie: headers.api, region: region, session: session
         )
         return try parseTeam(data: data, now: now)
@@ -397,7 +427,8 @@ nonisolated enum AlibabaTokenPlanFetcher {
             URLQueryItem(name: "params", value: String(decoding: paramsData, as: UTF8.self)),
         ] + (secToken.map { [URLQueryItem(name: "sec_token", value: $0)] } ?? [])
         return try await post(
-            url: components.url!, body: Data((body.percentEncodedQuery ?? "").utf8),
+            url: components.url!,
+            body: Data((body.percentEncodedQuery ?? "").replacingOccurrences(of: "+", with: "%2B").utf8),
             cookie: cookie, region: region, session: session
         )
     }
@@ -461,8 +492,7 @@ nonisolated enum AlibabaTokenPlanFetcher {
     private static func automaticCookieHeaders(region: Region) -> CookieHeaders? {
         let client = BrowserCookieClient()
         let query = BrowserCookieQuery(domains: cookieDomains)
-        let browsers: [Browser] = [.chrome, .chromeBeta, .brave, .edge, .arc, .firefox, .safari]
-        for browser in browsers {
+        for browser in Browser.defaultImportOrder {
             guard let sources = try? client.records(matching: query, in: browser) else { continue }
             for source in sources {
                 let cookies = BrowserCookieClient.makeHTTPCookies(source.records, origin: query.origin)
@@ -566,7 +596,10 @@ nonisolated enum AlibabaTokenPlanFetcher {
     ]
 
     private static func expand(_ value: Any) -> Any {
-        if let string = value as? String, let data = string.data(using: .utf8),
+        if let string = value as? String,
+           string.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{")
+            || string.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("["),
+           let data = string.data(using: .utf8),
            let decoded = try? JSONSerialization.jsonObject(with: data) { return expand(decoded) }
         if let dictionary = value as? [String: Any] { return dictionary.mapValues(expand) }
         if let array = value as? [Any] { return array.map(expand) }
@@ -673,6 +706,11 @@ nonisolated enum AlibabaTokenPlanFetcher {
         return value
     }
 
+    private static func cliRatio(_ value: Any?) -> Double? {
+        guard let value = value as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID() else { return nil }
+        return ratio(value)
+    }
+
     private static func boolean(_ value: Any?) -> Bool? {
         if let value = value as? Bool { return value }
         if let number = value as? NSNumber { return number.boolValue }
@@ -700,8 +738,9 @@ nonisolated enum AlibabaTokenPlanFetcher {
     }
 
     private static func millisecondsDate(_ value: Any?) -> Date? {
-        guard let number = number(value), number > 0 else { return nil }
-        return Date(timeIntervalSince1970: number / 1000)
+        guard let value = value as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(),
+              value.doubleValue.isFinite, value.doubleValue > 0 else { return nil }
+        return Date(timeIntervalSince1970: value.doubleValue / 1000)
     }
 
     private static func cookieValue(_ name: String, _ header: String) -> String? {
@@ -715,7 +754,10 @@ nonisolated enum AlibabaTokenPlanFetcher {
 
     private static func quotaDetail(fraction: Double, total: Double?) -> String? {
         guard let total, total > 0 else { return nil }
-        return "\(format(total * fraction)) / \(format(total)) credits used"
+        return AppLocalization.text(
+            "已用 \(format(total * fraction)) / \(format(total)) 点数",
+            "\(format(total * fraction)) / \(format(total)) credits used"
+        )
     }
 
     private static func format(_ value: Double) -> String {

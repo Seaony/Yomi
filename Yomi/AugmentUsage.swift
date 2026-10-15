@@ -64,10 +64,7 @@ nonisolated enum AugmentUsageFetcher {
         "a0.spajs.txs", "__Secure-next-auth.session-token", "next-auth.session-token",
         "__Secure-authjs.session-token", "__Host-authjs.csrf-token", "authjs.session-token",
     ]
-    private static let browserOrder: [Browser] = [
-        .safari, .chrome, .chromeBeta, .chromeCanary, .edge, .edgeBeta,
-        .brave, .arc, .dia, .arcBeta, .firefox,
-    ]
+    private static let browserOrder: [Browser] = Browser.defaultImportOrder
 
     static func fetch(
         credential rawCredential: String,
@@ -112,6 +109,9 @@ nonisolated enum AugmentUsageFetcher {
             if let value = captureNumber(#"([\d,]+)\s+credits\s*/\s*month"#, in: line) {
                 monthlyMaximum = value
                 total = total ?? value
+            } else if line.contains("Max Plan"), !line.contains("remaining"),
+                      let value = captureNumber(#"([\d,]+)\s+credits"#, in: line) {
+                monthlyMaximum = value
             }
             if line.contains("credits remaining"),
                let value = captureNumber(#"([\d,]+)\s+credits\s+remaining"#, in: line) {
@@ -141,7 +141,9 @@ nonisolated enum AugmentUsageFetcher {
             resetsAt: end,
             email: nil,
             organization: nil,
-            plan: nil
+            plan: monthlyMaximum.map {
+                AppLocalization.text("\(compact($0)) 积分/月", "\(compact($0)) credits/month")
+            }
         )
     }
 
@@ -172,7 +174,7 @@ nonisolated enum AugmentUsageFetcher {
     }
 
     static func providerUsage(_ snapshot: Snapshot, now: Date = Date()) -> ProviderUsage {
-        let usedFraction = snapshot.limit > 0 ? min(1, max(0, snapshot.used / snapshot.limit)) : 1
+        let usedFraction = snapshot.limit > 0 ? min(1, max(0, snapshot.used / snapshot.limit)) : 0
         return ProviderUsage(
             id: ProviderID(rawValue: "augment"),
             state: .ready,

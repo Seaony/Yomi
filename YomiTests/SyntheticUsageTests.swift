@@ -46,15 +46,19 @@ struct SyntheticUsageTests {
         }
         """#.utf8)
 
-        let usage = try SyntheticUsageFetcher.parse(data).toProviderUsage()
+        let snapshot = try SyntheticUsageFetcher.parse(data)
+        let usage = snapshot.toProviderUsage()
 
         #expect(usage.windows.map(\.label) == ["Weekly tokens", "Search hourly"])
         #expect(usage.windows.map(\.usedFraction) == [0.02, 0.008])
-        #expect(usage.providerCost?.limit == 36)
-        #expect(abs((usage.providerCost?.used ?? 0) - 0.7) < 0.000_000_1)
-        #expect(usage.providerCost?.balance == 35.3)
-        #expect(usage.balance == "$35.30")
-        #expect(usage.windows[0].detail == "$0.72 after next regen")
+        #expect(snapshot.slots[1]?.cost?.limit == 36)
+        #expect(abs((snapshot.slots[1]?.cost?.used ?? 0) - 0.7) < 0.000_000_1)
+        #expect(snapshot.slots[1]?.cost?.remaining == 35.3)
+        #expect(usage.providerCost == nil)
+        #expect(usage.balance == nil)
+        #expect(usage.windows[0].detail == AppLocalization.text(
+            "下次恢复后剩余 100%", "100% left after next regen"
+        ))
     }
 
     @Test
@@ -67,12 +71,14 @@ struct SyntheticUsageTests {
         }
         """#.utf8)
 
-        let usage = try SyntheticUsageFetcher.parse(data).toProviderUsage()
+        let snapshot = try SyntheticUsageFetcher.parse(data)
+        let usage = snapshot.toProviderUsage()
 
         #expect(usage.windows.map(\.label) == ["Five-hour quota", "Weekly tokens", "Search hourly"])
         #expect(usage.windows.map(\.usedFraction) == [0.4, 0.3, 0.75])
         #expect(usage.windows[0].detail == "5 hours window")
-        #expect(usage.windows[1].detail == "5% after next regen")
+        #expect(snapshot.slots[1]?.nextRegenFraction == 0.05)
+        #expect(usage.windows[1].detail == nil)
         #expect(usage.windows[2].resetsAt == Date(timeIntervalSince1970: 1_780_000_100))
     }
 
@@ -89,11 +95,14 @@ struct SyntheticUsageTests {
         }
         """#.utf8)
 
-        let usage = try SyntheticUsageFetcher.parse(data).toProviderUsage()
+        let snapshot = try SyntheticUsageFetcher.parse(data)
+        let usage = snapshot.toProviderUsage()
+        let cost = snapshot.slots.compactMap { $0?.cost }.first
 
         #expect(usage.windows.map(\.usedFraction) == [0.1, 0.2, 0.3])
-        #expect(usage.providerCost?.used == 4)
-        #expect(usage.providerCost?.limit == 10)
+        #expect(cost?.used == 4)
+        #expect(cost?.limit == 10)
+        #expect(usage.providerCost == nil)
     }
 
     @Test

@@ -5,6 +5,7 @@ import Security
 
 nonisolated enum AntigravityUsageError: LocalizedError, Equatable {
     case notLoggedIn
+    case reauthenticationRequired
     case localServiceUnavailable
     case permissionDenied(String)
     case requestFailed(Int)
@@ -16,6 +17,11 @@ nonisolated enum AntigravityUsageError: LocalizedError, Equatable {
             AppLocalization.text(
                 "未找到 Antigravity 登录信息，请先在 Antigravity 中登录",
                 "Antigravity sign-in was not found. Sign in with Antigravity first."
+            )
+        case .reauthenticationRequired:
+            AppLocalization.text(
+                "当前 Antigravity 登录方式无法读取额度，请重新登录此账号",
+                "This Antigravity sign-in cannot read its quota. Sign in to this account again."
             )
         case .localServiceUnavailable:
             AppLocalization.text(
@@ -167,6 +173,7 @@ nonisolated enum AntigravityUsageFetcher {
     private static let onboardUserPath = "/v1internal:onboardUser"
     private static let availableModelsPath = "/v1internal:fetchAvailableModels"
     private static let userQuotaPath = "/v1internal:retrieveUserQuota"
+    private static let userQuotaSummaryPath = "/v1internal:retrieveUserQuotaSummary"
     private static let tokenURL = URL(string: "https://oauth2.googleapis.com/token")!
     private static let credentialsEnvironmentKey = "ANTIGRAVITY_OAUTH_CREDENTIALS_JSON"
     private static let otherFamilyAbbreviation = String(UnicodeScalar(71)!)
@@ -255,6 +262,13 @@ nonisolated enum AntigravityUsageFetcher {
             body: ["metadata": remoteMetadata],
             session: session
         )
+        if clean(credentials.projectID) == nil, codeAssist["currentTier"] == nil,
+           Self.projectID(codeAssist) == nil,
+           (codeAssist["ineligibleTiers"] as? [[String: Any]])?.contains(where: {
+               $0["reasonCode"] as? String == "GOOGLE_TOS_NOT_SUPPORTED_BY_CLIENT"
+           }) == true {
+            throw AntigravityUsageError.reauthenticationRequired
+        }
         let projectID = try await resolvedProjectID(
             credentials: &credentials,
             codeAssist: codeAssist,
@@ -264,6 +278,34 @@ nonisolated enum AntigravityUsageFetcher {
         try persist(credentials: credentials, rawCredential: rawCredential, homeDirectory: homeDirectory)
 
         let modelBody: [String: Any] = projectID.map { ["project": $0] } ?? [:]
+        let claims = tokenClaims(credentials.idToken)
+        let identity = Identity(
+            email: claims.email ?? clean(credentials.email),
+            plan: plan(codeAssist: codeAssist, hostedDomain: claims.hostedDomain)
+        )
+        do {
+            let summary = try await requestJSON(
+                path: userQuotaSummaryPath,
+                accessToken: accessToken,
+                body: modelBody,
+                session: session,
+                timeout: 2
+            )
+            try Task.checkCancellation()
+            return try parseQuotaSummary(
+                data: JSONSerialization.data(withJSONObject: summary),
+                identity: identity,
+                now: now
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw error
+        } catch AntigravityUsageError.notLoggedIn {
+            throw AntigravityUsageError.notLoggedIn
+        } catch {
+            try Task.checkCancellation()
+        }
         let models: [ModelQuota]
         do {
             let available = try await requestJSON(
@@ -305,14 +347,9 @@ nonisolated enum AntigravityUsageFetcher {
             }
         }
 
-        let claims = tokenClaims(credentials.idToken)
-        let identity = Identity(
-            email: claims.email ?? clean(credentials.email),
-            plan: plan(codeAssist: codeAssist, hostedDomain: claims.hostedDomain)
-        )
-        if models.isEmpty {
+        if !models.contains(where: { $0.remainingFraction != nil }) {
             return ProviderUsage(
-                id: ProviderID(rawValue: "antigravity"), state: .ready, windows: [],
+                id: ProviderID(rawValue: "antigravity"), state: .unavailable, windows: [],
                 balance: nil, plan: identity.plan, details: [], updatedAt: now,
                 message: AppLocalization.text("当前账号未提供额度数据", "Limits not available")
             )
@@ -323,6 +360,7 @@ nonisolated enum AntigravityUsageFetcher {
     static func parseQuotaSummary(
         data: Data,
         identityData: Data? = nil,
+        identity suppliedIdentity: Identity? = nil,
         now: Date = Date()
     ) throws -> ProviderUsage {
         let root = try object(data)
@@ -341,25 +379,27 @@ nonisolated enum AntigravityUsageFetcher {
         )] = []
         for (groupOrder, rawGroup) in rawGroups.enumerated() {
             guard let group = dictionary(rawGroup) else { continue }
-            let rawGroupName = clean(group["displayName"] as? String) ?? "Quota"
+            let rawGroupName = clean(group["displayName"] as? String)
+                ?? clean(group["name"] as? String) ?? "Quota"
             let family = quotaFamily(rawGroupName)
             let groupName = family.title ?? rawGroupName
             let buckets = group["buckets"] as? [Any] ?? []
             for (bucketOrder, rawBucket) in buckets.enumerated() {
                 guard let bucket = dictionary(rawBucket),
-                      let bucketID = clean(bucket["bucketId"] as? String)
+                      let bucketID = clean(bucket["bucketId"] as? String) ?? clean(bucket["id"] as? String)
                 else { continue }
-                let rawName = clean(bucket["displayName"] as? String) ?? bucketID
-                let cadence = quotaCadence(bucketID: bucketID, displayName: rawName)
+                let rawName = clean(bucket["displayName"] as? String)
+                    ?? clean(bucket["name"] as? String) ?? bucketID
+                let cadence = quotaCadence(
+                    bucketID: bucketID, displayName: rawName, window: clean(bucket["window"] as? String)
+                )
                 let remaining = number(bucket["remainingFraction"])
                     ?? number(dictionary(bucket["remaining"])?["remainingFraction"])
                     ?? oneOfRemaining(dictionary(bucket["remaining"]))
                 let disabled = bool(bucket["disabled"]) ?? false
-                let effectiveRemaining = disabled ? nil : remaining
-                let fraction = effectiveRemaining.map { min(max(1 - $0, 0), 1) } ?? 0
-                let detail = effectiveRemaining == nil
-                    ? AppLocalization.text("额度不可用", "Limit unavailable")
-                    : clean(bucket["description"] as? String)
+                guard !disabled, let remaining else { continue }
+                let fraction = min(max(1 - remaining, 0), 1)
+                let detail = clean(bucket["description"] as? String)
                 windows.append((
                     family.rank,
                     cadence.rank,
@@ -386,12 +426,12 @@ nonisolated enum AntigravityUsageFetcher {
             throw AntigravityUsageError.unreadableResponse("missing quota buckets")
         }
 
-        let identity = identityData.flatMap { try? parseIdentity(data: $0) } ?? Identity(email: nil, plan: nil)
+        let identity = suppliedIdentity
+            ?? identityData.flatMap { try? parseIdentity(data: $0) } ?? Identity(email: nil, plan: nil)
         let families = Dictionary(grouping: detailed, by: familyKey)
         let core = ["gemini", "other"].compactMap { key -> UsageWindow? in
             guard let familyWindows = families[key], !familyWindows.isEmpty else { return nil }
-            let known = familyWindows.filter { $0.detail != AppLocalization.text("额度不可用", "Limit unavailable") }
-            guard let representative = (known.isEmpty ? familyWindows : known)
+            guard let representative = familyWindows
                 .max(by: { $0.usedFraction < $1.usedFraction }) else { return nil }
             return UsageWindow(
                 id: "antigravity-\(key)",
@@ -438,7 +478,7 @@ nonisolated enum AntigravityUsageFetcher {
             ?? root["clientModelConfigs"] as? [Any]
             ?? []
         let models = rawConfigs.compactMap(parseModelConfig)
-        guard !models.isEmpty else {
+        guard models.contains(where: { $0.remainingFraction != nil }) else {
             throw AntigravityUsageError.unreadableResponse("missing quota models")
         }
         let parsedIdentity = status == nil ? identity : (try? parseIdentity(data: data)) ?? identity
@@ -586,11 +626,7 @@ nonisolated enum AntigravityUsageFetcher {
             do {
                 let summaryData = try await localRequest(path: quotaSummaryPath, body: ["forceRefresh": true], endpoint: endpoint)
                 let identityData = try? await localRequest(path: userStatusPath, body: localMetadataBody, endpoint: endpoint)
-                let usage = try parseQuotaSummary(data: summaryData, identityData: identityData, now: now)
-                guard usage.additionalWindows.contains(where: { $0.detail != AppLocalization.text("额度不可用", "Limit unavailable") }) else {
-                    throw AntigravityUsageError.unreadableResponse("quota summary has no usable buckets")
-                }
-                return usage
+                return try parseQuotaSummary(data: summaryData, identityData: identityData, now: now)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -622,7 +658,7 @@ nonisolated enum AntigravityUsageFetcher {
         sourceIsLocal: Bool,
         now: Date
     ) -> ProviderUsage {
-        let normalized = models.map(normalize)
+        let normalized = models.filter { $0.remainingFraction != nil }.map(normalize)
         let selectable = normalized.filter { !$0.isLite && !$0.isImage && !$0.isAutocomplete }
         let gemini = representative(selectable.filter { $0.family == .gemini })
         let other = representative(selectable.filter { $0.family == .other })
@@ -641,23 +677,7 @@ nonisolated enum AntigravityUsageFetcher {
         }
 
         let represented = Set(core.map(\.id))
-        let resetOnlyGroups: [UsageWindow] = [
-            (NormalizedModel.Family.gemini, "antigravity-gemini", "Gemini Models"),
-            (.other, "antigravity-other", "Claude and \(otherFamilyAbbreviation) models"),
-        ].compactMap { family, id, label in
-            guard !represented.contains(id),
-                  let model = normalized.first(where: {
-                      $0.family == family && !$0.isLite && !$0.isImage && !$0.isAutocomplete
-                          && $0.quota.remainingFraction == nil
-                          && ($0.quota.resetsAt != nil || $0.quota.resetDescription != nil)
-                  }) else { return nil }
-            return window(model.quota, id: id, label: label)
-        }
         let distinctCandidates = normalized.filter { model in
-            if model.quota.remainingFraction == nil {
-                return (model.isLite || model.isImage || model.isAutocomplete || model.family == .unknown)
-                    && (model.quota.resetsAt != nil || model.quota.resetDescription != nil)
-            }
             return (model.isLite || model.isImage || model.isAutocomplete || model.family == .unknown)
                 && model.quota.remainingFraction ?? 1 < 0.999
         }
@@ -667,7 +687,7 @@ nonisolated enum AntigravityUsageFetcher {
                     ($0.quota.remainingFraction ?? 1) < ($1.quota.remainingFraction ?? 1)
                 }
             }
-        let extras = resetOnlyGroups + distinct.sorted(by: modelOrder).map {
+        let extras = distinct.sorted(by: modelOrder).map {
             window($0.quota, id: $0.quota.modelID, label: displayLabel($0.quota))
         }.filter { !represented.contains($0.id) }
 
@@ -819,9 +839,11 @@ nonisolated enum AntigravityUsageFetcher {
         return window.label
     }
 
-    private static func quotaCadence(bucketID: String, displayName: String) -> (rank: Int, title: String?) {
+    private static func quotaCadence(
+        bucketID: String, displayName: String, window: String?
+    ) -> (rank: Int, title: String?) {
         var candidates: Set<String> = []
-        for raw in [bucketID, displayName] {
+        for raw in window.map({ [$0] }) ?? [bucketID, displayName] {
             let value = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 .replacingOccurrences(of: "_", with: "-")
             var values = [value]
@@ -920,22 +942,30 @@ nonisolated enum AntigravityUsageFetcher {
         now: Date,
         environment: [String: String]
     ) async throws -> AntigravityOAuthCredentials {
-        guard let refreshToken = clean(credentials.refreshToken),
-              let clientID = clean(credentials.clientID) ?? clean(environment["ANTIGRAVITY_OAUTH_CLIENT_ID"]),
-              let clientSecret = clean(credentials.clientSecret) ?? clean(environment["ANTIGRAVITY_OAUTH_CLIENT_SECRET"])
-        else { throw AntigravityUsageError.notLoggedIn }
-        var components = URLComponents()
-        components.queryItems = [
-            URLQueryItem(name: "client_id", value: clientID),
-            URLQueryItem(name: "client_secret", value: clientSecret),
-            URLQueryItem(name: "refresh_token", value: refreshToken),
-            URLQueryItem(name: "grant_type", value: "refresh_token"),
+        guard let refreshToken = clean(credentials.refreshToken) else { throw AntigravityUsageError.notLoggedIn }
+        let client: (id: String, secret: String)
+        if let id = clean(credentials.clientID), let secret = clean(credentials.clientSecret) {
+            client = (id, secret)
+        } else if let id = clean(environment["ANTIGRAVITY_OAUTH_CLIENT_ID"]),
+                  let secret = clean(environment["ANTIGRAVITY_OAUTH_CLIENT_SECRET"]) {
+            client = (id, secret)
+        } else {
+            throw AntigravityUsageError.notLoggedIn
+        }
+        let parameters = [
+            "client_id": client.id,
+            "client_secret": client.secret,
+            "refresh_token": refreshToken,
+            "grant_type": "refresh_token",
         ]
         var request = URLRequest(url: tokenURL)
         request.httpMethod = "POST"
         request.timeoutInterval = 10
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.httpBody = components.query?.data(using: .utf8)
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        request.httpBody = parameters.sorted { $0.key < $1.key }.map { key, value in
+            "\(key)=\(value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value)"
+        }.joined(separator: "&").data(using: .utf8)
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw AntigravityUsageError.notLoggedIn
@@ -969,9 +999,11 @@ nonisolated enum AntigravityUsageFetcher {
         path: String,
         accessToken: String,
         body: [String: Any],
-        session: URLSession
+        session: URLSession,
+        timeout: TimeInterval = 10
     ) async throws -> [String: Any] {
-        let request = try remoteRequest(path: path, accessToken: accessToken, body: body)
+        var request = try remoteRequest(path: path, accessToken: accessToken, body: body)
+        request.timeoutInterval = timeout
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw AntigravityUsageError.unreadableResponse("missing HTTP response")
@@ -993,7 +1025,12 @@ nonisolated enum AntigravityUsageFetcher {
         request.timeoutInterval = 10
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("antigravity", forHTTPHeaderField: "User-Agent")
+        #if arch(arm64)
+        let architecture = "arm64"
+        #else
+        let architecture = "amd64"
+        #endif
+        request.setValue("antigravity/hub/2.9.1 darwin/\(architecture)", forHTTPHeaderField: "User-Agent")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
     }
@@ -1047,9 +1084,9 @@ nonisolated enum AntigravityUsageFetcher {
 
     private static func resolveCommandBinary(environment: [String: String]) -> String? {
         let manager = FileManager.default
-        if let override = clean(environment["ANTIGRAVITY_CLI_PATH"]),
-           manager.isExecutableFile(atPath: override) {
-            return override
+        if let value = environment["ANTIGRAVITY_CLI_PATH"] {
+            guard let override = clean(value) else { return nil }
+            return manager.isExecutableFile(atPath: override) ? override : nil
         }
         let path = clean(environment["PATH"])
             ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
@@ -1075,6 +1112,22 @@ nonisolated enum AntigravityUsageFetcher {
         environment: [String: String],
         now: Date
     ) async throws -> ProviderUsage {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "yomi-agy-no-browser-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for command in ["open", "xdg-open"] {
+            guard FileManager.default.createFile(
+                atPath: directory.appending(path: command).path,
+                contents: Data("#!/bin/sh\nexit 1\n".utf8),
+                attributes: [.posixPermissions: 0o700]
+            ) else { throw AntigravityUsageError.localServiceUnavailable }
+        }
+        var environment = environment
+        environment["PATH"] = directory.path + ":" + (environment["PATH"] ?? "/usr/bin:/bin")
+        environment["BROWSER"] = directory.appending(path: "open").path
         var primaryDescriptor: Int32 = -1
         var secondaryDescriptor: Int32 = -1
         var windowSize = winsize(ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0)
@@ -1176,7 +1229,8 @@ nonisolated enum AntigravityUsageFetcher {
         if lower.contains("antigravity-ide") || lower.contains("--app_data_dir antigravity-ide") {
             return .ide
         }
-        if lower.contains("antigravity.app") || lower.contains("/antigravity/")
+        if lower.contains("antigravity.app") || lower.contains("gemini.app") || lower.contains("/gemini/")
+            || lower.contains("/antigravity/")
             || lower.contains("--app_data_dir antigravity") { return .app }
         return nil
     }

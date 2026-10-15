@@ -186,7 +186,7 @@ nonisolated enum FireworksUsageFetcher {
         startTime: Date? = nil,
         endTime: Date? = nil
     ) throws -> URL {
-        guard accountSlug.rangeOfCharacter(from: accountSlugAllowedCharacters.inverted) == nil,
+        guard isValidAccountSlug(accountSlug),
               var components = URLComponents(
                 string: "https://api.fireworks.ai/v1/accounts/\(accountSlug)/billing/summary"
               )
@@ -215,8 +215,13 @@ nonisolated enum FireworksUsageFetcher {
         var currency: String?
         var total = 0.0
         for item in response.lineItems ?? [] {
+            if let nanos = item.totalCost?.nanos,
+               !(-9_007_199_254_740_991...9_007_199_254_740_991).contains(nanos) {
+                throw FireworksUsageError.parseFailed(AppLocalization.text("无效的计费金额", "Invalid rated cost"))
+            }
             guard let cost = item.totalCost,
                   let units = cost.units.flatMap(Double.init),
+                  units.isFinite,
                   let nanos = cost.nanos,
                   let code = cost.currencyCode?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !code.isEmpty
@@ -224,6 +229,9 @@ nonisolated enum FireworksUsageFetcher {
             if currency == nil { currency = code }
             guard code == currency else { continue }
             total += units + Double(nanos) / 1_000_000_000
+        }
+        guard total.isFinite else {
+            throw FireworksUsageError.parseFailed(AppLocalization.text("计费金额不是有限数值", "Nonfinite spend"))
         }
 
         return FireworksUsageSummary(
@@ -372,7 +380,8 @@ nonisolated enum FireworksUsageFetcher {
     }
 
     private static func isValidAccountSlug(_ slug: String) -> Bool {
-        !slug.isEmpty && slug.rangeOfCharacter(from: accountSlugAllowedCharacters.inverted) == nil
+        !slug.isEmpty && slug != "." && slug != ".." && slug.count <= 256
+            && slug.rangeOfCharacter(from: accountSlugAllowedCharacters.inverted) == nil
     }
 
     private static func cleanedEnvironmentValue(

@@ -70,7 +70,7 @@ struct OpenRouterUsageTests {
         #expect(usage.details.first { $0.label == "Today" }?.value == "$0.12")
         #expect(usage.details.first { $0.label == "This week" }?.value == "$0.74")
         #expect(usage.details.first { $0.label == "This month" }?.value == "$4.56")
-        #expect(usage.details.first { $0.label == "Rate limit" }?.value == "120 requests / 10s")
+        #expect(usage.details.first { $0.label == "Rate limit" } == nil)
     }
 
     @Test
@@ -81,7 +81,7 @@ struct OpenRouterUsageTests {
         #expect(usage.plan == nil)
         #expect(usage.windows.first?.detail == "剩余 $20.00")
         #expect(usage.details.first { $0.label == "API key limit" }?.value == "$30.00 · 消费上限，不是余额")
-        #expect(usage.details.first { $0.label == "Last 30 days" } == nil)
+        #expect(usage.details.first { $0.label == "Last 30 days" }?.value == "未配置管理 API Key")
     }
 
     @Test
@@ -100,9 +100,8 @@ struct OpenRouterUsageTests {
         #expect(throws: OpenRouterUsageError.self) {
             _ = try OpenRouterUsageFetcher.parseKeyUsage(Data(#"{"data":{"limit":"thirty"}}"#.utf8))
         }
-        #expect(throws: OpenRouterUsageError.self) {
-            _ = try OpenRouterUsageFetcher.parseKeyUsage(Data(#"{"data":{"rate_limit":{"requests":1.5,"interval":"10s"}}}"#.utf8))
-        }
+        let key = try OpenRouterUsageFetcher.parseKeyUsage(Data(#"{"data":{"rate_limit":{"requests":1.5,"interval":"10s"}}}"#.utf8))
+        #expect(key.limit == nil)
     }
 
     @Test
@@ -158,14 +157,14 @@ struct OpenRouterUsageTests {
             "https://proxy.example/api/v1/key",
         ])
         #expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer standard-key" })
-        #expect(requests[0].timeoutInterval == 15)
+        #expect(requests[0].timeoutInterval == 4)
         #expect(requests[0].value(forHTTPHeaderField: "HTTP-Referer") == "https://client.example")
         #expect(requests[0].value(forHTTPHeaderField: "X-Title") == "Usage client")
-        #expect(requests[1].timeoutInterval == 1)
+        #expect(requests[1].timeoutInterval == 4)
         #expect(requests[1].value(forHTTPHeaderField: "HTTP-Referer") == nil)
         #expect(requests[1].value(forHTTPHeaderField: "X-Title") == nil)
         #expect(usage.windows.first?.usedFraction == 0.25)
-        #expect(usage.details.first { $0.label == "Last 30 days" } == nil)
+        #expect(usage.details.first { $0.label == "Last 30 days" }?.value == "Management API key not configured")
     }
 
     @Test
@@ -185,7 +184,7 @@ struct OpenRouterUsageTests {
         #expect(usage.state == .ready)
         #expect(usage.balance == "$1.90")
         #expect(usage.windows.isEmpty)
-        #expect(usage.details.first { $0.label == "API key limit" } == nil)
+        #expect(usage.details.first { $0.label == "API key limit" }?.value == "Request returned HTTP 403")
     }
 
     @Test
@@ -227,7 +226,9 @@ struct OpenRouterUsageTests {
         #expect(usage.last30Days?.tokens == 155)
         #expect(abs((usage.last30Days?.valueUSD ?? -1) - 13.1) < 1e-9)
         #expect(usage.details.first { $0.label == "Last 30 days requests" }?.value == "3")
-        #expect(abs((usage.providerCost?.used ?? -1) - 13.1) < 1e-9)
+        #expect(usage.providerCost == nil)
+        #expect(usage.details.first { $0.id == "openrouter-history-cost" }?.value
+            == "$13.10 · includes $0.75 BYOK estimates")
     }
 
     @Test
@@ -291,7 +292,7 @@ struct OpenRouterUsageTests {
         #expect(usage.balance == "$60.00")
         #expect(usage.windows.first?.usedFraction == 0.25)
         #expect(usage.providerCost == nil)
-        #expect(usage.details.first { $0.label == "Last 30 days" } == nil)
+        #expect(usage.details.first { $0.label == "Last 30 days" }?.value == "Management API key required")
     }
 
     private static func snapshot(key: OpenRouterUsageFetcher.KeyUsage) -> OpenRouterUsageFetcher.Snapshot {

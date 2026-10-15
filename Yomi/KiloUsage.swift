@@ -15,11 +15,11 @@ enum KiloUsageError: LocalizedError, Equatable {
         case .missingCredentials:
             AppLocalization.text("未找到 Kilo API 凭据", "Kilo API credentials were not found")
         case let .cliSessionMissing(path):
-            AppLocalization.text("未找到 Kilo CLI 会话：\(path)", "Kilo CLI session was not found at \(path)")
+            AppLocalization.text("未找到 Kilo CLI 会话：\(path)，请运行 kilo auth login", "Kilo CLI session was not found at \(path). Run kilo auth login.")
         case let .cliSessionInvalid(path):
-            AppLocalization.text("Kilo CLI 会话无效：\(path)", "Kilo CLI session is invalid at \(path)")
+            AppLocalization.text("Kilo CLI 会话无效：\(path)，请运行 kilo auth login", "Kilo CLI session is invalid at \(path). Run kilo auth login.")
         case .unauthorized:
-            AppLocalization.text("Kilo 认证失败，请刷新凭据", "Kilo authentication failed. Refresh the credential.")
+            AppLocalization.text("Kilo 认证失败，请刷新 KILO_API_KEY 或运行 kilo auth login", "Kilo authentication failed. Refresh KILO_API_KEY or run kilo auth login.")
         case .endpointNotFound:
             AppLocalization.text("Kilo 用量接口不存在", "Kilo usage endpoint was not found")
         case let .serviceUnavailable(status):
@@ -156,8 +156,9 @@ nonisolated enum KiloUsageFetcher {
 
     static func providerUsage(_ snapshot: Snapshot, now: Date = Date()) -> ProviderUsage {
         var windows: [UsageWindow] = []
-        if let total = resolvedTotal(snapshot.creditsTotal, snapshot.creditsUsed, snapshot.creditsRemaining) {
-            let used = resolvedUsed(snapshot.creditsUsed, total, snapshot.creditsRemaining)
+        let creditsTotal = resolvedTotal(snapshot.creditsTotal, snapshot.creditsUsed, snapshot.creditsRemaining)
+        let creditsUsed = creditsTotal.map { resolvedUsed(snapshot.creditsUsed, $0, snapshot.creditsRemaining) }
+        if let total = creditsTotal, let used = creditsUsed, total.isFinite, used.isFinite {
             windows.append(UsageWindow(
                 id: "kilo-credits",
                 label: "Credits",
@@ -462,10 +463,8 @@ nonisolated enum KiloUsageFetcher {
 
     private static func compact(_ value: Double) -> String {
         guard value.isFinite else { return "—" }
-        if value.rounded(.towardZero) == value,
-           value >= Double(Int.min),
-           value <= Double(Int.max) {
-            return String(Int(value))
+        if value.rounded(.towardZero) == value {
+            return String(format: "%.0f", value)
         }
         return String(format: "%.2f", value)
     }

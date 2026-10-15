@@ -36,6 +36,7 @@ nonisolated enum JetBrainsUsageFetcher {
         let maximum: Double
         let available: Double
         let until: Date?
+        let topUpAvailableCredits: Double?
     }
 
     struct Refill: Sendable, Equatable {
@@ -145,13 +146,23 @@ nonisolated enum JetBrainsUsageFetcher {
     static func providerUsage(_ snapshot: Snapshot, now: Date = Date()) -> ProviderUsage {
         let quota = snapshot.quota
         let fraction = quota.maximum > 0 ? min(1, max(0, quota.used / quota.maximum)) : 0
+        let topUpBalance = quota.topUpAvailableCredits.map {
+            AppLocalization.text(String(format: "%.2f 点额度", $0), String(format: "%.2f credits", $0))
+        }
+        let details = topUpBalance.map {
+            [UsageDetail(
+                id: "jetbrains-top-up-balance",
+                label: AppLocalization.text("充值余额", "Top-up balance"),
+                value: $0
+            )]
+        } ?? []
         return ProviderUsage(
             id: ProviderID(rawValue: "jetbrains"), state: .ready,
             windows: [UsageWindow(
                 id: "jetbrains-current", label: "Current", usedFraction: fraction,
                 resetsAt: snapshot.refill?.next, detail: nil
             )],
-            balance: nil, plan: cleaned(quota.type), details: [], updatedAt: now, message: nil
+            balance: topUpBalance, plan: cleaned(quota.type), details: details, updatedAt: now, message: nil
         )
     }
 
@@ -168,13 +179,22 @@ nonisolated enum JetBrainsUsageFetcher {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw JetBrainsUsageError.parseFailed
         }
-        let used = number(object["current"]) ?? 0
-        let maximum = number(object["maximum"]) ?? 0
-        let tariff = object["tariffQuota"] as? [String: Any]
+        let tariff = (object["tariffQuota"] as? [String: Any]).flatMap { quota in
+            ["current", "maximum"].allSatisfy { number(quota[$0])?.isFinite == true } ? quota : nil
+        }
+        let balance = tariff ?? object
+        let used = number(balance["current"]) ?? 0
+        let maximum = number(balance["maximum"]) ?? 0
         let available = number(tariff?["available"]) ?? max(0, maximum - used)
+        let topUpAvailableCredits = (object["topUpQuota"] as? [String: Any]).flatMap { quota -> Double? in
+            guard let maximum = number(quota["maximum"]), maximum.isFinite, maximum > 0,
+                  let available = number(quota["available"]), available.isFinite, available >= 0 else { return nil }
+            return min(available, maximum) / 100_000
+        }
         return Quota(
             type: cleaned(object["type"] as? String), used: used, maximum: maximum,
-            available: available, until: parseDate(object["until"] as? String)
+            available: available, until: parseDate(object["until"] as? String),
+            topUpAvailableCredits: topUpAvailableCredits
         )
     }
 

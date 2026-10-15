@@ -4,6 +4,8 @@ import SweetCookieKit
 nonisolated enum CommandCodeUsageError: LocalizedError, Equatable {
     case missingCredentials
     case invalidCredentials
+    case missingAPIKey
+    case invalidAPIKey
     case networkError(String)
     case apiError(Int)
     case parseFailed(String)
@@ -20,6 +22,16 @@ nonisolated enum CommandCodeUsageError: LocalizedError, Equatable {
             AppLocalization.text(
                 "Command Code 会话已失效，请重新登录",
                 "The Command Code session has expired. Sign in again."
+            )
+        case .missingAPIKey:
+            AppLocalization.text(
+                "未找到 Command Code API Key，请在设置中填写或设置 COMMAND_CODE_API_KEY",
+                "No Command Code API key was found. Add one in Settings or set COMMAND_CODE_API_KEY."
+            )
+        case .invalidAPIKey:
+            AppLocalization.text(
+                "Command Code API Key 无效或已过期，请更新设置或 COMMAND_CODE_API_KEY",
+                "The Command Code API key is invalid or expired. Update Settings or COMMAND_CODE_API_KEY."
             )
         case let .networkError(message):
             AppLocalization.text(
@@ -49,11 +61,12 @@ nonisolated enum CommandCodePlanCatalog {
     struct Plan: Sendable, Equatable {
         let id: String
         let displayName: String
-        let monthlyCreditsUSD: Double
+        let monthlyCreditsUSD: Double?
     }
 
     static let plans = [
         Plan(id: "individual-go", displayName: "Go", monthlyCreditsUSD: 10),
+        Plan(id: "individual-go-v1", displayName: "Go", monthlyCreditsUSD: 10),
         Plan(id: "individual-goat", displayName: "GOAT", monthlyCreditsUSD: 70),
         Plan(id: "individual-pro", displayName: "Pro", monthlyCreditsUSD: 30),
         Plan(id: "individual-pro-v1", displayName: "Pro", monthlyCreditsUSD: 80),
@@ -88,7 +101,7 @@ nonisolated enum CommandCodeCookieHeader {
         guard let raw = cleaned(raw) else { return nil }
         if !raw.contains("="), !raw.contains(";") {
             return CommandCodeCookieOverride(
-                name: "__Secure-better-auth.session_token",
+                name: "__Secure-commandcode_prod_.session_token",
                 token: raw
             )
         }
@@ -139,6 +152,7 @@ nonisolated struct CommandCodeUsageSnapshot: Sendable, Equatable {
     let purchasedCredits: Double
     let premiumMonthlyCredits: Double
     let opensourceMonthlyCredits: Double
+    var monthlyCreditsGranted: Double? = nil
     let fiveHourWindow: CommandCodeUsageFetcher.RollingWindow?
     let weeklyWindow: CommandCodeUsageFetcher.RollingWindow?
     let plan: CommandCodePlanCatalog.Plan?
@@ -147,7 +161,10 @@ nonisolated struct CommandCodeUsageSnapshot: Sendable, Equatable {
     let subscriptionEnrichmentUnavailable: Bool
     let updatedAt: Date
 
-    var monthlyCreditsTotal: Double? { plan?.monthlyCreditsUSD }
+    var monthlyCreditsTotal: Double? {
+        if let granted = monthlyCreditsGranted, granted.isFinite, granted > 0 { return granted }
+        return plan?.monthlyCreditsUSD
+    }
 
     var monthlyCreditsUsed: Double? {
         guard let total = monthlyCreditsTotal else { return nil }
@@ -195,6 +212,11 @@ nonisolated struct CommandCodeUsageSnapshot: Sendable, Equatable {
 nonisolated enum CommandCodeUsageFetcher {
     typealias CacheUpdate = @Sendable (String?) async -> Void
 
+    private enum Credential: Sendable {
+        case cookieHeader(String)
+        case apiKey(String)
+    }
+
     struct CookieSession: Sendable, Equatable {
         let cookieHeader: String
         let sourceLabel: String
@@ -221,6 +243,7 @@ nonisolated enum CommandCodeUsageFetcher {
         let purchasedCredits: Double
         let premiumMonthlyCredits: Double
         let opensourceMonthlyCredits: Double
+        let monthlyCreditsGranted: Double?
         let fiveHourWindow: RollingWindow?
         let weeklyWindow: RollingWindow?
     }
@@ -251,6 +274,13 @@ nonisolated enum CommandCodeUsageFetcher {
         now: Date = Date(),
         joinGrace: Duration = subscriptionGrace
     ) async throws -> ProviderUsage {
+        let apiKey = cleaned(credential)
+        if source == .token || (source == .automatic && apiKey != nil) {
+            guard let apiKey else { throw CommandCodeUsageError.missingAPIKey }
+            return try await fetchSnapshot(
+                credential: .apiKey(apiKey), session: session, now: now, joinGrace: joinGrace
+            ).toProviderUsage()
+        }
         let sessions: [CookieSession]
         switch source {
         case .cookie:
@@ -273,7 +303,7 @@ nonisolated enum CommandCodeUsageFetcher {
             sessions,
             session: session,
             cacheUpdate: cacheUpdate,
-            shouldUpdateCache: source == .automatic || source == .account,
+            shouldUpdateCache: source == .automatic || source == .account || source == .cookie,
             now: now,
             joinGrace: joinGrace
         )
@@ -314,13 +344,24 @@ nonisolated enum CommandCodeUsageFetcher {
         now: Date = Date(),
         joinGrace: Duration = subscriptionGrace
     ) async throws -> CommandCodeUsageSnapshot {
+        try await fetchSnapshot(
+            credential: .cookieHeader(cookieHeader), session: session, now: now, joinGrace: joinGrace
+        )
+    }
+
+    private static func fetchSnapshot(
+        credential: Credential,
+        session: URLSession,
+        now: Date,
+        joinGrace: Duration
+    ) async throws -> CommandCodeUsageSnapshot {
         let subscriptionTask = Task<SubscriptionPayload?, Error> {
-            try await fetchSubscription(cookieHeader: cookieHeader, session: session)
+            try await fetchSubscription(credential: credential, session: session)
         }
         let credits: CreditsPayload
         do {
             credits = try await withTaskCancellationHandler {
-                try await fetchCredits(cookieHeader: cookieHeader, session: session)
+                try await fetchCredits(credential: credential, session: session)
             } onCancel: {
                 subscriptionTask.cancel()
             }
@@ -355,15 +396,16 @@ nonisolated enum CommandCodeUsageFetcher {
             enrichmentUnavailable = true
         }
 
-        let plan = subscription.flatMap { CommandCodePlanCatalog.plan(forID: $0.planID) }
-        if let subscription, subscription.status.lowercased() == "active", plan == nil {
-            throw CommandCodeUsageError.unknownPlan(subscription.planID)
+        let plan = subscription.map {
+            CommandCodePlanCatalog.plan(forID: $0.planID)
+                ?? CommandCodePlanCatalog.Plan(id: $0.planID, displayName: $0.planID, monthlyCreditsUSD: nil)
         }
         return CommandCodeUsageSnapshot(
             monthlyCreditsRemaining: credits.monthlyCredits,
             purchasedCredits: credits.purchasedCredits,
             premiumMonthlyCredits: credits.premiumMonthlyCredits,
             opensourceMonthlyCredits: credits.opensourceMonthlyCredits,
+            monthlyCreditsGranted: credits.monthlyCreditsGranted,
             fiveHourWindow: credits.fiveHourWindow,
             weeklyWindow: credits.weeklyWindow,
             plan: plan,
@@ -391,6 +433,7 @@ nonisolated enum CommandCodeUsageFetcher {
             purchasedCredits: number(credits["purchasedCredits"]) ?? 0,
             premiumMonthlyCredits: number(credits["premiumMonthlyCredits"]) ?? 0,
             opensourceMonthlyCredits: number(credits["opensourceMonthlyCredits"]) ?? 0,
+            monthlyCreditsGranted: number(credits["monthlyCreditsGranted"]),
             fiveHourWindow: rollingWindow(limits?["fiveHour"], windowMinutes: 5 * 60),
             weeklyWindow: rollingWindow(limits?["weekly"], windowMinutes: 7 * 24 * 60)
         )
@@ -461,36 +504,45 @@ nonisolated enum CommandCodeUsageFetcher {
         CommandCodeImportSessionCache.shared.invalidate()
     }
 
-    private static func fetchCredits(cookieHeader: String, session: URLSession) async throws -> CreditsPayload {
-        let data = try await send(path: creditsPath, cookieHeader: cookieHeader, session: session)
+    private static func fetchCredits(credential: Credential, session: URLSession) async throws -> CreditsPayload {
+        let path = if case .apiKey = credential { "/alpha/billing/credits" } else { creditsPath }
+        let data = try await send(path: path, credential: credential, session: session)
         return try parseCredits(data: data)
     }
 
     private static func fetchSubscription(
-        cookieHeader: String,
+        credential: Credential,
         session: URLSession
     ) async throws -> SubscriptionPayload? {
-        let data = try await send(path: subscriptionsPath, cookieHeader: cookieHeader, session: session)
+        let path = if case .apiKey = credential { "/alpha/billing/subscriptions" } else { subscriptionsPath }
+        let data = try await send(path: path, credential: credential, session: session)
         return try parseSubscription(data: data)
     }
 
-    private static func send(path: String, cookieHeader: String, session: URLSession) async throws -> Data {
+    private static func send(path: String, credential: Credential, session: URLSession) async throws -> Data {
         let url = apiBase.appendingPathComponent(path)
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = requestTimeout
-        request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
-        request.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
-        request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
-        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue(webOrigin, forHTTPHeaderField: "Origin")
-        request.setValue("\(webOrigin)/", forHTTPHeaderField: "Referer")
+        switch credential {
+        case let .cookieHeader(cookieHeader):
+            request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+            request.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
+            request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+            request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+            request.setValue(webOrigin, forHTTPHeaderField: "Origin")
+            request.setValue("\(webOrigin)/", forHTTPHeaderField: "Referer")
+        case let .apiKey(apiKey):
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+        }
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw CommandCodeUsageError.networkError("Invalid response")
             }
             if http.statusCode == 401 || http.statusCode == 403 {
+                if case .apiKey = credential { throw CommandCodeUsageError.invalidAPIKey }
                 throw CommandCodeUsageError.invalidCredentials
             }
             guard (200..<300).contains(http.statusCode) else {

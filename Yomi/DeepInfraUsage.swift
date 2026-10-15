@@ -62,6 +62,21 @@ nonisolated struct DeepInfraUsageSnapshot: Sendable, Equatable {
                 balance: availableBalanceUSD
             ) : nil
         }
+        var details = [
+            UsageDetail(id: "deepinfra-balance", label: "Balance", value: balanceText),
+            UsageDetail(
+                id: "deepinfra-month-spend",
+                label: "This month spend",
+                value: Self.usd(currentMonthCostUSD)
+            ),
+        ]
+        if suspended {
+            let reason = suspendReason?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let status = reason.isEmpty
+                ? AppLocalization.text("已停用", "Suspended")
+                : AppLocalization.text("已停用：\(reason)", "Suspended: \(reason)")
+            details.append(UsageDetail(id: "deepinfra-status", label: "Status", value: status))
+        }
         return ProviderUsage(
             id: ProviderID(rawValue: "deepinfra"),
             state: .ready,
@@ -69,14 +84,7 @@ nonisolated struct DeepInfraUsageSnapshot: Sendable, Equatable {
             balance: balanceText,
             plan: nil,
             providerCost: providerCost,
-            details: [
-                UsageDetail(id: "deepinfra-balance", label: "Balance", value: balanceText),
-                UsageDetail(
-                    id: "deepinfra-month-spend",
-                    label: "This month spend",
-                    value: Self.usd(currentMonthCostUSD)
-                ),
-            ],
+            details: details,
             updatedAt: updatedAt,
             message: nil
         )
@@ -173,6 +181,9 @@ nonisolated enum DeepInfraUsageFetcher {
             let recent = max(0, checklist.recent)
             let currentMonth = usage.months.last.map { max(0, $0.totalCostCents / 100) } ?? recent
             let netBalance = checklist.stripeBalance + recent
+            guard netBalance.isFinite else {
+                throw DeepInfraUsageError.parseFailed(AppLocalization.text("账单数据无效", "Invalid billing data"))
+            }
             return DeepInfraUsageSnapshot(
                 availableBalanceUSD: max(0, -netBalance),
                 amountOwedUSD: max(0, netBalance),
@@ -183,6 +194,8 @@ nonisolated enum DeepInfraUsageFetcher {
                 suspendReason: checklist.suspendReason,
                 updatedAt: now
             )
+        } catch let error as DeepInfraUsageError {
+            throw error
         } catch {
             throw DeepInfraUsageError.parseFailed(error.localizedDescription)
         }

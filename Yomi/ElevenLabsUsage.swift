@@ -70,9 +70,11 @@ nonisolated struct ElevenLabsUsageSnapshot: Codable, Sendable, Equatable {
 
     private var displayTier: String? {
         guard let tier = tier?.trimmingCharacters(in: .whitespacesAndNewlines), !tier.isEmpty else {
-            return nil
+            return status
         }
-        return tier.replacingOccurrences(of: "_", with: " ").capitalized
+        let plan = tier.replacingOccurrences(of: "_", with: " ").capitalized
+        guard let status, !status.isEmpty, status.lowercased() != "active" else { return plan }
+        return "\(plan) · \(status)"
     }
 
     private static func usedFraction(used: Int, limit: Int) -> Double {
@@ -92,6 +94,10 @@ nonisolated struct ElevenLabsUsageSnapshot: Codable, Sendable, Equatable {
 
 nonisolated enum ElevenLabsUsageError: LocalizedError, Equatable {
     case missingCredentials
+    case invalidCredentials
+    case missingPermissions
+    case authenticationFailed
+    case accessDenied
     case invalidEndpointOverride(String)
     case networkError(String)
     case apiError(String)
@@ -103,6 +109,26 @@ nonisolated enum ElevenLabsUsageError: LocalizedError, Equatable {
             AppLocalization.text(
                 "缺少 ElevenLabs API Key",
                 "Missing ElevenLabs API key"
+            )
+        case .invalidCredentials:
+            AppLocalization.text(
+                "ElevenLabs 拒绝了当前 API Key，请检查它是否有效或已被撤销",
+                "ElevenLabs rejected the selected API key. Check that it is valid and has not been revoked."
+            )
+        case .missingPermissions:
+            AppLocalization.text(
+                "ElevenLabs API Key 缺少读取订阅用量所需的 user_read 权限",
+                "ElevenLabs API key is missing the user_read permission required to fetch subscription usage."
+            )
+        case .authenticationFailed:
+            AppLocalization.text(
+                "ElevenLabs 无法验证当前 API Key，请检查 Key 和权限",
+                "ElevenLabs could not authenticate the selected API key. Check the key and its permissions."
+            )
+        case .accessDenied:
+            AppLocalization.text(
+                "ElevenLabs 拒绝访问，请检查当前 API Key 的接口权限和 IP 白名单",
+                "ElevenLabs denied access for the selected API key. Check its endpoint permissions and IP allowlist."
             )
         case let .invalidEndpointOverride(key):
             AppLocalization.text(
@@ -129,6 +155,15 @@ nonisolated enum ElevenLabsUsageError: LocalizedError, Equatable {
 }
 
 nonisolated enum ElevenLabsUsageFetcher {
+    private struct APIErrorResponse: Decodable {
+        let detail: Detail
+
+        struct Detail: Decodable {
+            let code: String?
+            let status: String?
+        }
+    }
+
     private struct SubscriptionResponse: Decodable {
         let tier: String?
         let characterCount: Int
@@ -214,11 +249,33 @@ nonisolated enum ElevenLabsUsageFetcher {
         switch http.statusCode {
         case 200:
             return try parseSnapshot(data, updatedAt: now).providerUsage()
-        case 401, 403:
-            throw ElevenLabsUsageError.missingCredentials
+        case 401:
+            throw authenticationError(data)
+        case 403:
+            throw authenticationError(data, fallback: .accessDenied)
         default:
             throw ElevenLabsUsageError.apiError("HTTP \(http.statusCode)")
         }
+    }
+
+    private static func authenticationError(
+        _ data: Data,
+        fallback: ElevenLabsUsageError = .authenticationFailed
+    ) -> ElevenLabsUsageError {
+        guard let detail = try? JSONDecoder().decode(APIErrorResponse.self, from: data).detail else {
+            return fallback
+        }
+        for value in [detail.code, detail.status].compactMap({ $0 }) {
+            switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "invalid_api_key":
+                return .invalidCredentials
+            case "missing_permissions", "insufficient_permissions":
+                return .missingPermissions
+            default:
+                continue
+            }
+        }
+        return fallback
     }
 
     static func parseSnapshot(_ data: Data, updatedAt: Date) throws -> ElevenLabsUsageSnapshot {

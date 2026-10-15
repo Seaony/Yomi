@@ -211,16 +211,19 @@ nonisolated enum AlibabaCodingPlanFetcher {
             ],
         ]
         let paramsData = try JSONSerialization.data(withJSONObject: params)
-        var form = URLComponents()
-        form.queryItems = [
-            URLQueryItem(name: "params", value: String(decoding: paramsData, as: UTF8.self)),
-            URLQueryItem(name: "region", value: region.currentRegionID),
-            URLQueryItem(name: "sec_token", value: secToken),
-        ]
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "+&=")
+        let form = [
+            ("params", String(decoding: paramsData, as: UTF8.self)),
+            ("region", region.currentRegionID),
+            ("sec_token", secToken),
+        ].map { key, value in
+            "\(key)=\(value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value)"
+        }
         var request = URLRequest(url: components.url!)
         request.httpMethod = "POST"
         request.timeoutInterval = 18
-        request.httpBody = Data((form.percentEncodedQuery ?? "").utf8)
+        request.httpBody = Data(form.joined(separator: "&").utf8)
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue("*/*", forHTTPHeaderField: "Accept")
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
@@ -274,8 +277,7 @@ nonisolated enum AlibabaCodingPlanFetcher {
     private static func automaticCookie() -> String? {
         let client = BrowserCookieClient()
         let query = BrowserCookieQuery(domains: cookieDomains)
-        let browsers: [Browser] = [.chrome, .chromeBeta, .brave, .edge, .arc, .firefox, .safari]
-        for browser in browsers {
+        for browser in Browser.defaultImportOrder {
             guard let sources = try? client.records(matching: query, in: browser) else { continue }
             for source in sources {
                 let cookies = BrowserCookieClient.makeHTTPCookies(source.records, origin: query.origin)

@@ -255,11 +255,16 @@ struct DeepSeekUsageTests {
             now: now
         )
         let requests = recorder.requests
-        let detailRequests = requests.filter { $0.url?.path.contains("/usage/") == true }
+        let detailRequests = requests.filter {
+            $0.url?.path == DeepSeekUsageFetcher.usageAmountURL.path
+                || $0.url?.path == DeepSeekUsageFetcher.usageCostURL.path
+        }
 
-        #expect(requests.count == 3)
+        #expect(requests.count == 5)
         #expect(Set(requests.compactMap { $0.url?.path }) == Set([
             DeepSeekUsageFetcher.platformBalanceURL.path,
+            "/api/v0/usage/by_api_key/amount",
+            "/api/v0/usage/by_api_key/cost",
             DeepSeekUsageFetcher.usageAmountURL.path,
             DeepSeekUsageFetcher.usageCostURL.path,
         ]))

@@ -112,11 +112,15 @@ struct GroqUsageTests {
         let value = try GroqUsageFetcher.parsePrometheusScalar(Data("""
         {"status":"success","data":{"result":[
           {"value":[1710000000,"2.5"]},
-          {"value":[1710000000,1.5]},
-          {"value":null}
+          {"value":[1710000000,1.5]}
         ]}}
         """.utf8))
         #expect(value == 4)
+        #expect(throws: GroqUsageError.self) {
+            _ = try GroqUsageFetcher.parsePrometheusScalar(
+                Data(#"{"status":"success","data":{"result":[{"value":null}]}}"#.utf8)
+            )
+        }
         #expect(try GroqUsageFetcher.parsePrometheusScalar(
             Data(#"{"status":"success","data":{"result":[]}}"#.utf8)
         ) == 0)

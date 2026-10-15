@@ -138,7 +138,10 @@ struct WarpUsageTests {
         #expect(usage.additionalWindows[0].label == "Add-on credits")
         #expect(usage.additionalWindows[0].usedFraction == 0.7)
         #expect(usage.additionalWindows[0].resetsAt == nil)
-        #expect(usage.additionalWindows[0].detail == nil)
+        let expirationText = expiration.formatted(
+            Date.FormatStyle(date: .abbreviated, time: .shortened).locale(Locale(identifier: "en"))
+        )
+        #expect(usage.additionalWindows[0].detail == "10 credits expire on \(expirationText)")
         #expect(usage.balance == nil)
         #expect(usage.plan == nil)
         #expect(usage.updatedAt == now)

@@ -137,7 +137,7 @@ struct LocalDailyUsageScannerTests {
         let fast = await scan(LocalDailyUsageScanner(), provider: "codex", home: home, now: now)
         let standardCost = try #require(standard?.today?.valueUSD)
         let fastCost = try #require(fast?.today?.valueUSD)
-        #expect(abs(fastCost - standardCost * 2) < 1e-10)
+        #expect(abs(fastCost - standardCost) < 1e-10)
     }
 
     @Test(arguments: ["priority", "fast"])

@@ -131,6 +131,10 @@ nonisolated struct LocalTokenUsageSummary: Sendable {
     var last30DaysDaily: [DailyTokenUsagePoint]
 }
 
+nonisolated struct CodexResetCredit: Codable, Hashable, Sendable {
+    var expiresAt: Date?
+}
+
 nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
     enum State: String, Codable, Sendable {
         case ready
@@ -145,6 +149,7 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
     var additionalWindows: [UsageWindow] = []
     var balance: String?
     var plan: String?
+    var codexResetCredits: [CodexResetCredit]? = nil
     var today: DailyTokenUsage? = nil
     var todayDate: Date? = nil
     var todayRequests: DailyRequestUsage? = nil
@@ -167,6 +172,7 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         additionalWindows: [UsageWindow] = [],
         balance: String? = nil,
         plan: String? = nil,
+        codexResetCredits: [CodexResetCredit]? = nil,
         today: DailyTokenUsage? = nil,
         todayDate: Date? = nil,
         todayRequests: DailyRequestUsage? = nil,
@@ -188,6 +194,7 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         self.additionalWindows = additionalWindows
         self.balance = balance
         self.plan = plan
+        self.codexResetCredits = codexResetCredits
         self.today = today
         self.todayDate = todayDate ?? updatedAt
         self.todayRequests = todayRequests
@@ -213,6 +220,7 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         case last30DaysDaily
         case todayDate, todayRequests, last30DaysRequests
         case weeklyEstimate, providerCost, details, updatedAt, message
+        case codexResetCredits
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -223,6 +231,7 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         additionalWindows = try values.decodeIfPresent([UsageWindow].self, forKey: .additionalWindows) ?? []
         balance = try values.decodeIfPresent(String.self, forKey: .balance)
         plan = try values.decodeIfPresent(String.self, forKey: .plan)
+        codexResetCredits = try values.decodeIfPresent([CodexResetCredit].self, forKey: .codexResetCredits)
         today = try values.decodeIfPresent(DailyTokenUsage.self, forKey: .today)
         last30Days = try values.decodeIfPresent(DailyTokenUsage.self, forKey: .last30Days)
         last30DaysDaily = try values.decodeIfPresent(
@@ -250,6 +259,7 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         try values.encode(additionalWindows, forKey: .additionalWindows)
         try values.encodeIfPresent(balance, forKey: .balance)
         try values.encodeIfPresent(plan, forKey: .plan)
+        try values.encodeIfPresent(codexResetCredits, forKey: .codexResetCredits)
         try values.encodeIfPresent(today, forKey: .today)
         try values.encodeIfPresent(todayDate, forKey: .todayDate)
         try values.encodeIfPresent(todayRequests, forKey: .todayRequests)

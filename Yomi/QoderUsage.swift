@@ -787,17 +787,19 @@ nonisolated enum QoderUsageFetcher {
         var results: [ImportedSession] = []
         for site in QoderWebSite.allCases {
             let query = cookieQuery(for: site)
-            guard let sources = try? client.records(matching: query, in: .chrome) else { continue }
-            for source in sources where !source.records.isEmpty {
-                let records = records(source.records, for: site)
-                let cookies = BrowserCookieClient.makeHTTPCookies(records, origin: query.origin)
-                guard !cookies.isEmpty else { continue }
-                let header = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
-                guard !results.contains(where: { $0.cookieHeader == header && $0.site == site }) else { continue }
-                results.append(ImportedSession(
-                    cookieHeader: header,
-                    site: site
-                ))
+            for browser in Browser.defaultImportOrder {
+                guard let sources = try? client.records(matching: query, in: browser) else { continue }
+                for source in sources where !source.records.isEmpty {
+                    let records = records(source.records, for: site)
+                    let cookies = BrowserCookieClient.makeHTTPCookies(records, origin: query.origin)
+                    guard !cookies.isEmpty else { continue }
+                    let header = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+                    guard !results.contains(where: { $0.cookieHeader == header && $0.site == site }) else { continue }
+                    results.append(ImportedSession(
+                        cookieHeader: header,
+                        site: site
+                    ))
+                }
             }
         }
         return results

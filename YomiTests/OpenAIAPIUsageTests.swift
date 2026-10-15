@@ -48,10 +48,10 @@ struct OpenAIAPIUsageTests {
 
         #expect(snapshot.history.costUSD == 1.25)
         #expect(snapshot.history.requests == 3)
-        #expect(snapshot.history.inputTokens == 110)
+        #expect(snapshot.history.inputTokens == 100)
         #expect(snapshot.history.cachedInputTokens == 25)
-        #expect(snapshot.history.outputTokens == 55)
-        #expect(snapshot.history.totalTokens == 165)
+        #expect(snapshot.history.outputTokens == 50)
+        #expect(snapshot.history.totalTokens == 150)
         #expect(snapshot.projectID == "proj_test")
         #expect(snapshot.topModel?.name == "gpt-test")
     }

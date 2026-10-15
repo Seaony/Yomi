@@ -243,6 +243,14 @@ nonisolated enum CodexUsageFetcher {
         cliLoader: @escaping @Sendable ([String: String]) async throws -> ProviderUsage = fetchCLI
     ) async throws -> ProviderUsage {
         let selected = CodexUsageSource.selected(by: source)
+        let cliUsage: @Sendable () async throws -> ProviderUsage = {
+            var usage = try await cliLoader(environment)
+            if let auth = try? CodexAuthStore.load(environment: environment) {
+                usage.codexResetCredits = try await fetchResetCredits(
+                    auth: auth, session: session, environment: environment, now: now)
+            }
+            return usage
+        }
         return try await execute(order: selected.strategyOrder) { strategy in
             switch strategy {
             case .api:
@@ -256,10 +264,10 @@ nonisolated enum CodexUsageFetcher {
                 do {
                     return try await fetchOAuth(session: session, environment: environment, now: now)
                 } catch CodexUsageError.oauthRefreshRequired {
-                    return try await cliLoader(environment)
+                    return try await cliUsage()
                 }
             case .cli:
-                return try await cliLoader(environment)
+                return try await cliUsage()
             case .web:
                 return try await fetchWeb(
                     manualCookie: configuredCredential,
@@ -347,7 +355,66 @@ nonisolated enum CodexUsageFetcher {
             request.setValue(accountID, forHTTPHeaderField: "ChatGPT-Account-Id")
         }
         let data = try await perform(request, session: session)
-        return try parseUsage(data, now: now)
+        var usage = try parseUsage(data, now: now)
+        usage.codexResetCredits = try await fetchResetCredits(
+            auth: auth, session: session, environment: environment, now: now)
+        return usage
+    }
+
+    private struct ResetCreditsResponse: Decodable {
+        struct Credit: Decodable {
+            let status: String
+            let expiresAt: Date?
+        }
+        let credits: [Credit]
+        let availableCount: Int
+    }
+
+    private static func fetchResetCredits(
+        auth: CodexAuthSnapshot, session: URLSession, environment: [String: String], now: Date
+    ) async throws -> [CodexResetCredit]? {
+        guard auth.apiKey == nil, let token = auth.accessToken, !auth.oauthNeedsRefresh(now: now) else {
+            return nil
+        }
+        do {
+            try Task.checkCancellation()
+            let usageURL = resolvedUsageURL(environment: environment).absoluteString
+            let suffix = usageURL.hasSuffix("/wham/usage") ? "/wham/usage" : "/api/codex/usage"
+            guard let url = URL(string: String(usageURL.dropLast(suffix.count)) + "/wham/rate-limit-reset-credits")
+            else { return nil }
+            var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 4)
+            request.httpMethod = "GET"
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("Yomi", forHTTPHeaderField: "User-Agent")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            request.setValue("codex-1", forHTTPHeaderField: "OpenAI-Beta")
+            request.setValue("Codex Desktop", forHTTPHeaderField: "originator")
+            request.setValue(auth.accountID, forHTTPHeaderField: "ChatGPT-Account-ID")
+            let data = try await perform(request, session: session)
+            try Task.checkCancellation()
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            decoder.dateDecodingStrategy = .custom { decoder in
+                let raw = try decoder.singleValueContainer().decode(String.self)
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                guard let date = formatter.date(from: raw) ?? ISO8601DateFormatter().date(from: raw) else {
+                    throw CodexUsageError.invalidResponse
+                }
+                return date
+            }
+            let response = try decoder.decode(ResetCreditsResponse.self, from: data)
+            guard response.availableCount >= 0 else { return nil }
+            return response.credits.compactMap { credit in
+                guard credit.status == "available", credit.expiresAt.map({ $0 > now }) ?? true else {
+                    return nil
+                }
+                return CodexResetCredit(expiresAt: credit.expiresAt)
+            }
+        } catch {
+            if error is CancellationError || Task.isCancelled { throw CancellationError() }
+            return nil
+        }
     }
 
     static func fetchWeb(
@@ -402,14 +469,15 @@ nonisolated enum CodexUsageFetcher {
             rpcWindow(response.rateLimits.secondary, id: "codex-secondary", fallbackLabel: "Weekly"),
         ].compactMap { $0 }
         windows = normalizeWindows(windows)
-        guard !windows.isEmpty || response.rateLimits.credits?.balance != nil else {
+        let balance = formattedCredits(response.rateLimits.credits?.balance)
+        guard !windows.isEmpty || balance != nil else {
             throw CodexUsageError.invalidResponse
         }
         return ProviderUsage(
             id: ProviderID(rawValue: "codex"),
             state: .ready,
             windows: windows,
-            balance: response.rateLimits.credits?.balance,
+            balance: balance,
             plan: response.rateLimits.planType.flatMap(displayPlan),
             details: [],
             updatedAt: Date()
@@ -428,12 +496,13 @@ nonisolated enum CodexUsageFetcher {
             rpcWindow(response.rateLimits.secondary, id: "codex-secondary", fallbackLabel: "Weekly"),
         ].compactMap { $0 }
         windows = normalizeWindows(windows)
-        guard !windows.isEmpty || response.rateLimits.credits?.balance != nil else {
+        let balance = formattedCredits(response.rateLimits.credits?.balance)
+        guard !windows.isEmpty || balance != nil else {
             throw CodexUsageError.invalidResponse
         }
         return ProviderUsage(
             id: ProviderID(rawValue: "codex"), state: .ready, windows: windows,
-            balance: response.rateLimits.credits?.balance,
+            balance: balance,
             plan: response.rateLimits.planType.flatMap(displayPlan),
             details: [], updatedAt: now)
     }
@@ -516,9 +585,37 @@ nonisolated enum CodexUsageFetcher {
     }
 
     private static func parseUsage(_ data: Data, now: Date) throws -> ProviderUsage {
-        var usage = try UsageParser.parse(data, descriptor: descriptor)
+        guard let response = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw CodexUsageError.invalidResponse
+        }
+        let credits = response["credits"] as? [String: Any]
+        let balance = formattedCredits(credits?["balance"])
+        var parsed = try? UsageParser.parse(data, descriptor: descriptor)
+        if parsed == nil, let balance {
+            parsed = ProviderUsage(
+                id: descriptor.id, state: .ready, windows: [], balance: balance,
+                plan: ((response["plan_type"] as? String) ?? (response["planType"] as? String))
+                    .flatMap(displayPlan),
+                updatedAt: now)
+        }
+        guard var usage = parsed else { throw CodexUsageError.invalidResponse }
+        usage.balance = balance
         usage.updatedAt = now
         return usage
+    }
+
+    private static func formattedCredits(_ value: Any?) -> String? {
+        let raw: String
+        switch value {
+        case let value as String:
+            raw = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        case let value as NSNumber where CFGetTypeID(value) != CFBooleanGetTypeID():
+            raw = value.stringValue
+        default:
+            return nil
+        }
+        guard let number = Double(raw), number.isFinite else { return nil }
+        return AppLocalization.text("\(raw) 积分", "\(raw) credits")
     }
 
     private static func applyPATHeaders(_ request: inout URLRequest, token: String, userAgent: String) {
@@ -553,7 +650,7 @@ nonisolated enum CodexUsageFetcher {
 
     private static func chatGPTBaseURL(in contents: String) -> String? {
         for rawLine in contents.split(whereSeparator: \.isNewline) {
-            let line = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: true).first?
+            let line = rawLine.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let parts = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: true)
             guard parts.count == 2,

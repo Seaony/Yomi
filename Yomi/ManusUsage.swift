@@ -23,6 +23,9 @@ nonisolated enum ManusUsageFetcher {
 
         init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
+            guard values.allKeys.contains(where: { $0 != .nextRefreshTime && $0 != .refreshInterval }) else {
+                throw UsageCollectionError.unreadableResponse
+            }
             totalCredits = Self.number(values, .totalCredits) ?? 0
             freeCredits = Self.number(values, .freeCredits) ?? 0
             periodicCredits = Self.number(values, .periodicCredits) ?? 0
@@ -52,18 +55,28 @@ nonisolated enum ManusUsageFetcher {
             if let value = try? values.decodeIfPresent(String.self, forKey: key) {
                 return ISO8601DateFormatter().date(from: value)
             }
-            if let value = Self.number(values, key) {
-                return Date(timeIntervalSince1970: value > 1_000_000_000_000 ? value / 1000 : value)
+            if let value = try? values.decodeIfPresent(Double.self, forKey: key) {
+                return Date(timeIntervalSinceReferenceDate: value)
             }
             return nil
         }
     }
 
     private struct Envelope: Decodable {
-        var data: Credits?
-        var result: Credits?
-        var response: Credits?
-        var availableCredits: Credits?
+        let credits: Credits
+
+        private enum CodingKeys: String, CodingKey {
+            case data, result, response, availableCredits
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            credits = try values.decodeIfPresent(Credits.self, forKey: .data)
+                ?? values.decodeIfPresent(Credits.self, forKey: .result)
+                ?? values.decodeIfPresent(Credits.self, forKey: .response)
+                ?? values.decodeIfPresent(Credits.self, forKey: .availableCredits)
+                ?? Credits(from: decoder)
+        }
     }
 
     private static let url = URL(string: "https://api.manus.im/user.v1.UserService/GetAvailableCredits")!
@@ -77,7 +90,8 @@ nonisolated enum ManusUsageFetcher {
     ) async throws -> ProviderUsage {
         var tokens: [String] = []
         let configured = token(from: credential)
-        if source == .cookie, let configured {
+        if source == .cookie {
+            guard let configured else { throw UsageCollectionError.missingCredential }
             tokens = [configured]
         } else {
             if source == .automatic { tokens += automaticTokens() }
@@ -124,16 +138,10 @@ nonisolated enum ManusUsageFetcher {
     }
 
     static func parse(data: Data) throws -> Credits {
-        let decoder = JSONDecoder()
-        if let envelope = try? decoder.decode(Envelope.self, from: data),
-           let response = envelope.data ?? envelope.result ?? envelope.response ?? envelope.availableCredits {
-            return response
+        guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else {
+            throw UsageCollectionError.unreadableResponse
         }
-        guard let response = try? decoder.decode(Credits.self, from: data),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              !expectedKeys.isDisjoint(with: root.keys)
-        else { throw UsageCollectionError.unreadableResponse }
-        return response
+        return envelope.credits
     }
 
     static func providerUsage(credits: Credits, now: Date = Date()) -> ProviderUsage {
@@ -201,9 +209,8 @@ nonisolated enum ManusUsageFetcher {
     private static func automaticTokens() -> [String] {
         let client = BrowserCookieClient()
         let query = BrowserCookieQuery(domains: cookieDomains)
-        let browsers: [Browser] = [.chrome, .chromeBeta, .brave, .edge, .arc, .firefox, .safari]
         var tokens: [String] = []
-        for browser in browsers {
+        for browser in Browser.defaultImportOrder {
             guard let sources = try? client.records(matching: query, in: browser) else { continue }
             let grouped = Dictionary(grouping: sources, by: { $0.store.profile.id })
             for group in grouped.values {
@@ -218,11 +225,6 @@ nonisolated enum ManusUsageFetcher {
         }
         return tokens
     }
-
-    private static let expectedKeys: Set<String> = [
-        "totalCredits", "freeCredits", "periodicCredits", "addonCredits",
-        "refreshCredits", "maxRefreshCredits", "proMonthlyCredits", "eventCredits",
-    ]
 
     private static func format(_ value: Double) -> String {
         let formatter = NumberFormatter()

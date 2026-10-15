@@ -20,8 +20,13 @@ enum OpenCodeGoLocalUsageReader {
         let thirtyDayStart = calendar.date(byAdding: .day, value: -29, to: todayStart) ?? todayStart
         let today = rows.filter { $0.date >= todayStart && $0.date <= now }
         let last30Days = rows.filter { $0.date >= thirtyDayStart && $0.date <= now }
-        enriched.today = nil
-        enriched.last30Days = nil
+        enriched.today = tokenUsage(today)
+        enriched.last30Days = tokenUsage(last30Days)
+        enriched.last30DaysDaily = Dictionary(grouping: last30Days) { calendar.startOfDay(for: $0.date) }
+            .compactMap { date, rows in
+                tokenUsage(rows).map { DailyTokenUsagePoint(date: date, usage: $0) }
+            }
+            .sorted { $0.date < $1.date }
         enriched.todayDate = now
         enriched.todayRequests = nil
         enriched.last30DaysRequests = nil
@@ -51,9 +56,24 @@ enum OpenCodeGoLocalUsageReader {
             return OpenCodeGoLocalRow(
                 date: Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1000),
                 cost: cost,
-                requestCount: max(1, requests)
+                requestCount: max(1, requests),
+                tokens: fields.count > 3
+                    ? (try? JSONDecoder().decode(TokenCounts.self, from: Data(fields[3].utf8)))?.resolvedTotal
+                    : nil
             )
         }
+    }
+
+    private nonisolated static func tokenUsage(_ rows: [OpenCodeGoLocalRow]) -> DailyTokenUsage? {
+        guard !rows.isEmpty else { return nil }
+        var total: Int64 = 0
+        for row in rows {
+            guard let tokens = row.tokens else { return nil }
+            let sum = total.addingReportingOverflow(tokens)
+            guard !sum.overflow else { return nil }
+            total = sum.partialValue
+        }
+        return DailyTokenUsage(tokens: total, valueUSD: rows.reduce(0) { $0 + $1.cost })
     }
 
     private nonisolated static func readRows(since start: Date) -> [OpenCodeGoLocalRow]? {
@@ -96,7 +116,8 @@ enum OpenCodeGoLocalUsageReader {
         SELECT
           CAST(COALESCE(json_extract(data, '$.time.created'), time_created) AS INTEGER),
           CAST(json_extract(data, '$.cost') AS REAL),
-          1
+          1,
+          CASE WHEN json_type(data, '$.tokens') = 'object' THEN json_extract(data, '$.tokens') END
         FROM message
         WHERE json_valid(data)
           AND json_extract(data, '$.providerID') = 'opencode-go'
@@ -113,37 +134,64 @@ enum OpenCodeGoLocalUsageReader {
           SELECT id AS messageID,
             CAST(COALESCE(json_extract(data, '$.time.created'), time_created) AS INTEGER) AS createdMs,
             CAST(json_extract(data, '$.cost') AS REAL) AS cost,
-            json_type(data, '$.cost') IN ('integer', 'real') AS hasCost
+            json_type(data, '$.cost') IN ('integer', 'real') AS hasCost,
+            CASE WHEN json_type(data, '$.tokens') = 'object' THEN json_extract(data, '$.tokens') END AS tokens
           FROM message
           WHERE json_valid(data)
             AND json_extract(data, '$.providerID') = 'opencode-go'
             AND json_extract(data, '$.role') = 'assistant'
-        ), part_counts AS (
-          SELECT m.messageID, COUNT(*) AS requestCount
-          FROM provider_messages m
-          JOIN part p ON p.message_id = m.messageID
-          WHERE json_valid(p.data)
-            AND json_extract(p.data, '$.type') = 'step-finish'
-          GROUP BY m.messageID
         )
-        SELECT m.createdMs, m.cost, COALESCE(p.requestCount, 1)
-        FROM provider_messages m
-        LEFT JOIN part_counts p ON p.messageID = m.messageID
-        WHERE m.hasCost AND m.createdMs >= \(minimumMilliseconds)
-        UNION ALL
         SELECT
           CAST(COALESCE(json_extract(p.data, '$.time.created'), p.time_created, m.createdMs) AS INTEGER),
           CAST(json_extract(p.data, '$.cost') AS REAL),
-          1
+          1,
+          CASE WHEN json_type(p.data, '$.tokens') = 'object' THEN json_extract(p.data, '$.tokens') END
         FROM part p
         JOIN provider_messages m ON m.messageID = p.message_id
-        WHERE NOT m.hasCost
-          AND json_valid(p.data)
+        WHERE json_valid(p.data)
           AND json_extract(p.data, '$.type') = 'step-finish'
           AND json_type(p.data, '$.cost') IN ('integer', 'real')
           AND CAST(COALESCE(json_extract(p.data, '$.time.created'), p.time_created, m.createdMs) AS INTEGER)
-            >= \(minimumMilliseconds);
+            >= \(minimumMilliseconds)
+        UNION ALL
+        SELECT m.createdMs, m.cost, 1, m.tokens
+        FROM provider_messages m
+        WHERE m.hasCost AND m.createdMs >= \(minimumMilliseconds)
+          AND NOT EXISTS (
+            SELECT 1 FROM part p
+            WHERE p.message_id = m.messageID
+              AND json_valid(p.data)
+              AND json_extract(p.data, '$.type') = 'step-finish'
+              AND json_type(p.data, '$.cost') IN ('integer', 'real')
+          );
         """
+    }
+
+    private nonisolated struct TokenCounts: Decodable {
+        struct Cache: Decodable {
+            let read: Int64?
+            let write: Int64?
+        }
+
+        let total: Int64?
+        let input: Int64?
+        let output: Int64?
+        let reasoning: Int64?
+        let cache: Cache?
+
+        var resolvedTotal: Int64? {
+            let components = [input, output, reasoning, cache?.read, cache?.write]
+            guard (components + [total]).allSatisfy({ ($0 ?? 0) >= 0 }) else { return nil }
+            if let total { return total }
+            var result: Int64 = 0
+            for component in components {
+                guard let component else { return nil }
+                let sum = result.addingReportingOverflow(component)
+                guard !sum.overflow else { return nil }
+                result = sum.partialValue
+            }
+            return result
+        }
     }
 }
 
@@ -151,4 +199,5 @@ struct OpenCodeGoLocalRow: Equatable {
     let date: Date
     let cost: Double
     let requestCount: Int
+    let tokens: Int64?
 }

@@ -452,14 +452,16 @@ nonisolated enum StepFunUsageFetcher {
     static func providerUsage(_ snapshot: StepFunUsageSnapshot) -> ProviderUsage {
         let plan = cleaned(snapshot.planName)
         let windows: [UsageWindow]
-        if snapshot.isCreditPlan, let creditLeftRate = snapshot.creditLeftRate {
-            windows = [UsageWindow(
-                id: "stepfun-credits",
-                label: "Credits",
-                usedFraction: clamped(1 - creditLeftRate),
-                resetsAt: snapshot.creditResetTime,
-                detail: nil
-            )]
+        if snapshot.isCreditPlan {
+            windows = snapshot.creditLeftRate.map { creditLeftRate in
+                [UsageWindow(
+                    id: "stepfun-credits",
+                    label: "Credits",
+                    usedFraction: clamped(1 - creditLeftRate),
+                    resetsAt: snapshot.creditResetTime,
+                    detail: nil
+                )]
+            } ?? []
         } else {
             windows = [
                 UsageWindow(
