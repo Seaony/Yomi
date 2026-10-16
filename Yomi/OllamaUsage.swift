@@ -435,7 +435,7 @@ nonisolated enum OllamaUsageFetcher {
         for browser in order {
             let sources: [BrowserCookieStoreRecords]
             do {
-                sources = try client.records(matching: query, in: browser)
+                sources = try BrowserCookieAccess.records(matching: query, in: browser, client: client)
             } catch let BrowserCookieError.accessDenied(deniedBrowser, _) {
                 let mapped: OllamaUsageError = deniedBrowser == .safari
                     ? .safariCookieAccessDenied

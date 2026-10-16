@@ -88,7 +88,7 @@ nonisolated enum HelmcodeUsageFetcher {
             for domain in candidate.cookieDomains {
                 let query = BrowserCookieQuery(domains: [domain, "www.\(domain)"], domainMatch: .exact)
                 for browser in Browser.defaultImportOrder {
-                    guard let sources = try? client.records(matching: query, in: browser) else { continue }
+                    guard let sources = try? BrowserCookieAccess.records(matching: query, in: browser, client: client) else { continue }
                     for imported in sources where !imported.records.isEmpty {
                         let cookies = BrowserCookieClient.makeHTTPCookies(imported.records, origin: query.origin)
                         let header = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")

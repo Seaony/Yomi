@@ -850,12 +850,43 @@ nonisolated enum KiroUsageFetcher {
             writeHandles = [stdout.fileHandleForWriting, stderr.fileHandleForWriting]
             stderr.fileHandleForReading.readabilityHandler = { handle in capture.append(handle.availableData) }
         }
-        readHandle.readabilityHandler = { handle in capture.append(handle.availableData) }
+        if !usePTY {
+            readHandle.readabilityHandler = { handle in capture.append(handle.availableData) }
+        }
+        defer {
+            if usePTY { writeHandles.forEach { try? $0.close() } }
+        }
+
+        func drainPTYOutput(waitMilliseconds: Int32 = 0) -> Bool {
+            var buffer = [UInt8](repeating: 0, count: 8_192)
+            let deadline = Date().addingTimeInterval(Double(waitMilliseconds) / 1_000)
+            while true {
+                if waitMilliseconds > 0, Date() >= deadline { return false }
+                var descriptor = pollfd(fd: readHandle.fileDescriptor, events: Int16(POLLIN), revents: 0)
+                let remaining = max(0, Int32(deadline.timeIntervalSinceNow * 1_000))
+                let ready = poll(&descriptor, 1, waitMilliseconds > 0 ? remaining : 0)
+                if ready == 0 { return false }
+                if ready < 0 {
+                    if errno == EINTR { continue }
+                    return false
+                }
+                let count = buffer.withUnsafeMutableBytes { bytes in
+                    Darwin.read(readHandle.fileDescriptor, bytes.baseAddress, bytes.count)
+                }
+                if count > 0 {
+                    capture.append(Data(buffer.prefix(count)))
+                } else if count < 0, errno == EINTR {
+                    continue
+                } else {
+                    return count == 0 || errno == EIO
+                }
+            }
+        }
 
         do {
             try process.run()
             _ = setpgid(process.processIdentifier, process.processIdentifier)
-            writeHandles.forEach { try? $0.close() }
+            if !usePTY { writeHandles.forEach { try? $0.close() } }
         } catch {
             readHandle.readabilityHandler = nil
             try? readHandle.close()
@@ -869,6 +900,7 @@ nonisolated enum KiroUsageFetcher {
                 terminate(process)
                 throw CancellationError()
             }
+            if usePTY { _ = drainPTYOutput() }
             let snapshot = capture.snapshot()
             if Date() >= deadline {
                 terminate(process)
@@ -887,8 +919,15 @@ nonisolated enum KiroUsageFetcher {
         }
 
         process.waitUntilExit()
-        usleep(20_000)
-        readHandle.readabilityHandler = nil
+        if usePTY {
+            // 先收完缓冲再关 slave，避免快速退出时丢掉输出。
+            _ = drainPTYOutput()
+            writeHandles.forEach { try? $0.close() }
+            guard drainPTYOutput(waitMilliseconds: 1_000) else { throw KiroUsageError.timedOut }
+        } else {
+            usleep(20_000)
+            readHandle.readabilityHandler = nil
+        }
         let data = capture.snapshot().data
         try? readHandle.close()
         return CommandResult(

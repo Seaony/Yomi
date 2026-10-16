@@ -487,7 +487,7 @@ nonisolated enum MiMoUsageFetcher {
         let browsers: [Browser] = [.safari, .chrome, .chromeBeta, .chromeCanary, .firefox, .edge]
         var result: [String] = []
         for browser in browsers {
-            var sources = (try? client.records(matching: query, in: browser)) ?? []
+            var sources = (try? BrowserCookieAccess.records(matching: query, in: browser, client: client)) ?? []
             if browser == .firefox {
                 sources = MiMoFirefoxSessionCookieImporter.resolvedSources(
                     persisted: sources,

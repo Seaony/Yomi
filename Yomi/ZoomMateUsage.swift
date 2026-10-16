@@ -265,7 +265,7 @@ nonisolated enum ZoomMateCookieImporter {
         let client = BrowserCookieClient()
         let query = BrowserCookieQuery(domains: ["zoommate.zoom.us", "ai.zoom.us", "zoom.us"])
         var sessions: [SessionInfo] = []
-        if let sources = try? client.records(matching: query, in: .chrome) {
+        if let sources = try? BrowserCookieAccess.records(matching: query, in: .chrome, client: client) {
             for source in sources where !source.records.isEmpty {
                 let headers = cookieHeaders(from: source.records)
                 guard !headers.isEmpty else { continue }

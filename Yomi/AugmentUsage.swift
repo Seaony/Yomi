@@ -212,7 +212,7 @@ nonisolated enum AugmentUsageFetcher {
         let query = BrowserCookieQuery(domains: ["augmentcode.com", "app.augmentcode.com"])
         let client = BrowserCookieClient()
         for browser in browserOrder {
-            guard let sources = try? client.records(matching: query, in: browser) else { continue }
+            guard let sources = try? BrowserCookieAccess.records(matching: query, in: browser, client: client) else { continue }
             for source in sources {
                 let cookies = BrowserCookieClient.makeHTTPCookies(source.records, origin: query.origin)
                 guard cookies.contains(where: { sessionCookieNames.contains($0.name) }) else { continue }

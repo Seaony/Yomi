@@ -406,7 +406,7 @@ nonisolated enum PerplexityUsageFetcher {
         let client = BrowserCookieClient()
         var result: [CookieOverride] = []
         for browser in Browser.defaultImportOrder {
-            guard let sources = try? client.records(matching: query, in: browser) else { continue }
+            guard let sources = try? BrowserCookieAccess.records(matching: query, in: browser, client: client) else { continue }
             let groups = Dictionary(grouping: sources, by: { $0.store.profile.id })
             for group in groups.values {
                 let cookies = group.flatMap {

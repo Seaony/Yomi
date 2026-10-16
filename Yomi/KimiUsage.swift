@@ -704,7 +704,7 @@ nonisolated enum KimiUsageFetcher {
         let query = BrowserCookieQuery(domains: ["www.\(region.domain)", region.domain], domainMatch: .exact)
         let client = BrowserCookieClient()
         for browser in Browser.defaultImportOrder {
-            guard let sources = try? client.records(matching: query, in: browser) else { continue }
+            guard let sources = try? BrowserCookieAccess.records(matching: query, in: browser, client: client) else { continue }
             for source in sources {
                 let cookies = BrowserCookieClient.makeHTTPCookies(source.records, origin: query.origin)
                 if let token = cookies.first(where: { $0.name == "kimi-auth" })?.value,

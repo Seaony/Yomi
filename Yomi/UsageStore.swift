@@ -11,20 +11,33 @@ final class UsageStore: ObservableObject {
     let preferences: ProviderPreferences
     private let collector: UsageCollector
     private let defaults: UserDefaults
-    private let cacheKey = "usage-cache.v2"
+    private let cacheKey = "usage-cache.v3"
     private var refreshLoop: Task<Void, Never>?
     private var preferenceObserver: AnyCancellable?
-    private var pendingFullRefresh = false
-    private var pendingProviderIDs: Set<ProviderID> = []
+    private var credentialObserver: AnyCancellable?
+    private var usageRevisions: [ProviderID: Int] = [:]
+    private var pendingFullRefresh: Bool?
+    private var pendingProviderIDs: [ProviderID: Bool] = [:]
+
+    private struct CachedUsage: Codable {
+        let usage: ProviderUsage
+        let revision: Int
+    }
 
     private enum RefreshRequest {
-        case all
-        case provider(ProviderID)
+        case all(Bool)
+        case provider(ProviderID, Bool)
 
         var providerID: ProviderID? {
             switch self {
             case .all: nil
-            case let .provider(id): id
+            case let .provider(id, _): id
+            }
+        }
+
+        var allowBrowserCookieImport: Bool {
+            switch self {
+            case let .all(allowed), let .provider(_, allowed): allowed
             }
         }
     }
@@ -48,6 +61,13 @@ final class UsageStore: ObservableObject {
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
+        credentialObserver = self.preferences.usageInvalidated
+            .sink { [weak self] id in
+                guard let self else { return }
+                self.usageByID.removeValue(forKey: id)
+                self.usageRevisions.removeValue(forKey: id)
+                self.persistCache()
+            }
     }
 
     deinit {
@@ -68,8 +88,9 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    func refresh(providerID: ProviderID? = nil) async {
-        let request = providerID.map(RefreshRequest.provider) ?? .all
+    func refresh(providerID: ProviderID? = nil, allowBrowserCookieImport: Bool = false) async {
+        let request = providerID.map { RefreshRequest.provider($0, allowBrowserCookieImport) }
+            ?? .all(allowBrowserCookieImport)
         guard !isRefreshing else {
             enqueue(request)
             return
@@ -79,36 +100,45 @@ final class UsageStore: ObservableObject {
 
         var nextRequest: RefreshRequest? = request
         while let currentRequest = nextRequest {
-            await performRefresh(providerID: currentRequest.providerID)
+            let scope = BrowserCookieAccess.Scope(allowInteraction: currentRequest.allowBrowserCookieImport)
+            await BrowserCookieAccess.$scope.withValue(scope) {
+                await performRefresh(
+                    providerID: currentRequest.providerID,
+                    allowBrowserCookieImport: currentRequest.allowBrowserCookieImport
+                )
+            }
             nextRequest = dequeueRefresh()
         }
     }
 
     private func enqueue(_ request: RefreshRequest) {
         switch request {
-        case .all:
-            pendingFullRefresh = true
-        case let .provider(id):
-            pendingProviderIDs.insert(id)
+        case let .all(allowed):
+            pendingFullRefresh = (pendingFullRefresh ?? false) || allowed
+        case let .provider(id, allowed):
+            pendingProviderIDs[id] = (pendingProviderIDs[id] ?? false) || allowed
         }
     }
 
     private func dequeueRefresh() -> RefreshRequest? {
-        if pendingFullRefresh {
-            pendingFullRefresh = false
-            return .all
+        if let allowed = pendingFullRefresh {
+            pendingFullRefresh = nil
+            return .all(allowed)
         }
-        guard let id = pendingProviderIDs.first else { return nil }
-        pendingProviderIDs.remove(id)
-        return .provider(id)
+        guard let (id, allowed) = pendingProviderIDs.first else { return nil }
+        pendingProviderIDs.removeValue(forKey: id)
+        return .provider(id, allowed)
     }
 
-    private func performRefresh(providerID: ProviderID?) async {
+    private func performRefresh(providerID: ProviderID?, allowBrowserCookieImport: Bool) async {
         let providers = enabledProviders.filter { providerID == nil || $0.id == providerID }
         let preferences = preferences
         let jobs = providers.map { descriptor in
             (descriptor, preferences.configuration(for: descriptor.id))
         }
+        let revisions = Dictionary(uniqueKeysWithValues: providers.map {
+            ($0.id, preferences.usageRevision(for: $0.id))
+        })
         let allowVertexClaudeFallback = !enabledProviders.contains { $0.id.rawValue == "claude" }
 
         var loadingUsage = usageByID
@@ -143,24 +173,32 @@ final class UsageStore: ObservableObject {
         usageByID = loadingUsage
         var refreshedUsage = loadingUsage
 
-        await withTaskGroup(of: ProviderUsage.self) { group in
+        await withTaskGroup(of: (ProviderUsage, Int).self) { group in
             let concurrencyLimit = 6
             var nextJobIndex = 0
 
             func submit(_ job: (ProviderDescriptor, ProviderConfiguration)) {
                 let (descriptor, configuration) = job
+                let revision = revisions[descriptor.id]!
                 group.addTask { [collector] in
                     do {
-                        let secret = preferences.secret(for: descriptor.id)
-                        return try await collector.collect(
+                        let secret = try await MainActor.run {
+                            guard revision == preferences.usageRevision(for: descriptor.id) else {
+                                throw CancellationError()
+                            }
+                            return preferences.secret(for: descriptor.id)
+                        }
+                        let usage = try await collector.collect(
                             descriptor: descriptor,
                             configuration: configuration,
                             secret: secret,
                             allowVertexClaudeFallback: allowVertexClaudeFallback,
-                            allowBrowserCookieImport: providerID != nil
+                            allowBrowserCookieImport: allowBrowserCookieImport,
+                            usageRevision: revision
                         )
+                        return (usage, revision)
                     } catch {
-                        return ProviderUsage(
+                        return (ProviderUsage(
                             id: descriptor.id,
                             state: .failed,
                             windows: [],
@@ -168,7 +206,7 @@ final class UsageStore: ObservableObject {
                             plan: nil,
                             updatedAt: Date(),
                             message: error.localizedDescription
-                        )
+                        ), revision)
                     }
                 }
             }
@@ -178,33 +216,38 @@ final class UsageStore: ObservableObject {
                 nextJobIndex += 1
             }
 
-            while let usage = await group.next() {
-                let resolvedUsage = Self.commandCodeUsageResolvingDepletionOnEnrichmentFailure(
-                    current: usage,
-                    previous: refreshedUsage[usage.id]
-                )
-                if resolvedUsage.state == .failed,
-                   var cached = refreshedUsage[resolvedUsage.id],
-                   Self.hasCacheableData(cached) {
-                    if cached.id.rawValue == "zai" {
-                        cached = Self.sanitizeCachedUsage(cached)
+            while let (usage, revision) = await group.next() {
+                if revision == preferences.usageRevision(for: usage.id) {
+                    let resolvedUsage = Self.commandCodeUsageResolvingDepletionOnEnrichmentFailure(
+                        current: usage,
+                        previous: refreshedUsage[usage.id]
+                    )
+                    if resolvedUsage.state == .failed,
+                       var cached = refreshedUsage[resolvedUsage.id],
+                       Self.hasCacheableData(cached) {
+                        if cached.id.rawValue == "zai" {
+                            cached = Self.sanitizeCachedUsage(cached)
+                        }
+                        if let descriptor = ProviderCatalog.byID[usage.id] {
+                            cached = await collector.enrichLocalMetadata(
+                                to: cached,
+                                descriptor: descriptor,
+                                allowVertexClaudeFallback: allowVertexClaudeFallback
+                            )
+                        }
+                        cached.codexResetCredits = nil
+                        cached.state = .unavailable
+                        cached.message = resolvedUsage.message
+                        refreshedUsage[resolvedUsage.id] = cached
+                    } else {
+                        refreshedUsage[resolvedUsage.id] = resolvedUsage
                     }
-                    if let descriptor = ProviderCatalog.byID[usage.id] {
-                        cached = await collector.enrichLocalMetadata(
-                            to: cached,
-                            descriptor: descriptor,
-                            allowVertexClaudeFallback: allowVertexClaudeFallback
-                        )
-                    }
-                    cached.codexResetCredits = nil
-                    cached.state = .unavailable
-                    cached.message = resolvedUsage.message
-                    refreshedUsage[resolvedUsage.id] = cached
-                } else {
-                    refreshedUsage[resolvedUsage.id] = resolvedUsage
-                }
 
-                usageByID[usage.id] = refreshedUsage[usage.id]
+                    if revision == preferences.usageRevision(for: usage.id) {
+                        usageByID[usage.id] = refreshedUsage[usage.id]
+                        usageRevisions[usage.id] = revision
+                    }
+                }
 
                 if nextJobIndex < jobs.count {
                     submit(jobs[nextJobIndex])
@@ -338,8 +381,10 @@ final class UsageStore: ObservableObject {
 
     private func restoreCache() {
         guard let data = defaults.data(forKey: cacheKey),
-              let cached = try? JSONDecoder().decode([ProviderUsage].self, from: data) else { return }
-        let sanitized = cached.map(Self.sanitizeCachedUsage)
+              let cached = try? JSONDecoder().decode([CachedUsage].self, from: data) else { return }
+        let current = cached.filter { $0.revision == preferences.usageRevision(for: $0.usage.id) }
+        usageRevisions = Dictionary(uniqueKeysWithValues: current.map { ($0.usage.id, $0.revision) })
+        let sanitized = current.map { Self.sanitizeCachedUsage($0.usage) }
         usageByID = Dictionary(uniqueKeysWithValues: sanitized.map { ($0.id, $0) })
     }
 
@@ -416,7 +461,11 @@ final class UsageStore: ObservableObject {
     }
 
     private func persistCache() {
-        let values = Array(usageByID.values).filter(Self.hasCacheableData)
+        let values = usageByID.values.compactMap { usage -> CachedUsage? in
+            guard Self.hasCacheableData(usage), let revision = usageRevisions[usage.id],
+                  revision == preferences.usageRevision(for: usage.id) else { return nil }
+            return CachedUsage(usage: usage, revision: revision)
+        }
         guard let data = try? JSONEncoder().encode(values) else { return }
         defaults.set(data, forKey: cacheKey)
     }

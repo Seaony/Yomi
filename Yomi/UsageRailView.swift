@@ -78,7 +78,8 @@ struct UsageRailView: View {
                                 await store.refresh(
                                     providerID: descriptor.id == ProviderCatalog.overview.id
                                         ? nil
-                                        : descriptor.id
+                                        : descriptor.id,
+                                    allowBrowserCookieImport: true
                                 )
                             }
                         } label: {

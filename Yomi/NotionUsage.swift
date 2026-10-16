@@ -566,7 +566,7 @@ nonisolated enum NotionUsageFetcher {
         if let cached = importCache.load(now: now) { return cached }
         let query = BrowserCookieQuery(domains: cookieDomains)
         let client = BrowserCookieClient()
-        guard let sources = try? client.records(matching: query, in: Browser.chrome) else {
+        guard let sources = try? BrowserCookieAccess.records(matching: query, in: Browser.chrome, client: client) else {
             throw NotionUsageError.noSessionCookie
         }
         for source in sources where !source.records.isEmpty {

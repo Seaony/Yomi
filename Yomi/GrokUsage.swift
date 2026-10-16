@@ -645,7 +645,7 @@ nonisolated enum GrokUsageFetcher {
     private static func importedChromeCookies() -> [String] {
         let query = BrowserCookieQuery(domains: ["grok.com"])
         let client = BrowserCookieClient()
-        guard let sources = try? client.records(matching: query, in: .chrome) else { return [] }
+        guard let sources = try? BrowserCookieAccess.records(matching: query, in: .chrome, client: client) else { return [] }
         let groups = Dictionary(grouping: sources, by: { $0.store.profile.id })
         return groups.values.compactMap { group in
             let records = group.flatMap(\.records)

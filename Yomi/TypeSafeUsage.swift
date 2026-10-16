@@ -242,7 +242,7 @@ nonisolated enum TypeSafeUsageFetcher {
         let client = BrowserCookieClient()
         var headers: [String] = []
         for browser in Browser.defaultImportOrder {
-            guard let sources = try? client.records(matching: query, in: browser) else { continue }
+            guard let sources = try? BrowserCookieAccess.records(matching: query, in: browser, client: client) else { continue }
             for source in sources {
                 let records = source.records.enumerated().filter { _, record in
                     let domain = record.domain.lowercased()

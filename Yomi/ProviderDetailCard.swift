@@ -489,7 +489,8 @@ struct ProviderDetailPanelView: View {
                     await store.refresh(
                         providerID: providerID == ProviderCatalog.overview.id
                             ? nil
-                            : providerID
+                            : providerID,
+                        allowBrowserCookieImport: true
                     )
                 }
             }

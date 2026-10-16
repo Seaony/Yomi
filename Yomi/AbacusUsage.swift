@@ -297,7 +297,7 @@ nonisolated enum AbacusUsageFetcher {
         let client = BrowserCookieClient()
         var headers: [String] = []
         for browser in browsers {
-            guard let sources = try? client.records(matching: query, in: browser) else { continue }
+            guard let sources = try? BrowserCookieAccess.records(matching: query, in: browser, client: client) else { continue }
             for source in sources where !source.records.isEmpty {
                 let cookies = BrowserCookieClient.makeHTTPCookies(source.records, origin: query.origin)
                 guard containsSessionCookie(cookies.map(\.name)) else { continue }

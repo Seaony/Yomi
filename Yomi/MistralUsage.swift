@@ -571,7 +571,7 @@ nonisolated enum MistralUsageFetcher {
         let client = BrowserCookieClient()
         var sessions: [CookieSession] = []
         for browser in browserOrder {
-            guard let sources = try? client.records(matching: query, in: browser) else { continue }
+            guard let sources = try? BrowserCookieAccess.records(matching: query, in: browser, client: client) else { continue }
             for source in sources where !source.records.isEmpty {
                 let cookies = BrowserCookieClient.makeHTTPCookies(source.records, origin: query.origin)
                 guard cookies.contains(where: { $0.name.hasPrefix("ory_session_") }) else { continue }

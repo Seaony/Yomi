@@ -682,6 +682,7 @@ private struct ProviderConfigurationView: View {
     @State private var bedrockRegion: String
     @State private var deepSeekProfiles: [DeepSeekPlatformTokenImporter.TokenInfo]
     @State private var saveMessage: String?
+    @State private var credentialReadError: String?
     @Environment(\.appLanguage) private var language
 
     private var copy: AppCopy { AppCopy(language: language) }
@@ -691,7 +692,16 @@ private struct ProviderConfigurationView: View {
         self.descriptor = descriptor
         let providerID = descriptor.id.rawValue
         var configuration = store.preferences.configuration(for: descriptor.id)
-        let secret = store.preferences.secret(for: descriptor.id)
+        var readError: String?
+        func readSecret(_ key: String? = nil) -> String {
+            do {
+                return try store.preferences.editableSecret(for: descriptor.id, key: key)
+            } catch {
+                readError = error.localizedDescription
+                return ""
+            }
+        }
+        let secret = readSecret()
         if descriptor.id.rawValue == "moonshot" {
             if !secret.isEmpty, configuration.endpoint.isEmpty {
                 configuration.endpoint = MoonshotUsageRegion.china.rawValue
@@ -715,13 +725,13 @@ private struct ProviderConfigurationView: View {
         _configuration = State(initialValue: configuration)
         _secret = State(initialValue: secret)
         _managementSecret = State(initialValue: providerID == "openrouter"
-            ? store.preferences.auxiliarySecret(for: descriptor.id, key: "management-api-key")
+            ? readSecret("management-api-key")
             : "")
         _secondarySecret = State(initialValue: providerID == "doubao" || providerID == "bedrock"
-            ? store.preferences.auxiliarySecret(for: descriptor.id, key: "secret-access-key")
+            ? readSecret("secret-access-key")
             : "")
         let storedBedrockAuthMode = providerID == "bedrock"
-            ? store.preferences.auxiliarySecret(for: descriptor.id, key: "aws-auth-mode")
+            ? readSecret("aws-auth-mode")
             : ""
         let initialBedrockAuthMode: String
         if providerID != "bedrock" {
@@ -736,13 +746,13 @@ private struct ProviderConfigurationView: View {
         }
         _bedrockAuthMode = State(initialValue: initialBedrockAuthMode)
         _bedrockProfile = State(initialValue: providerID == "bedrock"
-            ? store.preferences.auxiliarySecret(for: descriptor.id, key: "aws-profile")
+            ? readSecret("aws-profile")
             : "")
         _bedrockRegion = State(initialValue: providerID == "bedrock"
-            ? store.preferences.auxiliarySecret(for: descriptor.id, key: "aws-region")
+            ? readSecret("aws-region")
             : "")
         let storedStepFunManualToken = providerID == "stepfun"
-            ? store.preferences.auxiliarySecret(for: descriptor.id, key: "manual-token")
+            ? readSecret("manual-token")
             : ""
         _stepFunManualToken = State(initialValue: providerID == "stepfun"
             && configuration.source == .token
@@ -750,6 +760,8 @@ private struct ProviderConfigurationView: View {
             ? secret
             : storedStepFunManualToken)
         _deepSeekProfiles = State(initialValue: [])
+        _credentialReadError = State(initialValue: readError)
+        _saveMessage = State(initialValue: readError)
     }
 
     var body: some View {
@@ -1066,7 +1078,7 @@ private struct ProviderConfigurationView: View {
                             .font(.system(size: 12.5, weight: .semibold))
                         Spacer()
                         Button(copy.text("刷新此 Provider", "Refresh provider")) {
-                            saveAndRefresh()
+                            saveAndRefresh(allowBrowserCookieImport: true)
                         }
                         .buttonStyle(SettingsPressButtonStyle())
                         .font(.system(size: 11.5, weight: .semibold))
@@ -1488,14 +1500,24 @@ private struct ProviderConfigurationView: View {
         }
     }
 
-    private func saveAndRefresh() {
+    private func saveAndRefresh(allowBrowserCookieImport: Bool = false) {
         guard save() else { return }
-        Task { await store.refresh(providerID: descriptor.id) }
+        Task {
+            await store.refresh(providerID: descriptor.id, allowBrowserCookieImport: allowBrowserCookieImport)
+        }
     }
 
     @discardableResult
     private func save() -> Bool {
+        if let credentialReadError {
+            saveMessage = copy.text(
+                "凭据读取失败，请重新打开此 Provider 设置后再保存：\(credentialReadError)",
+                "Credentials could not be read. Reopen this provider's settings before saving: \(credentialReadError)"
+            )
+            return false
+        }
         do {
+            try store.preferences.validateConfiguration()
             if descriptor.id.rawValue == "moonshot" {
                 configuration.endpoint = secret.isEmpty ? "" : configuration.account
             }

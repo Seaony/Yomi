@@ -7,6 +7,7 @@ enum UsageCollectionError: LocalizedError {
     case unreadableResponse
     case requestFailed(Int)
     case commandFailed(String)
+    case browserAccessFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -20,6 +21,8 @@ enum UsageCollectionError: LocalizedError {
             AppLocalization.text("请求失败（HTTP \(status)）", "Request failed (HTTP \(status))")
         case let .commandFailed(message):
             AppLocalization.text("命令执行失败：\(message)", "Command failed: \(message)")
+        case let .browserAccessFailed(message):
+            message
         }
     }
 }
@@ -53,14 +56,32 @@ actor UsageCollector {
         configuration: ProviderConfiguration,
         secret: String,
         allowVertexClaudeFallback: Bool = false,
-        allowBrowserCookieImport: Bool = false
+        allowBrowserCookieImport: Bool = false,
+        usageRevision: Int? = nil
     ) async throws -> ProviderUsage {
-        let usage = try await collectRaw(
-            descriptor: descriptor,
-            configuration: configuration,
-            secret: secret,
-            allowBrowserCookieImport: allowBrowserCookieImport
+        let scope = BrowserCookieAccess.Scope(
+            allowInteraction: allowBrowserCookieImport,
+            sharingAllowanceFrom: BrowserCookieAccess.scope
         )
+        let usage: ProviderUsage
+        do {
+            usage = try await BrowserCookieAccess.$scope.withValue(scope) {
+                try await collectRaw(
+                    descriptor: descriptor,
+                    configuration: configuration,
+                    secret: secret,
+                    allowBrowserCookieImport: allowBrowserCookieImport,
+                    usageRevision: usageRevision
+                )
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw error
+        } catch {
+            guard let message = scope.failureMessage else { throw error }
+            throw UsageCollectionError.browserAccessFailed(error.localizedDescription + "\n" + message)
+        }
         if descriptor.id.rawValue == "opencodego" {
             return OpenCodeGoLocalUsageReader.enrich(usage)
         }
@@ -112,7 +133,8 @@ actor UsageCollector {
         descriptor: ProviderDescriptor,
         configuration: ProviderConfiguration,
         secret: String,
-        allowBrowserCookieImport: Bool
+        allowBrowserCookieImport: Bool,
+        usageRevision: Int?
     ) async throws -> ProviderUsage {
         let secret = secret.trimmingCharacters(in: .whitespacesAndNewlines)
         if descriptor.id.rawValue == "clinepass" {
@@ -145,7 +167,7 @@ actor UsageCollector {
                         try? ProviderPreferences.shared.setAuxiliarySecret(
                             value ?? "",
                             for: descriptor.id,
-                            key: "imported-cookie"
+                            key: "imported-cookie", invalidatesUsage: false, expectedRevision: usageRevision
                         )
                     }
                 }
@@ -246,7 +268,7 @@ actor UsageCollector {
                         try? ProviderPreferences.shared.setAuxiliarySecret(
                             token ?? "",
                             for: descriptor.id,
-                            key: "session-token"
+                            key: "session-token", invalidatesUsage: false, expectedRevision: usageRevision
                         )
                     }
                 },
@@ -255,7 +277,7 @@ actor UsageCollector {
                         try? ProviderPreferences.shared.setAuxiliarySecret(
                             token,
                             for: descriptor.id,
-                            key: "manual-token"
+                            key: "manual-token", invalidatesUsage: false, expectedRevision: usageRevision
                         )
                     }
                 }
@@ -285,7 +307,7 @@ actor UsageCollector {
                         try? ProviderPreferences.shared.setAuxiliarySecret(
                             value ?? "",
                             for: descriptor.id,
-                            key: "imported-cookie"
+                            key: "imported-cookie", invalidatesUsage: false, expectedRevision: usageRevision
                         )
                     }
                 }
@@ -318,7 +340,7 @@ actor UsageCollector {
                         try? ProviderPreferences.shared.setAuxiliarySecret(
                             value ?? "",
                             for: descriptor.id,
-                            key: "imported-cookie"
+                            key: "imported-cookie", invalidatesUsage: false, expectedRevision: usageRevision
                         )
                     }
                 },
@@ -614,7 +636,7 @@ actor UsageCollector {
                         try? ProviderPreferences.shared.setAuxiliarySecret(
                             value ?? "",
                             for: descriptor.id,
-                            key: "imported-cookie"
+                            key: "imported-cookie", invalidatesUsage: false, expectedRevision: usageRevision
                         )
                     }
                 }
@@ -674,7 +696,7 @@ actor UsageCollector {
                         try? ProviderPreferences.shared.setAuxiliarySecret(
                             value ?? "",
                             for: descriptor.id,
-                            key: "imported-cookie"
+                            key: "imported-cookie", invalidatesUsage: false, expectedRevision: usageRevision
                         )
                     }
                 }
@@ -694,7 +716,7 @@ actor UsageCollector {
                         try? ProviderPreferences.shared.setAuxiliarySecret(
                             value ?? "",
                             for: descriptor.id,
-                            key: "imported-cookie"
+                            key: "imported-cookie", invalidatesUsage: false, expectedRevision: usageRevision
                         )
                     }
                 }
@@ -719,12 +741,12 @@ actor UsageCollector {
                         try? ProviderPreferences.shared.setAuxiliarySecret(
                             cookie ?? "",
                             for: descriptor.id,
-                            key: "imported-cookie"
+                            key: "imported-cookie", invalidatesUsage: false, expectedRevision: usageRevision
                         )
                         try? ProviderPreferences.shared.setAuxiliarySecret(
                             site?.cacheKey ?? "",
                             for: descriptor.id,
-                            key: "imported-site"
+                            key: "imported-site", invalidatesUsage: false, expectedRevision: usageRevision
                         )
                     }
                 }
@@ -805,7 +827,7 @@ actor UsageCollector {
                         try? ProviderPreferences.shared.setAuxiliarySecret(
                             value ?? "",
                             for: descriptor.id,
-                            key: "imported-cookie"
+                            key: "imported-cookie", invalidatesUsage: false, expectedRevision: usageRevision
                         )
                     }
                 }
@@ -826,7 +848,7 @@ actor UsageCollector {
                         try? ProviderPreferences.shared.setAuxiliarySecret(
                             value ?? "",
                             for: descriptor.id,
-                            key: "imported-cookie"
+                            key: "imported-cookie", invalidatesUsage: false, expectedRevision: usageRevision
                         )
                     }
                 }
@@ -926,8 +948,8 @@ actor UsageCollector {
                 cachedTenant: cached.tenant.isEmpty ? nil : cached.tenant,
                 cacheUpdate: { cookie, tenant in
                     await MainActor.run {
-                        try? ProviderPreferences.shared.setAuxiliarySecret(cookie ?? "", for: descriptor.id, key: "imported-cookie")
-                        try? ProviderPreferences.shared.setAuxiliarySecret(tenant ?? "", for: descriptor.id, key: "imported-tenant")
+                        try? ProviderPreferences.shared.setAuxiliarySecret(cookie ?? "", for: descriptor.id, key: "imported-cookie", invalidatesUsage: false, expectedRevision: usageRevision)
+                        try? ProviderPreferences.shared.setAuxiliarySecret(tenant ?? "", for: descriptor.id, key: "imported-tenant", invalidatesUsage: false, expectedRevision: usageRevision)
                     }
                 },
                 allowBrowserImport: allowBrowserCookieImport
@@ -946,7 +968,7 @@ actor UsageCollector {
                 allowBrowserImport: allowBrowserCookieImport,
                 cacheUpdate: { value in
                     await MainActor.run {
-                        try? ProviderPreferences.shared.setAuxiliarySecret(value ?? "", for: descriptor.id, key: "imported-cookie")
+                        try? ProviderPreferences.shared.setAuxiliarySecret(value ?? "", for: descriptor.id, key: "imported-cookie", invalidatesUsage: false, expectedRevision: usageRevision)
                     }
                 }
             )
@@ -960,7 +982,7 @@ actor UsageCollector {
                 cachedCookieHeader: cachedCookie.isEmpty ? nil : cachedCookie,
                 cacheUpdate: { value in
                     await MainActor.run {
-                        try? ProviderPreferences.shared.setAuxiliarySecret(value ?? "", for: descriptor.id, key: "imported-cookie")
+                        try? ProviderPreferences.shared.setAuxiliarySecret(value ?? "", for: descriptor.id, key: "imported-cookie", invalidatesUsage: false, expectedRevision: usageRevision)
                     }
                 },
                 allowBrowserImport: allowBrowserCookieImport
@@ -975,7 +997,7 @@ actor UsageCollector {
                 cachedCookieHeader: cachedCookie.isEmpty ? nil : cachedCookie,
                 cacheUpdate: { value in
                     await MainActor.run {
-                        try? ProviderPreferences.shared.setAuxiliarySecret(value ?? "", for: descriptor.id, key: "imported-cookie")
+                        try? ProviderPreferences.shared.setAuxiliarySecret(value ?? "", for: descriptor.id, key: "imported-cookie", invalidatesUsage: false, expectedRevision: usageRevision)
                     }
                 },
                 allowBrowserImport: allowBrowserCookieImport

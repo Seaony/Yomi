@@ -1033,7 +1033,7 @@ nonisolated enum MiniMaxUsageFetcher {
     private static func automaticCredentials(in browser: Browser) -> [Credential] {
         let client = BrowserCookieClient()
         let query = BrowserCookieQuery(domains: cookieDomains)
-        guard let sources = try? client.records(matching: query, in: browser) else { return [] }
+        guard let sources = try? BrowserCookieAccess.records(matching: query, in: browser, client: client) else { return [] }
         let storageTokens = automaticStorageTokens(browsers: [browser])
         var result: [Credential] = []
         let groups = Dictionary(grouping: sources, by: { $0.store.profile.id })

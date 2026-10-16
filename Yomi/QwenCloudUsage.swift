@@ -242,7 +242,7 @@ nonisolated enum QwenCloudUsageFetcher {
         let client = BrowserCookieClient()
         let query = BrowserCookieQuery(domains: cookieDomains)
         for browser in Browser.defaultImportOrder {
-            guard let sources = try? client.records(matching: query, in: browser) else { continue }
+            guard let sources = try? BrowserCookieAccess.records(matching: query, in: browser, client: client) else { continue }
             for source in sources {
                 let cookies = BrowserCookieClient.makeHTTPCookies(source.records, origin: query.origin)
                 guard isAuthenticatedSession(cookies) else { continue }
@@ -565,8 +565,9 @@ nonisolated enum QwenCloudUsageFetcher {
 
     private static func parseTeam(summary: [String: Any], now: Date) throws -> ProviderUsage? {
         if summary["Data"] is NSNull { return nil }
-        guard let data = summary["Data"] as? [String: Any],
-              let groups = data["SubscriptionGroupList"] as? [[String: Any]] else { throw teamParseError() }
+        guard let data = summary["Data"] as? [String: Any] else { throw teamParseError() }
+        if data.isEmpty { return nil }
+        guard let groups = data["SubscriptionGroupList"] as? [[String: Any]] else { throw teamParseError() }
         if groups.isEmpty { return nil }
         guard let start = teamNumber(data["StartTime"]), let end = teamNumber(data["EndTime"]),
               start.rounded() == start, end.rounded() == end, start > 0, end > start else { throw teamParseError() }

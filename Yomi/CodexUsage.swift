@@ -553,7 +553,7 @@ nonisolated enum CodexUsageFetcher {
         let order = preferred + Browser.defaultImportOrder.filter { !preferred.contains($0) }
         var headers: [String] = []
         for browser in order {
-            guard let stores = try? client.records(matching: query, in: browser) else { continue }
+            guard let stores = try? BrowserCookieAccess.records(matching: query, in: browser, client: client) else { continue }
             for store in stores {
                 let cookies = BrowserCookieClient.makeHTTPCookies(store.records, origin: query.origin)
                 let header = cookies.sorted { $0.name < $1.name }

@@ -278,7 +278,7 @@ nonisolated enum AlibabaCodingPlanFetcher {
         let client = BrowserCookieClient()
         let query = BrowserCookieQuery(domains: cookieDomains)
         for browser in Browser.defaultImportOrder {
-            guard let sources = try? client.records(matching: query, in: browser) else { continue }
+            guard let sources = try? BrowserCookieAccess.records(matching: query, in: browser, client: client) else { continue }
             for source in sources {
                 let cookies = BrowserCookieClient.makeHTTPCookies(source.records, origin: query.origin)
                 let names = Set(cookies.map(\.name))

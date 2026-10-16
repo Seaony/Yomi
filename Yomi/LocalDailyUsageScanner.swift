@@ -36,11 +36,70 @@ actor LocalDailyUsageScanner {
     }
 
     private struct CodexSample: Codable {
+        let sequence: Int
         let timestamp: Date
         let model: String?
         let tokens: Tokens
-        let eventKey: CodexEventKey?
+        var eventKey: CodexEventKey?
         let turnID: String?
+        let responseID: String?
+        let priority: Bool?
+    }
+
+    private struct CodexMirrorKey: Codable, Hashable {
+        let turnID: String?
+        let usage: Tokens?
+        let total: Tokens?
+        let timestamp: Date?
+    }
+
+    private struct CodexObservation: Codable {
+        enum Advance: String, Codable {
+            case unknown, bounded, exact, intervening
+        }
+
+        let turnID: String?
+        let usage: Tokens
+        let total: Tokens?
+        let timestamp: Date
+        let sequence: Int?
+        let responseID: String?
+        let advance: Advance
+        var isReplay = false
+
+        var snapshot: CodexMirrorKey {
+            CodexMirrorKey(turnID: turnID, usage: usage, total: total, timestamp: timestamp)
+        }
+
+        var adjacentKeys: Set<CodexMirrorKey> {
+            var keys: Set<CodexMirrorKey> = [
+                CodexMirrorKey(turnID: turnID, usage: usage, total: nil, timestamp: timestamp),
+            ]
+            if let total {
+                keys.insert(CodexMirrorKey(turnID: turnID, usage: usage, total: total, timestamp: nil))
+            }
+            return keys
+        }
+
+        func matches(_ other: Self, allowDelayed: Bool) -> Bool {
+            if !adjacentKeys.isDisjoint(with: other.adjacentKeys) { return true }
+            guard let turnID, !turnID.isEmpty, turnID == other.turnID,
+                  usage == other.usage, advance != .intervening, !isReplay, !other.isReplay
+            else { return false }
+            return abs(timestamp.timeIntervalSince(other.timestamp)) <= 5
+                || (allowDelayed && timestamp >= other.timestamp && advance == .exact && other.advance == .exact)
+        }
+
+        static func advance(total: Tokens?, previous: Tokens?, usage: Tokens) -> Advance {
+            guard let total, let previous else { return .unknown }
+            let delta = [
+                total.input - previous.input, total.cacheRead - previous.cacheRead,
+                total.cacheWrite - previous.cacheWrite, total.output - previous.output,
+            ]
+            let expected = [usage.input, usage.cacheRead, usage.cacheWrite, usage.output]
+            if delta == expected { return .exact }
+            return zip(delta, expected).contains { $0 > $1 } ? .intervening : .bounded
+        }
     }
 
     private struct JSONLResumeState: Codable {
@@ -81,6 +140,8 @@ actor LocalDailyUsageScanner {
     private struct CodexLogLine: Decodable {
         let type: String?
         let timestamp: String?
+        let ordinal: Int?
+        let usage: LogTokenUsage?
         let payload: Payload?
 
         struct Payload: Decodable {
@@ -98,6 +159,13 @@ actor LocalDailyUsageScanner {
             let parentSessionID: String?
             let creatorAccountID: String?
             let source: Source?
+            let threadID: String?
+            let responseID: String?
+            let usage: LogTokenUsage?
+            let threadTokenUsage: LogTokenUsage?
+            let turnTokenUsage: LogTokenUsage?
+            let threadSettings: ThreadSettings?
+            let subagentHistoryStartOrdinal: Int?
 
             enum CodingKeys: String, CodingKey {
                 case type
@@ -114,6 +182,21 @@ actor LocalDailyUsageScanner {
                 case parentSessionID = "parent_session_id"
                 case creatorAccountID = "creator_account_id"
                 case source
+                case threadID = "thread_id"
+                case responseID = "response_id"
+                case usage
+                case threadTokenUsage = "thread_token_usage"
+                case turnTokenUsage = "turn_token_usage"
+                case threadSettings = "thread_settings"
+                case subagentHistoryStartOrdinal = "subagent_history_start_ordinal"
+            }
+        }
+
+        struct ThreadSettings: Decodable {
+            let serviceTier: String?
+
+            enum CodingKeys: String, CodingKey {
+                case serviceTier = "service_tier"
             }
         }
 
@@ -412,19 +495,163 @@ actor LocalDailyUsageScanner {
     }
 
     private struct CodexFileState: Codable {
+        var parserVersion = 2
         var size: UInt64 = 0
         var modificationNanoseconds: Int64 = 0
         var fileID = ""
         var resumeState = JSONLResumeState()
         var resumeFingerprint = Data()
         var sessionID: String?
+        var requestSessionID: String?
+        var subagentHistoryStartOrdinal: Int?
         var parentID: String?
         var hasSessionMetadata = false
         var hasCreatorAccount = false
         var currentModel: String?
         var currentTurnID: String?
+        var threadPriority: Bool?
+        var turnPriorities: [String: Bool] = [:]
+        var turnModels: [String: String] = [:]
+        var nextSequence = 0
+        var responseIDs: Set<String> = []
+        var mirroredResponses: [CodexMirrorKey: String] = [:]
+        var legacySequences: [CodexMirrorKey: Int] = [:]
+        var pendingLedger: CodexObservation?
+        var pendingLegacy: CodexObservation?
+        var lastLedgerTotal: Tokens?
+        var lastLegacyTotal: Tokens?
         var accumulator = CodexAccumulator()
         var samples: [CodexSample] = []
+
+        mutating func clearPendingMirrors() {
+            pendingLedger = nil
+            pendingLegacy = nil
+        }
+
+        mutating func appendSample(
+            timestamp: Date, model: String?, tokens: Tokens, eventKey: CodexEventKey?,
+            turnID: String?, responseID: String? = nil, range: Range<Date>
+        ) -> Int {
+            let sequence = nextSequence
+            nextSequence += 1
+            guard range.contains(timestamp), tokens.codexTotal > 0 else { return sequence }
+            samples.append(CodexSample(
+                sequence: sequence, timestamp: timestamp, model: model, tokens: tokens,
+                eventKey: eventKey, turnID: turnID, responseID: responseID,
+                priority: turnPriorities[turnID ?? ""]
+            ))
+            return sequence
+        }
+
+        mutating func acceptLedger(_ payload: CodexLogLine.Payload, timestamp: Date, range: Range<Date>) {
+            guard let threadID = payload.threadID, !threadID.isEmpty,
+                  let responseID = payload.responseID, !responseID.isEmpty,
+                  let usage = requestTokens(payload.usage),
+                  let total = requestTokens(payload.threadTokenUsage), isAtLeast(total, usage)
+            else { return }
+            let owned = threadID == sessionID
+                && (payload.sessionID == nil || payload.sessionID == (requestSessionID ?? sessionID))
+            let turnID = payload.turnID ?? payload.turnId ?? currentTurnID
+            let replay = responseIDs.contains(responseID)
+            var observation = CodexObservation(
+                turnID: turnID, usage: usage, total: total, timestamp: timestamp,
+                sequence: nil, responseID: responseID,
+                advance: owned && !replay
+                    ? CodexObservation.advance(total: total, previous: lastLedgerTotal, usage: usage) : .unknown,
+                isReplay: replay || !owned
+            )
+            if replay, let pendingLedger, pendingLedger.responseID == responseID,
+               pendingLedger.snapshot == observation.snapshot {
+                observation = pendingLedger
+            }
+            var keys = [observation.snapshot, CodexMirrorKey(
+                turnID: turnID, usage: usage, total: nil, timestamp: timestamp
+            )]
+            if let turnTotal = requestTokens(payload.turnTokenUsage), isAtLeast(turnTotal, usage) {
+                keys.append(CodexMirrorKey(turnID: turnID, usage: usage, total: turnTotal, timestamp: timestamp))
+            }
+            let sequence = keys.compactMap { legacySequences[$0] }.first
+                ?? pendingLegacy.flatMap { legacy in
+                    observation.matches(legacy, allowDelayed: false) ? legacy.sequence : nil
+                }
+            let legacy = sequence.flatMap { sequence in samples.first { $0.sequence == sequence } }
+            if let sequence {
+                samples.removeAll { $0.sequence == sequence }
+                keys.append(contentsOf: legacySequences.filter { $0.value == sequence }.map(\.key))
+                legacySequences = legacySequences.filter { $0.value != sequence }
+            }
+            clearPendingMirrors()
+            if sequence == nil { pendingLedger = observation }
+            for key in keys { mirroredResponses[key] = responseID }
+            guard !replay else { return }
+            responseIDs.insert(responseID)
+            guard owned else { return }
+            lastLedgerTotal = total
+            let model = payload.model ?? payload.modelName
+                ?? turnID.flatMap { turnModels[$0] }
+                ?? (turnID == currentTurnID ? currentModel : nil)
+            _ = appendSample(
+                timestamp: timestamp, model: model, tokens: usage,
+                eventKey: legacy?.eventKey ?? CodexEventKey(total: total, last: usage),
+                turnID: turnID, responseID: responseID, range: range
+            )
+        }
+
+        mutating func acceptLegacy(_ payload: CodexLogLine.Payload, timestamp: Date, range: Range<Date>) {
+            guard let info = payload.info else { return }
+            let last = tokenValues(info.lastTokenUsage)
+            let total = tokenValues(info.totalTokenUsage)
+            let turnID = payload.turnID ?? payload.turnId ?? currentTurnID
+            let rawKey = CodexMirrorKey(turnID: turnID, usage: last, total: total, timestamp: timestamp)
+            if let owner = mirroredResponses[rawKey], owner != pendingLedger?.responseID { return }
+            // 镜像不再加一遍，但旧计数器仍要更新。
+            let delta = accumulator.apply(last: last, total: total)
+            guard let usage = last ?? delta else { clearPendingMirrors(); return }
+            let observation = CodexObservation(
+                turnID: turnID, usage: usage, total: total, timestamp: timestamp,
+                sequence: nil, responseID: nil,
+                advance: CodexObservation.advance(total: total, previous: lastLegacyTotal, usage: usage)
+            )
+            var owner = mirroredResponses[rawKey] ?? mirroredResponses[observation.snapshot]
+            let ledger = pendingLedger
+            if let ledger, owner == nil || owner == ledger.responseID,
+               observation.matches(ledger, allowDelayed: true) {
+                owner = ledger.responseID
+                if let owner {
+                    mirroredResponses[rawKey] = owner
+                    mirroredResponses[observation.snapshot] = owner
+                    if let index = samples.firstIndex(where: { $0.responseID == owner }) {
+                        samples[index].eventKey = CodexEventKey(total: total, last: last)
+                    }
+                }
+            }
+            if owner == nil || (owner == ledger?.responseID && ledger?.isReplay == false) {
+                lastLegacyTotal = total ?? lastLegacyTotal
+            }
+            clearPendingMirrors()
+            guard owner == nil, let delta, delta.codexTotal > 0 else { return }
+            let sequence = appendSample(
+                timestamp: timestamp,
+                model: info.model ?? info.modelName ?? payload.model ?? turnID.flatMap { turnModels[$0] }
+                    ?? currentModel,
+                tokens: delta, eventKey: CodexEventKey(total: total, last: last), turnID: turnID, range: range
+            )
+            legacySequences[rawKey] = sequence
+            legacySequences[observation.snapshot] = sequence
+            pendingLegacy = CodexObservation(
+                turnID: turnID, usage: usage, total: total, timestamp: timestamp,
+                sequence: sequence, responseID: nil, advance: observation.advance
+            )
+        }
+
+        private func requestTokens(_ usage: LogTokenUsage?) -> Tokens? {
+            guard let usage, let input = usage.inputTokens, let output = usage.outputTokens,
+                  input >= 0, output >= 0, !input.addingReportingOverflow(output).overflow,
+                  let tokens = tokenValues(usage), tokens.cacheRead <= input,
+                  (usage.cachedInputTokens ?? 0) >= 0, (usage.cacheReadInputTokens ?? 0) >= 0
+            else { return nil }
+            return tokens
+        }
     }
 
     private struct ClaudeFileState: Codable {
@@ -598,18 +825,25 @@ actor LocalDailyUsageScanner {
                 from: file.url,
                 resumeState: resumeState,
                 matchingAny: [
-                    #""type":"session_meta""#,
-                    #""type":"turn_context""#,
-                    #""type":"task_started""#,
-                    #""type":"token_count""#,
+                    #""session_meta""#,
+                    #""turn_context""#,
+                    #""task_started""#,
+                    #""token_count""#,
+                    #""token_usage_record""#,
+                    #""thread_settings_applied""#,
+                    #""usage""#,
                 ],
                 as: CodexLogLine.self
             ) { line in
                 if line.type == "session_meta", let payload = line.payload {
                     let sessionID = payload.id ?? payload.sessionID ?? payload.sessionId
                     if state.hasSessionMetadata {
-                        if let sessionID, sessionID == state.sessionID, state.parentID == nil {
-                            state.parentID = Self.codexParentID(payload)
+                        if let sessionID, sessionID == state.sessionID {
+                            state.parentID = state.parentID ?? Self.codexParentID(payload)
+                            state.requestSessionID = state.requestSessionID ?? payload.sessionID ?? payload.sessionId
+                            state.clearPendingMirrors()
+                            state.lastLedgerTotal = nil
+                            state.lastLegacyTotal = nil
                         }
                         return
                     }
@@ -618,50 +852,50 @@ actor LocalDailyUsageScanner {
                         ?? payload.sessionID
                         ?? payload.sessionId
                         ?? state.sessionID
+                    state.requestSessionID = payload.sessionID ?? payload.sessionId ?? state.sessionID
+                    state.subagentHistoryStartOrdinal = payload.subagentHistoryStartOrdinal
                     state.parentID = Self.codexParentID(payload) ?? state.parentID
                     state.hasCreatorAccount = payload.creatorAccountID?
                         .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
                     return
                 }
+                if let boundary = state.subagentHistoryStartOrdinal, let ordinal = line.ordinal,
+                   ordinal < boundary { return }
+                if line.usage != nil {
+                    state.clearPendingMirrors()
+                    return
+                }
                 if line.type == "turn_context", let payload = line.payload {
+                    state.clearPendingMirrors()
                     state.currentModel = payload.model ?? payload.modelName
+                    if let turnID = payload.turnID ?? payload.turnId {
+                        state.currentTurnID = turnID
+                    }
+                    if let turnID = state.currentTurnID, let model = state.currentModel {
+                        state.turnModels[turnID] = model
+                    }
+                    return
+                }
+                if line.type == "event_msg", let payload = line.payload,
+                   payload.type == "thread_settings_applied" {
+                    state.threadPriority = payload.threadSettings?.serviceTier == "priority"
                     return
                 }
                 if line.type == "event_msg", let payload = line.payload,
                    payload.type == "task_started" {
+                    state.clearPendingMirrors()
                     state.currentTurnID = payload.turnID ?? payload.turnId ?? payload.id
+                    state.turnPriorities[state.currentTurnID ?? ""] = state.threadPriority
                     return
                 }
-                guard line.type == "event_msg",
-                      let payload = line.payload,
-                      payload.type == "token_count",
-                      let info = payload.info,
-                      let timestamp = date(line.timestamp)
+                guard let payload = line.payload, let timestamp = date(line.timestamp)
                 else { return }
-
-                let model = info.model
-                    ?? info.modelName
-                    ?? payload.model
-                    ?? state.currentModel
-                let last = Self.tokenValues(info.lastTokenUsage)
-                let cumulative = Self.tokenValues(info.totalTokenUsage)
-
-                let delta = state.accumulator.apply(last: last, total: cumulative)
-
-                guard let delta,
-                      delta.codexTotal > 0,
-                      timestamp >= periods.last30DaysStart,
-                      timestamp < periods.end
-                else { return }
-                state.samples.append(CodexSample(
-                    timestamp: timestamp,
-                    model: model,
-                    tokens: delta,
-                    eventKey: cumulative == nil && last == nil
-                        ? nil
-                        : CodexEventKey(total: cumulative, last: last),
-                    turnID: payload.turnID ?? payload.turnId ?? state.currentTurnID
-                ))
+                let range = periods.last30DaysStart..<periods.end
+                if line.type == "token_usage_record" {
+                    state.acceptLedger(payload, timestamp: timestamp, range: range)
+                } else if line.type == "event_msg", payload.type == "token_count" {
+                    state.acceptLegacy(payload, timestamp: timestamp, range: range)
+                }
             }
             state.resumeState = readResult.resumeState
             let latest = Self.fileMetadata(for: file.url) ?? file
@@ -721,7 +955,7 @@ actor LocalDailyUsageScanner {
                     && sample.model.map { Self.normalizedCodexModel($0.lowercased()) } == "codex-auto-review"
                 let valueUSD = isIncludedAutoReview ? 0 : rates.map { rates -> Double in
                     let base = Self.codexCost(tokens: sample.tokens, rates: rates)
-                    guard priorityTurn != nil,
+                    guard priorityTurn != nil || sample.priority == true,
                           let multiplier = pricedModel.flatMap({
                               Self.codexFastMultiplier(for: $0, inputTokens: sample.tokens.input)
                           })
@@ -799,6 +1033,7 @@ actor LocalDailyUsageScanner {
         var count = 0
         while count < lhs.count,
               count < rhs.count,
+              lhs[count].responseID == nil || lhs[count].responseID == rhs[count].responseID,
               let left = lhs[count].eventKey,
               let right = rhs[count].eventKey,
               left == right {
@@ -1249,7 +1484,9 @@ actor LocalDailyUsageScanner {
         for record in cacheStore.records(provider: provider) {
             switch provider {
             case "codex":
-                guard var state = try? cacheDecoder.decode(CodexFileState.self, from: record.payload) else {
+                guard var state = try? cacheDecoder.decode(CodexFileState.self, from: record.payload),
+                      state.parserVersion == 2
+                else {
                     invalidPaths.insert(record.path)
                     continue
                 }

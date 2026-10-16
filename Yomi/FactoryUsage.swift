@@ -720,7 +720,7 @@ nonisolated enum FactoryUsageFetcher {
         let client = BrowserCookieClient()
         var sessions: [[HTTPCookie]] = []
         for browser in browsers {
-            guard let sources = try? client.records(matching: query, in: browser) else { continue }
+            guard let sources = try? BrowserCookieAccess.records(matching: query, in: browser, client: client) else { continue }
             for source in sources {
                 let cookies = BrowserCookieClient.makeHTTPCookies(source.records, origin: query.origin)
                 if !cookies.isEmpty { sessions.append(cookies) }
