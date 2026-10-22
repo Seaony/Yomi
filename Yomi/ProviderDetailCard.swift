@@ -177,6 +177,14 @@ struct ProviderDetailCard: View {
         VStack(alignment: .leading, spacing: 12) {
             header
 
+            if let accountName = descriptor.accountName {
+                Text(accountName)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.65))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if let status = cachedUsageStatus(usage, language: language) {
                 Label(status, systemImage: "exclamationmark.triangle")
                     .font(.system(size: 10.5, weight: .medium))
@@ -184,7 +192,7 @@ struct ProviderDetailCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if isOverview || !displayedWindows.isEmpty {
+            if isOverview || (!displayedWindows.isEmpty && descriptor.accountName == nil) {
                 usageHeadline
             }
 

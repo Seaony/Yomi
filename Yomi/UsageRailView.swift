@@ -62,7 +62,7 @@ struct UsageRailView: View {
     }
 
     private var railProviders: [ProviderDescriptor] {
-        [ProviderCatalog.overview] + store.enabledProviders
+        [ProviderCatalog.overview] + store.displayedProviders
     }
 
     var body: some View {
@@ -635,7 +635,7 @@ enum ProviderBrandColors {
         if ["vercel", "linkup", "replicate", "v0", "typesafe", "parallel", "flora"].contains(id.rawValue) {
             return .primary
         }
-        let value = values[id.rawValue] ?? 0xFFFFFF
+        let value = values[id.catalogID.rawValue] ?? 0xFFFFFF
         return Color(
             red: Double((value >> 16) & 0xFF) / 255,
             green: Double((value >> 8) & 0xFF) / 255,

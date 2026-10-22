@@ -8,7 +8,7 @@ enum ProviderIconLibrary {
     private static var cache: [String: NSImage] = [:]
 
     static func image(for provider: ProviderDescriptor) -> NSImage? {
-        let name = resourceName(for: provider.id)
+        let name = resourceName(for: provider.id.catalogID)
         if let cached = cache[name] {
             return cached
         }

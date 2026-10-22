@@ -51,6 +51,25 @@ actor UsageCollector {
             ?? ClaudeWeeklyAmountEstimator()
     }
 
+    func collectMagpieClaudeUsage(for id: ProviderID) async throws -> ProviderUsage {
+        var credential = try await MagpieClaudeAccounts.credential(for: id, session: session)
+        let claudeID = ProviderID(rawValue: "claude")
+        let descriptor = await MainActor.run { ProviderCatalog.byID[claudeID]! }
+        let recipe = ProviderRecipes.recipe(for: claudeID)!
+        var usage: ProviderUsage
+        do {
+            usage = try await remoteUsage(descriptor: descriptor, recipe: recipe, secret: credential.token)
+        } catch UsageCollectionError.requestFailed(401) {
+            credential = try await MagpieClaudeAccounts.credential(
+                for: id, session: session, rejectedToken: credential.token
+            )
+            usage = try await remoteUsage(descriptor: descriptor, recipe: recipe, secret: credential.token)
+        }
+        usage.id = id
+        usage.plan = credential.plan
+        return usage
+    }
+
     func collect(
         descriptor: ProviderDescriptor,
         configuration: ProviderConfiguration,
