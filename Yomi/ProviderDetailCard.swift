@@ -192,7 +192,7 @@ struct ProviderDetailCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if isOverview || (!displayedWindows.isEmpty && descriptor.accountName == nil) {
+            if isOverview || !displayedWindows.isEmpty {
                 usageHeadline
             }
 

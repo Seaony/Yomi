@@ -173,6 +173,7 @@ final class UsageStore: ObservableObject {
         let providers = (enabledProviders + magpieDescriptors).filter {
             requestedID == nil || $0.id == requestedID
                 || (requestedID == claudeID && $0.id.isMagpieClaudeAccount)
+                || (requestedID?.isMagpieClaudeAccount == true && $0.id == claudeID)
         }
         let preferences = preferences
         let jobs = providers.map { descriptor in
@@ -229,7 +230,7 @@ final class UsageStore: ObservableObject {
                             return (try await collector.collectMagpieClaudeUsage(for: descriptor.id), revision)
                         }
                         if descriptor.id.rawValue == "claude", claudeLocalStatisticsOnly {
-                            // 本地日志没有账号标识，只计入总览一次。
+                            // 本地日志没有账号标识，各卡片共用，总览只计一次。
                             let usage = await collector.enrichLocalMetadata(
                                 to: ProviderUsage(id: descriptor.id, state: .ready, windows: [], updatedAt: Date()),
                                 descriptor: descriptor
@@ -322,6 +323,13 @@ final class UsageStore: ObservableObject {
             updatedAt: nil,
             message: AppLocalization.text("等待首次刷新", "Waiting for the first refresh")
         ))
+        if id.isMagpieClaudeAccount, usesMagpieClaudeAccounts,
+           let localUsage = usageByID[id.catalogID].map({ Self.usageForCurrentDay($0) }) {
+            usage.today = localUsage.today
+            usage.todayDate = localUsage.todayDate
+            usage.last30Days = localUsage.last30Days
+            usage.last30DaysDaily = localUsage.last30DaysDaily
+        }
         if id.rawValue == "claude", usesMagpieClaudeAccounts {
             let accounts = magpieClaudeAccounts.map { self.usage(for: $0.id) }
             if accounts.contains(where: { $0.state == .loading }) {
