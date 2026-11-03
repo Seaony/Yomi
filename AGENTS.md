@@ -7,11 +7,15 @@ Yomi 是使用 SwiftUI 与 AppKit 构建的原生 macOS 应用，用悬浮侧边
 - 工程：`Yomi.xcodeproj`
 - Scheme：`Yomi`
 - 主要 Target：`Yomi`
+- 测试 Target：`YomiTests`
 - Swift：5.0
 - macOS Deployment Target：26.5
+- Swift Package 依赖：Sparkle、SweetCookieKit
 - 应用入口：`Yomi/YomiApp.swift`
 - 窗口与悬浮面板：`Yomi/AppDelegate.swift`
-- 参考仓库：本机 `/Users/seaony/code/CodexBar`，上游为 [steipete/CodexBar](https://github.com/steipete/CodexBar)。
+- 参考仓库：
+  - 本机 `/Users/seaony/code/CodexBar`，上游为 [steipete/CodexBar](https://github.com/steipete/CodexBar)。Provider 数据逻辑以它为准；最近一次同步对应 CodexBar 0.76.0（2026-10-15）。
+  - [vinzdg/codenotch](https://github.com/vinzdg/codenotch)（MIT，本机未克隆）：同样把 Claude Code、Cursor、Codex、Antigravity 的额度固定在屏幕边缘，可参考其界面与交互。
 
 ## 代码位置
 
@@ -25,6 +29,14 @@ Yomi 是使用 SwiftUI 与 AppKit 构建的原生 macOS 应用，用悬浮侧边
 - `Yomi/SettingsView.swift`：设置页面和 Provider 配置入口。
 - `Yomi/AppPreferences.swift`：外观、颜色、语言偏好与中英文文案。
 - `Yomi/UpdateController.swift`：Sparkle 自动更新。
+- `Yomi/ProviderCatalog.swift`：内置 Provider 列表。
+- `Yomi/ProviderPreferences.swift`：Provider 启用状态与密钥的钥匙串存储。
+- `Yomi/UsageParser.swift`：接口返回解析与缓存恢复。
+- `Yomi/ModelPricingCatalog.swift`：模型价格表。
+- `Yomi/LocalUsageCacheStore.swift`：本地用量缓存。
+- `Yomi/BrowserCookieAccess.swift`：浏览器 Cookie 读取。
+- `YomiTests/`：单元测试。
+- `scripts/`、`docs/RELEASING.md`：未签名版本发布脚本与说明；发布会推送标签并创建 GitHub Release。
 
 ## 实现约束
 
@@ -51,6 +63,17 @@ xcodebuild \
   -configuration Debug \
   -derivedDataPath /tmp/YomiDerivedData \
   build
+```
+
+涉及解析、缓存或统计逻辑时，再运行单元测试：
+
+```bash
+xcodebuild \
+  -project Yomi.xcodeproj \
+  -scheme Yomi \
+  -configuration Debug \
+  -derivedDataPath /tmp/YomiDerivedData \
+  test
 ```
 
 构建产物位于：

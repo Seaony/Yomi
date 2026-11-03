@@ -409,6 +409,90 @@ struct KiroUsageTests {
         }
     }
 
+    @Test
+    func olderCLIWithoutHarnessFlagRetriesPlainUsageCommand() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let executable = root.appendingPathComponent("kiro-cli")
+        try """
+        #!/bin/sh
+        if [ "$1" = "whoami" ]; then
+          printf 'Logged in with Google\\nEmail: person@example.com\\n'
+          exit 0
+        fi
+        if [ "$4" = "--v2" ]; then
+          printf "error: unexpected argument '--v2' found\\n"
+          exit 2
+        fi
+        if [ "$1" = "chat" ] && [ "$3" = "/usage" ]; then
+          printf 'Estimated Usage | resets on 2026-09-01 | KIRO FREE\\n'
+          printf 'Credits (12.50 of 50 covered in plan)\\n'
+          exit 0
+        fi
+        exit 0
+        """.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let usage = try await KiroUsageFetcher.fetch(
+            configuredCommand: executable.path,
+            session: URLSession(configuration: .ephemeral),
+            environment: ["PATH": root.path],
+            homeDirectory: root
+        )
+        #expect(usage.windows.first?.usedFraction == 0.25)
+    }
+
+    @Test
+    func usageAPIIsPreferredWithoutStartingAChatSession() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let log = root.appendingPathComponent("calls.log")
+        let executable = root.appendingPathComponent("kiro-cli")
+        try """
+        #!/bin/sh
+        echo "$*" >> '\(log.path)'
+        if [ "$1" = "whoami" ]; then
+          printf 'Logged in with Google\\nEmail: person@example.com\\n'
+        fi
+        exit 0
+        """.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+        let state = root.appendingPathComponent("state")
+        try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+        var database: OpaquePointer?
+        #expect(sqlite3_open(state.appendingPathComponent("data.sqlite3").path, &database) == SQLITE_OK)
+        for sql in [
+            "CREATE TABLE auth_kv (key TEXT, value TEXT);",
+            "CREATE TABLE state (key TEXT, value TEXT);",
+            "INSERT INTO auth_kv VALUES ('kirocli:odic:token', '{\"access_token\":\"local-token\"}');",
+            "INSERT INTO state VALUES ('api.codewhisperer.profile', '{\"arn\":\"arn:aws:codewhisperer:us-east-1:1:profile/p\"}');",
+        ] {
+            #expect(sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK)
+        }
+        sqlite3_close(database)
+
+        KiroTestURLProtocol.body = Data("""
+        {"nextDateReset":1788220800,"usageBreakdownList":[{"resourceType":"CREDIT",
+          "usageLimitWithPrecision":1000,"currentUsageWithPrecision":250}]}
+        """.utf8)
+        defer { KiroTestURLProtocol.body = nil }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [KiroTestURLProtocol.self]
+
+        let usage = try await KiroUsageFetcher.fetch(
+            configuredCommand: executable.path,
+            session: URLSession(configuration: configuration),
+            environment: ["PATH": root.path, "KIRO_DATA_DIR": state.path],
+            homeDirectory: root
+        )
+        #expect(usage.windows.first?.usedFraction == 0.25)
+        let calls = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+        #expect(!calls.contains("chat"))
+    }
+
     private static func utcCalendar() -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -418,4 +502,24 @@ struct KiroUsageTests {
     private static func date(_ value: String) -> Date {
         ISO8601DateFormatter().date(from: value)!
     }
+}
+
+private nonisolated final class KiroTestURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var body: Data?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let body = Self.body else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

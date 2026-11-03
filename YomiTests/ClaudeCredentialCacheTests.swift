@@ -133,6 +133,20 @@ struct ClaudeCredentialCacheTests {
         #expect(reader.calls == 2)
     }
 
+    @Test
+    func accessTokenIgnoresMCPServerTokens() throws {
+        let mixed = try JSONSerialization.data(withJSONObject: [
+            "mcpOAuth": ["server": ["accessToken": "mcp-token"]],
+            "claudeAiOauth": ["accessToken": "claude-token"],
+        ])
+        let mcpOnly = try JSONSerialization.data(withJSONObject: [
+            "mcpOAuth": ["server": ["accessToken": "mcp-token"]],
+        ])
+
+        #expect(UsageCollector.claudeOAuthAccessToken(in: mixed) == "claude-token")
+        #expect(UsageCollector.claudeOAuthAccessToken(in: mcpOnly) == nil)
+    }
+
     private nonisolated static func credential(token: String, expiresAt: Date) throws -> Data {
         try JSONSerialization.data(withJSONObject: [
             "claudeAiOauth": [

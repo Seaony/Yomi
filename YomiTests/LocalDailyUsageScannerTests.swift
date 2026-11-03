@@ -140,6 +140,215 @@ struct LocalDailyUsageScannerTests {
         #expect(abs(fastCost - standardCost) < 1e-10)
     }
 
+    @Test(arguments: ["gpt-6.1-sol", "openai/gpt-6.1-sol"], [250_000, 272_000, 272_001])
+    func solFastPricingIncludesLongContext(model: String, input: Int) async throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let now = Date()
+        try writePricedSession(model: model, input: input, now: now, home: home)
+        let standard = await scan(LocalDailyUsageScanner(), provider: "codex", home: home, now: now)
+        try writeTurnLog(
+            "turn_id=priced websocket request: {\"type\":\"response.create\",\"model\":\"\(model)\",\"service_tier\":\"fast\"}",
+            now: now, home: home
+        )
+        let fast = await scan(LocalDailyUsageScanner(), provider: "codex", home: home, now: now)
+        let standardCost = try #require(standard?.today?.valueUSD)
+        let fastCost = try #require(fast?.today?.valueUSD)
+        #expect(abs(fastCost - standardCost * 2) < 1e-10)
+    }
+
+    @Test(arguments: [0, 6, 10], [false, true])
+    func resumedTurnContextsRefreshTheTierWithoutRepricingEarlierRequests(
+        prefixCount: Int, withPriorityLog: Bool
+    ) async throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let now = Date()
+        func record(_ type: String, _ payload: [String: Any], second: Int) -> [String: Any] {
+            ["type": type, "timestamp": ISO8601DateFormatter().string(from: now.addingTimeInterval(Double(second) - 60)),
+             "payload": payload]
+        }
+        func settings(_ tier: String, second: Int) -> [String: Any] {
+            record("event_msg", ["type": "thread_settings_applied", "thread_settings": ["service_tier": tier]],
+                   second: second)
+        }
+        func context(second: Int) -> [String: Any] {
+            record("turn_context", ["model": "gpt-6.1-sol", "turn_id": "resumed-turn"], second: second)
+        }
+        func usage(second: Int) -> [String: Any] {
+            record("event_msg", ["type": "token_count", "turn_id": "resumed-turn", "info": ["last_token_usage": [
+                "input_tokens": 1000, "cached_input_tokens": 800, "output_tokens": 100,
+            ]]], second: second)
+        }
+        let records = [
+            record("session_meta", ["id": "synthetic-resumed-tier"], second: 0),
+            settings("default", second: 1),
+            record("event_msg", ["type": "task_started", "turn_id": "resumed-turn"], second: 2),
+            context(second: 3), usage(second: 4), settings("priority", second: 5),
+            context(second: 6), usage(second: 7), settings("default", second: 8),
+            context(second: 9), usage(second: 10),
+        ]
+        let file = home.appending(path: ".codex/sessions/resumed-tier.jsonl")
+        let scanner = LocalDailyUsageScanner()
+        if prefixCount > 0 {
+            try writeLines(Array(records.prefix(prefixCount)), to: file)
+            _ = await scan(scanner, provider: "codex", home: home, now: now)
+            let handle = try FileHandle(forWritingTo: file)
+            try handle.seekToEnd()
+            for row in records.dropFirst(prefixCount) {
+                try handle.write(contentsOf: JSONSerialization.data(withJSONObject: row) + Data([0x0A]))
+            }
+            try handle.close()
+        } else {
+            try writeLines(records, to: file)
+        }
+        if withPriorityLog {
+            try writeTurnLog(
+                "turn_id=resumed-turn websocket request: {\"type\":\"response.create\",\"model\":\"gpt-6.1-sol\",\"service_tier\":\"priority\"}",
+                now: now, home: home
+            )
+        }
+        let usage = await scan(scanner, provider: "codex", home: home, now: now)
+        #expect(usage?.today?.tokens == 3300)
+        // 日志库按 turn 记录 Fast，恢复后确认切回标准档的最后一次请求仍按标准价计。
+        #expect(try abs(#require(usage?.today?.valueUSD) - (withPriorityLog ? 0.0074 : 0.00592)) < 1e-12)
+    }
+
+    @Test
+    func archivedCodexRolloutKeepsItsCountedUsageOnce() async throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let now = Date()
+        try writeSession(id: "archived", count: 2, now: now, home: home)
+        let file = home.appending(path: ".codex/sessions/archived.jsonl")
+        let original = try Data(contentsOf: file)
+
+        let scanner = LocalDailyUsageScanner()
+        #expect(await scan(scanner, provider: "codex", home: home, now: now)?.today?.tokens == 220)
+        try FileManager.default.moveItem(at: file, to: home.appending(path: ".codex/sessions/archived.jsonl.zst"))
+        #expect(await scan(scanner, provider: "codex", home: home, now: now)?.today?.tokens == 220)
+        #expect(await scan(LocalDailyUsageScanner(), provider: "codex", home: home, now: now)?.today?.tokens == 220)
+
+        try original.write(to: file)
+        #expect(await scan(scanner, provider: "codex", home: home, now: now)?.today?.tokens == 220)
+    }
+
+    @Test(arguments: [".codex/sessions/2026", ".codex"])
+    func unreadableSessionDirectoryKeepsItsUsage(lockedPath: String) async throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let now = Date()
+        try FileManager.default.createDirectory(
+            at: home.appending(path: ".codex/sessions/2026"), withIntermediateDirectories: true
+        )
+        try writeSession(id: "2026/locked", count: 2, now: now, home: home)
+        let directory = home.appending(path: lockedPath)
+
+        let scanner = LocalDailyUsageScanner()
+        let before = await scan(scanner, provider: "codex", home: home, now: now)?.today?.tokens
+        #expect(before == 220)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: directory.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path) }
+        let locked = await scan(scanner, provider: "codex", home: home, now: now)?.today?.tokens
+        #expect(locked == 220)
+    }
+
+    @Test(arguments: [("claude-mythos-5", 1e-6), ("claude-mythos-5-1", 2.5e-7)])
+    func mythosUsesBundledRates(model: String, cacheReadRate: Double) async throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let now = Date()
+        var entry = claudeEntry(model: model, input: 100, output: 10, now: now)
+        entry["message"] = ["id": "message", "model": model, "usage": [
+            "input_tokens": 100, "cache_read_input_tokens": 1_000,
+            "cache_creation_input_tokens": 40, "output_tokens": 10,
+        ]]
+        try writeLines([entry], to: home.appending(path: ".claude/projects/sample/usage.jsonl"))
+
+        let usage = await scan(LocalDailyUsageScanner(), provider: "claude", home: home, now: now)
+        let cost = try #require(usage?.today?.valueUSD)
+        #expect(abs(cost - (100 * 1e-5 + 1_000 * cacheReadRate + 40 * 1.25e-5 + 10 * 5e-5)) < 1e-12)
+    }
+
+    @Test
+    func coworkAuditAndTranscriptCountOnce() async throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let now = Date()
+        let session = home.appending(path: "Library/Application Support/Claude/local-agent-mode-sessions/s1")
+        let projects = session.appending(path: ".claude/projects/p")
+        try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
+        var transcript = claudeEntry(model: "claude-sonnet-4-5", input: 100, output: 10, now: now)
+        transcript["requestId"] = "req-1"
+        var audit = transcript
+        audit.removeValue(forKey: "requestId")
+        audit["request_id"] = "req-1"
+        var unrelated = claudeEntry(model: "claude-sonnet-4-5", input: 200, output: 20, now: now)
+        unrelated.removeValue(forKey: "requestId")
+        unrelated["session_id"] = "s1"
+        unrelated["message"] = ["id": "message-2", "model": "claude-sonnet-4-5",
+                                "usage": ["input_tokens": 200, "output_tokens": 20]]
+        var unrelatedCopy = unrelated
+        unrelatedCopy.removeValue(forKey: "session_id")
+        unrelatedCopy["sessionId"] = "s1"
+        let result: [String: Any] = ["type": "result", "usage": ["input_tokens": 9_999, "output_tokens": 9_999]]
+        try writeLines([audit, unrelated, result], to: session.appending(path: "audit.jsonl"))
+        try writeLines([transcript, unrelatedCopy], to: projects.appending(path: "transcript.jsonl"))
+
+        let usage = await scan(LocalDailyUsageScanner(), provider: "claude", home: home, now: now)
+        #expect(usage?.today?.tokens == 330)
+    }
+
+    @Test
+    func archivedParentIsTrimmedWithItsForkAcrossDays() async throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let firstNow = Date()
+        let oldest = firstNow.addingTimeInterval(-29 * 86400)
+        func row(_ index: Int, at date: Date) -> [String: Any] {
+            ["type": "event_msg", "timestamp": ISO8601DateFormatter().string(from: date), "payload": [
+                "type": "token_count", "turn_id": "fork",
+                "info": [
+                    "last_token_usage": ["input_tokens": 100, "output_tokens": 10],
+                    "total_token_usage": ["input_tokens": index * 100, "output_tokens": index * 10],
+                ],
+            ]]
+        }
+        let shared = [row(1, at: oldest), row(2, at: firstNow.addingTimeInterval(-60))]
+        let parent = home.appending(path: ".codex/sessions/parent.jsonl")
+        try writeLines([["type": "session_meta", "payload": ["id": "parent"]]] + shared, to: parent)
+        try writeLines(
+            [["type": "session_meta", "payload": ["id": "child", "forked_from_id": "parent"]]] + shared
+                + [row(3, at: firstNow.addingTimeInterval(-30))],
+            to: home.appending(path: ".codex/sessions/child.jsonl")
+        )
+
+        let scanner = LocalDailyUsageScanner()
+        #expect(await scan(scanner, provider: "codex", home: home, now: firstNow)?.last30Days?.tokens == 330)
+        try FileManager.default.moveItem(at: parent, to: home.appending(path: ".codex/sessions/parent.jsonl.zst"))
+        let later = await scan(scanner, provider: "codex", home: home, now: firstNow.addingTimeInterval(2 * 86400))
+        #expect(later?.last30Days?.tokens == 220)
+    }
+
+    @Test
+    func unreadableCoworkSessionsKeepTheirUsage() async throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let now = Date()
+        let sessions = home.appending(path: "Library/Application Support/Claude/local-agent-mode-sessions")
+        try FileManager.default.createDirectory(at: sessions.appending(path: "s1"), withIntermediateDirectories: true)
+        var entry = claudeEntry(model: "claude-sonnet-4-5", input: 100, output: 10, now: now)
+        entry.removeValue(forKey: "requestId")
+        entry["request_id"] = "req-1"
+        try writeLines([entry], to: sessions.appending(path: "s1/audit.jsonl"))
+
+        let scanner = LocalDailyUsageScanner()
+        #expect(await scan(scanner, provider: "claude", home: home, now: now)?.today?.tokens == 110)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: sessions.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: sessions.path) }
+        #expect(await scan(scanner, provider: "claude", home: home, now: now)?.today?.tokens == 110)
+    }
+
     @Test(arguments: ["priority", "fast"])
     func submissionTierIsRecognized(tier: String) throws {
         let home = try temporaryHome()
@@ -155,6 +364,24 @@ struct LocalDailyUsageScannerTests {
         #expect(turns["priced"] != nil)
     }
 
+    @Test
+    func walDatabaseWithoutSidecarsStillReadsPriorityTurns() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let now = Date()
+        try writeTurnLog(
+            "turn_id=priced websocket request: {\"type\":\"response.create\",\"model\":\"gpt-5.4\",\"service_tier\":\"priority\"}",
+            now: now, home: home, wal: true
+        )
+        let database = home.appending(path: ".codex/logs_2.sqlite")
+        // 系统 SQLite 默认保留 -wal 文件，删掉以模拟 Codex 退出后只剩主文件的情况。
+        try? FileManager.default.removeItem(atPath: database.path + "-wal")
+        try? FileManager.default.removeItem(atPath: database.path + "-shm")
+        #expect(!FileManager.default.fileExists(atPath: database.path + "-wal"))
+        let turns = CodexPriorityTurnStore().turnsByID(databaseURL: database, since: now.addingTimeInterval(-86400))
+        #expect(turns["priced"]?.model == "gpt-5.4")
+    }
+
     private func writePricedSession(model: String, input: Int, now: Date, home: URL) throws {
         try writeLines([
             ["type": "session_meta", "payload": ["id": "priced"]],
@@ -167,10 +394,13 @@ struct LocalDailyUsageScannerTests {
         ], to: home.appending(path: ".codex/sessions/priced.jsonl"))
     }
 
-    private func writeTurnLog(_ body: String, now: Date, home: URL) throws {
+    private func writeTurnLog(_ body: String, now: Date, home: URL, wal: Bool = false) throws {
         var database: OpaquePointer?
         #expect(sqlite3_open(home.appending(path: ".codex/logs_2.sqlite").path, &database) == SQLITE_OK)
         defer { sqlite3_close(database) }
+        if wal {
+            #expect(sqlite3_exec(database, "PRAGMA journal_mode=WAL", nil, nil, nil) == SQLITE_OK)
+        }
         #expect(sqlite3_exec(database, "CREATE TABLE logs (id INTEGER PRIMARY KEY, ts INTEGER, feedback_log_body TEXT)", nil, nil, nil) == SQLITE_OK)
         let escaped = body.replacingOccurrences(of: "'", with: "''")
         #expect(sqlite3_exec(database, "INSERT INTO logs VALUES (1, \(Int64(now.timeIntervalSince1970)), '\(escaped)')", nil, nil, nil) == SQLITE_OK)

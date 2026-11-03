@@ -169,7 +169,7 @@ struct GrokUsageTests {
             session: Self.session(),
             environment: [:],
             cliLoader: { _ in
-                try JSONDecoder().decode(GrokBillingResponse.self, from: Data(#"""
+                try GrokUsageFetcher.parseCLIBilling(Data(#"""
                 {
                   "billingCycle":{"billingPeriodStart":"2026-05-01T00:00:00Z","billingPeriodEnd":"2026-06-01T00:00:00Z"},
                   "monthlyLimit":{"val":100},"usage":{"totalUsed":{"val":50}}
@@ -195,7 +195,7 @@ struct GrokUsageTests {
         case "$initialize" in *'"method":"initialize"'*) ;; *) exit 10 ;; esac
         printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{}}'
         IFS= read -r billing
-        case "$billing" in *'"method":"x.ai/billing"'*) ;; *) exit 11 ;; esac
+        case "$billing" in *'"method":"_x.ai/billing"'*) ;; *) exit 11 ;; esac
         case "$billing" in *'\\/'*) exit 12 ;; esac
         printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"monthlyLimit":{"val":100},"usage":{"totalUsed":{"val":25}}}}'
         """#
@@ -288,13 +288,41 @@ struct GrokUsageTests {
     }
 
     @Test
-    func inferredGRPCZeroNeverFillsUnknownProxyPercent() async throws {
+    func validatedGRPCZeroKeepsTheWeeklyWindowWhenProxyOmitsUsage() async throws {
         GrokTestURLProtocol.handler = { request in
             switch request.url?.host {
             case "cli-chat-proxy.grok.com":
                 if request.url?.path == "/v1/settings" { return (200, Data(#"{}"#.utf8), [:]) }
                 return (200, Data(#"{"config":{"currentPeriod":{"end":"2099-01-01T00:00:00Z"}}}"#.utf8), [:])
             case "grok.com":
+                return (200, Self.frame(Self.activeNoUsagePayload(reset: 1_900_000_000, start: 1_700_000_000, end: 2_000_000_000)), [:])
+            default:
+                throw URLError(.badURL)
+            }
+        }
+        defer { GrokTestURLProtocol.handler = nil }
+        let usage = try await GrokUsageFetcher.fetch(
+            source: .token,
+            credential: "oauth-token",
+            cachedCookie: nil,
+            allowBrowserImport: false,
+            session: Self.session(),
+            environment: [:],
+            now: Date(timeIntervalSince1970: 1_800_000_000))
+        #expect(usage.windows.count == 1)
+        #expect(usage.windows.first?.usedFraction == 0)
+        #expect(usage.message == nil)
+    }
+
+    @Test
+    func unvalidatedGRPCZeroIsNotPromotedToUsage() async throws {
+        GrokTestURLProtocol.handler = { request in
+            switch request.url?.host {
+            case "cli-chat-proxy.grok.com":
+                if request.url?.path == "/v1/settings" { return (200, Data(#"{}"#.utf8), [:]) }
+                return (200, Data(#"{"config":{"currentPeriod":{"end":"2099-01-01T00:00:00Z"}}}"#.utf8), [:])
+            case "grok.com":
+                // 只有周期元数据、没有有效的当前周期，推断出的 0% 不可靠。
                 return (200, Self.frame(Self.noUsagePayload(reset: 1_900_000_000)), [:])
             default:
                 throw URLError(.badURL)
@@ -310,7 +338,68 @@ struct GrokUsageTests {
             environment: [:],
             now: Date(timeIntervalSince1970: 1_800_000_000))
         #expect(usage.windows.isEmpty)
-        #expect(usage.message != nil)
+    }
+
+    @Test
+    func failedEnrichmentKeepsTheCLIWallet() async throws {
+        GrokTestURLProtocol.handler = { request in
+            switch request.url?.host {
+            case "cli-chat-proxy.grok.com":
+                return (200, Data(#"{}"#.utf8), [:])
+            case "grok.com":
+                return (200, Data("No personal team".utf8), ["grpc-status": "7", "grpc-message": "No personal team"])
+            default:
+                throw URLError(.badURL)
+            }
+        }
+        defer { GrokTestURLProtocol.handler = nil }
+        let usage = try await GrokUsageFetcher.fetch(
+            source: .account,
+            credential: nil,
+            cachedCookie: nil,
+            allowBrowserImport: false,
+            session: Self.session(),
+            environment: ["GROK_OAUTH_TOKEN": "environment-token"],
+            now: Date(timeIntervalSince1970: 1_800_000_000),
+            cliLoader: { _ in
+                try GrokUsageFetcher.parseCLIBilling(Data(
+                    #"{"config":{"prepaidBalance":{"val":1250}},"subscription_tier":"SuperGrok"}"#.utf8
+                ))
+            }
+        )
+        // 团队账号补充请求失败时仍显示 CLI 给出的钱包余额。
+        #expect(usage.balance == "$12.50")
+    }
+
+    @Test
+    func cliCreditsBillingWithOnlyWalletIsEnrichedWithZeroUsage() async throws {
+        GrokTestURLProtocol.handler = { request in
+            switch request.url?.host {
+            case "cli-chat-proxy.grok.com":
+                return (200, Data(#"{}"#.utf8), [:])
+            case "grok.com":
+                return (200, Self.frame(Self.activeNoUsagePayload(reset: 1_900_000_000, start: 1_700_000_000, end: 2_000_000_000)), [:])
+            default:
+                throw URLError(.badURL)
+            }
+        }
+        defer { GrokTestURLProtocol.handler = nil }
+        let usage = try await GrokUsageFetcher.fetch(
+            source: .account,
+            credential: nil,
+            cachedCookie: nil,
+            allowBrowserImport: false,
+            session: Self.session(),
+            environment: ["GROK_OAUTH_TOKEN": "environment-token"],
+            now: Date(timeIntervalSince1970: 1_800_000_000),
+            cliLoader: { _ in
+                try GrokUsageFetcher.parseCLIBilling(Data(
+                    #"{"config":{"prepaidBalance":{"val":1250}},"subscription_tier":"SuperGrok"}"#.utf8
+                ))
+            })
+        #expect(usage.plan == "SuperGrok")
+        #expect(usage.balance == "$12.50")
+        #expect(usage.windows.first?.usedFraction == 0)
     }
 
     @Test
@@ -465,6 +554,17 @@ struct GrokUsageTests {
         var inner = Data([0x2A]) + Self.varint(UInt64(resetMessage.count)) + resetMessage
         inner += Data([0x32]) + Self.varint(UInt64(periodMessage.count)) + periodMessage
         return Data([0x0A]) + Self.varint(UInt64(inner.count)) + inner
+    }
+
+    // 带有效当前周期（状态 1、开始早于现在、结束晚于现在）的无用量响应。
+    private nonisolated static func activeNoUsagePayload(reset: UInt64, start: UInt64, end: UInt64) -> Data {
+        func message(_ field: UInt8, _ body: Data) -> Data { Data([field]) + Self.varint(UInt64(body.count)) + body }
+        let resetMessage = Data([0x08]) + Self.varint(reset)
+        let period = Data([0x08, 0x01])
+            + message(0x12, Data([0x08]) + Self.varint(start))
+            + message(0x1A, Data([0x08]) + Self.varint(end))
+        let inner = message(0x2A, resetMessage) + message(0x42, period)
+        return message(0x0A, inner)
     }
 
     private nonisolated static func frame(_ payload: Data, flags: UInt8 = 0) -> Data {

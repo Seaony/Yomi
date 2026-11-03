@@ -80,4 +80,54 @@ struct CursorUsageTests {
 
         #expect(cookie.hasPrefix("WorkosCursorSessionToken=user-123%3A%3A"))
     }
+
+    @Test(arguments: [
+        ("2026-11-07T00:00:00Z", ["cursor-weekly"]),
+        ("2026-11-01T00:00:00Z", ["cursor-total", "cursor-auto", "cursor-api"]),
+    ])
+    func xSubscriptionWeeklyPoolBecomesMainMeterOnlyWhileItsResetIsAhead(reset: String, expectedIDs: [String]) throws {
+        let data = Data("""
+        {"billingCycleStart":"2026-10-01T00:00:00Z","billingCycleEnd":"2026-11-01T00:00:00Z",
+         "membershipType":"unified_pro","limitType":"user",
+         "individualUsage":{"plan":{"autoPercentUsed":100,"apiPercentUsed":100,"totalPercentUsed":100},
+           "onDemand":{"used":0,"limit":0}}}
+        """.utf8)
+        let sand = CursorSand(
+            nextResetTimestampUtc: reset, usagePercent: 3, hasNonZeroIncludedLimit: true, isUnified: true
+        )
+        let now = ISO8601DateFormatter().date(from: "2026-11-03T00:00:00Z")!
+
+        let usage = try CursorUsageFetcher.parse(summaryData: data, sand: sand, now: now)
+
+        // 每周池过期后回到原来的月度布局，不拿过时的数据当主额度。
+        #expect(usage.windows.map(\.id) == expectedIDs)
+        if expectedIDs == ["cursor-weekly"] {
+            #expect(usage.windows[0].usedFraction == 0.03)
+            #expect(usage.additionalWindows.isEmpty)
+        }
+    }
+
+    @Test
+    func unifiedMonthlySpendReplacesSummaryOnDemand() throws {
+        let data = Data("""
+        {"membershipType":"unified_ultra","limitType":"user",
+         "individualUsage":{"plan":{"totalPercentUsed":10},"onDemand":{"used":100,"limit":2000}}}
+        """.utf8)
+        let unified = try JSONDecoder().decode(CursorUnifiedUsage.self, from: Data("""
+        {"availability":"available","monthlyUsage":{"usedCents":1234,"limitCents":40000,
+          "periodStart":"2026-11-01T00:00:00Z","resetsAt":"2026-12-01T00:00:00Z"}}
+        """.utf8))
+        let now = ISO8601DateFormatter().date(from: "2026-11-03T00:00:00Z")!
+
+        let usage = try CursorUsageFetcher.parse(summaryData: data, unified: unified, now: now)
+        #expect(usage.providerCost?.used == 12.34)
+        #expect(usage.providerCost?.limit == 400)
+
+        // 不在当前周期内的数据不采用，保留原来的按需花费。
+        let stale = try CursorUsageFetcher.parse(
+            summaryData: data, unified: unified, now: ISO8601DateFormatter().date(from: "2026-12-02T00:00:00Z")!
+        )
+        #expect(stale.providerCost?.used == 1)
+        #expect(stale.providerCost?.limit == 20)
+    }
 }

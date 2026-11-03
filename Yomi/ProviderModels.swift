@@ -5,9 +5,6 @@ nonisolated struct ProviderID: RawRepresentable, Codable, Hashable, Sendable, Id
 
     var id: String { rawValue }
 
-    var isMagpieClaudeAccount: Bool { rawValue.hasPrefix("claude-magpie-") }
-    var catalogID: ProviderID { isMagpieClaudeAccount ? ProviderID(rawValue: "claude") : self }
-
     nonisolated init(rawValue: String) {
         self.rawValue = rawValue
     }
@@ -56,7 +53,6 @@ nonisolated struct ProviderDescriptor: Identifiable, Hashable, Sendable {
     let symbol: String
     let hue: Double
     let defaultEnabled: Bool
-    var accountName: String? = nil
 }
 
 nonisolated struct ProviderConfiguration: Codable, Hashable, Sendable, Identifiable {

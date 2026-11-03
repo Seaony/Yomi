@@ -163,6 +163,39 @@ struct ZaiUsageTests {
         #expect(usage.details.map(\.id) == ["zai-account-balance"])
     }
 
+    @Test(arguments: [true, false])
+    func prepaidOnlyBigModelAccountShowsBalanceOnlyWhenBalanceSucceeds(balanceAvailable: Bool) async throws {
+        ZaiTestURLProtocol.handler = { request in
+            guard let url = request.url else { throw URLError(.badURL) }
+            switch url.host {
+            case "open.bigmodel.cn":
+                return Self.response(url: url, body: #"{"code":500,"msg":"当前用户不存在coding plan","success":false}"#)
+            case "www.bigmodel.cn":
+                return Self.response(url: url, body: balanceAvailable ? Self.balance : "{}")
+            default:
+                throw URLError(.unsupportedURL)
+            }
+        }
+        defer { ZaiTestURLProtocol.handler = nil }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ZaiTestURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+
+        let fetch = {
+            try await ZaiUsageFetcher.fetch(
+                apiKey: "fixture-key", region: "bigmodel-cn", usageScope: "personal",
+                session: session, environment: [:]
+            )
+        }
+        if balanceAvailable {
+            let usage = try await fetch()
+            #expect(usage.windows.isEmpty)
+            #expect(usage.balance == "¥40.00")
+        } else {
+            await #expect(throws: ZaiUsageError.self) { _ = try await fetch() }
+        }
+    }
+
     @Test
     func teamModeRequiresBothSelectorsBeforeNetwork() async {
         let session = URLSession(configuration: .ephemeral)

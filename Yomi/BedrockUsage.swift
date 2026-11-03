@@ -15,6 +15,7 @@ nonisolated enum BedrockUsageError: LocalizedError, Equatable {
     case parseFailed(String)
     case cloudWatchAPIError(String)
     case cloudWatchParseFailed(String)
+    case spendUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -37,6 +38,8 @@ nonisolated enum BedrockUsageError: LocalizedError, Equatable {
             AppLocalization.text("AWS Bedrock 网络错误：\(message)", "AWS Bedrock network error: \(message)")
         case let .apiError(message):
             AppLocalization.text("AWS Cost Explorer 接口错误：\(message)", "AWS Cost Explorer API error: \(message)")
+        case .spendUnavailable:
+            AppLocalization.text("AWS Cost Explorer 暂时没有花费数据", "Spend unavailable from AWS Cost Explorer.")
         case let .parseFailed(message):
             AppLocalization.text(
                 "无法解析 AWS Cost Explorer 响应：\(message)",
@@ -645,8 +648,9 @@ nonisolated enum BedrockUsageFetcher {
         }
         guard let http = response as? HTTPURLResponse else { throw BedrockUsageError.parseFailed("invalid response") }
         guard http.statusCode == 200 else {
+            // 数据不可用不等于花费为 0，不能显示成 $0。
             if isDataUnavailable(status: http.statusCode, data: data) {
-                return Data(#"{"ResultsByTime":[]}"#.utf8)
+                throw BedrockUsageError.spendUnavailable
             }
             throw BedrockUsageError.apiError("HTTP \(http.statusCode)")
         }

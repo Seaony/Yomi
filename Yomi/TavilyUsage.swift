@@ -114,11 +114,13 @@ nonisolated enum TavilyUsageFetcher {
             limit: keyLimit
         )
         if account["paygo_usage"] != nil || account["paygo_limit"] != nil {
+            // 按量付费没有上限时返回 null，只显示已用，不当作不限量。
             details += try creditDetails(
                 id: "paygo",
                 title: AppLocalization.text("按量付费", "Pay as you go"),
                 used: count(account["paygo_usage"]),
-                limit: count(account["paygo_limit"])
+                limit: account["paygo_limit"] is NSNull ? nil : count(account["paygo_limit"]),
+                showsUnlimited: false
             )
         }
         return ProviderUsage(
@@ -143,15 +145,19 @@ nonisolated enum TavilyUsageFetcher {
         return count
     }
 
-    private static func creditDetails(id: String, title: String, used: Double, limit: Double?) -> [UsageDetail] {
+    private static func creditDetails(
+        id: String, title: String, used: Double, limit: Double?, showsUnlimited: Bool = true
+    ) -> [UsageDetail] {
         var details = [
             UsageDetail(id: "tavily-\(id)-used", label: "\(title) · \(AppLocalization.text("已用", "Used"))", value: credits(used)),
-            UsageDetail(
+        ]
+        if limit != nil || showsUnlimited {
+            details.append(UsageDetail(
                 id: "tavily-\(id)-limit",
                 label: "\(title) · \(AppLocalization.text("上限", "Limit"))",
                 value: limit.map(credits) ?? AppLocalization.text("不限量", "Unlimited")
-            ),
-        ]
+            ))
+        }
         if let limit {
             details.append(UsageDetail(
                 id: "tavily-\(id)-remaining",

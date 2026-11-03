@@ -729,7 +729,7 @@ private struct ProviderConfigurationView: View {
             : "")
         _secondarySecret = State(initialValue: providerID == "doubao" || providerID == "bedrock"
             ? readSecret("secret-access-key")
-            : "")
+            : providerID == "futureagi" ? readSecret("secret-key") : "")
         let storedBedrockAuthMode = providerID == "bedrock"
             ? readSecret("aws-auth-mode")
             : ""
@@ -1065,6 +1065,17 @@ private struct ProviderConfigurationView: View {
                             .background(SettingsPalette.inset)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
+                        if descriptor.id.rawValue == "futureagi" {
+                            SecureField(
+                                copy.text("Secret Key（或 FI_SECRET_KEY）", "Secret key (or FI_SECRET_KEY)"),
+                                text: $secondarySecret
+                            )
+                            .textFieldStyle(.plain)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 9)
+                            .background(SettingsPalette.inset)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
                     }
                 }
 
@@ -1134,6 +1145,27 @@ private struct ProviderConfigurationView: View {
         }
         if ["museai", "tinyapi", "lithosai", "workbuddy", "parallel", "replicate", "typesafe", "helmcode"].contains(descriptor.id.rawValue) {
             return copy.text("Cookie 标头", "Cookie header")
+        }
+        if descriptor.id.rawValue == "opendesign" {
+            return copy.text("Cookie 标头（amr-api.open-design.ai，可选）", "Cookie header (amr-api.open-design.ai, optional)")
+        }
+        if descriptor.id.rawValue == "traecn" {
+            return copy.text("Cookie 标头（api.trae.cn，可选）", "Cookie header (api.trae.cn, optional)")
+        }
+        if descriptor.id.rawValue == "abliteration" {
+            return "abliteration.ai API Key"
+        }
+        if descriptor.id.rawValue == "chatbox" {
+            return "Chatbox AI License Key"
+        }
+        if descriptor.id.rawValue == "futureagi" {
+            return copy.text("API Key（或 FI_API_KEY）", "API key (or FI_API_KEY)")
+        }
+        if descriptor.id.rawValue == "munito" {
+            return copy.text("Munito 管理 API Key（需读取账户数据权限）", "Munito admin API key (Read account data permission)")
+        }
+        if descriptor.id.rawValue == "soniox" {
+            return copy.text("Soniox 组织 API Key", "Soniox organization API key")
         }
         if descriptor.id.rawValue == "claudeplatform" {
             return copy.text("Cookie 标头（包含 sessionKey）", "Cookie header (including sessionKey)")
@@ -1217,9 +1249,6 @@ private struct ProviderConfigurationView: View {
         }
         if descriptor.id.rawValue == "deepinfra" {
             return "DeepInfra API Key"
-        }
-        if descriptor.id.rawValue == "crof" {
-            return "Crof API Key"
         }
         if descriptor.id.rawValue == "venice" {
             return "Venice API Key"
@@ -1406,6 +1435,13 @@ private struct ProviderConfigurationView: View {
         if descriptor.id.rawValue == "ibmbob", source == .token {
             return "API Key"
         }
+        if descriptor.id.rawValue == "gemini" {
+            return switch source {
+            case .account: "Gemini CLI"
+            case .cookie: copy.text("Gemini 应用（浏览器会话）", "Gemini app (browser session)")
+            default: source.title(language: language)
+            }
+        }
         if descriptor.id.rawValue == "grok" {
             return switch source {
             case .automatic: copy.text("自动", "Auto")
@@ -1437,8 +1473,10 @@ private struct ProviderConfigurationView: View {
 
     private var showsAuthenticationCard: Bool {
         if descriptor.id.rawValue == "coderabbit" { return false }
+        if descriptor.id.rawValue == "pi" { return false }
         if descriptor.id.rawValue == "helmcode" { return configuration.source == .cookie }
         if descriptor.id.rawValue == "zed" { return configuration.source == .cookie }
+        if descriptor.id.rawValue == "gemini" { return configuration.source == .cookie }
         if descriptor.id.rawValue == "codex" {
             return configuration.source == .automatic
                 || configuration.source == .token
@@ -1534,6 +1572,13 @@ private struct ProviderConfigurationView: View {
                     secondarySecret,
                     for: descriptor.id,
                     key: "secret-access-key"
+                )
+            }
+            if descriptor.id.rawValue == "futureagi" {
+                try store.preferences.setAuxiliarySecret(
+                    secondarySecret,
+                    for: descriptor.id,
+                    key: "secret-key"
                 )
             }
             if descriptor.id.rawValue == "bedrock" {

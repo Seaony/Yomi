@@ -111,6 +111,7 @@ nonisolated struct AppCopy {
     private static let usageLabels: [String: String] = [
         "Session": "会话",
         "Weekly": "每周",
+        "30-day": "30 天",
         "Spend": "支出",
         "Requests": "请求",
         "Status": "状态",
@@ -193,6 +194,9 @@ nonisolated struct AppCopy {
         "Daily free tokens": "每日免费 Token",
         "Plan": "套餐",
         "Plan credits": "套餐额度",
+        "AI credits": "AI 点数",
+        "Gateway requests": "Gateway 请求",
+        "Top-up credits": "加油包点数",
         "Premium weekly": "Premium 周额度",
         "Secondary budget": "次要预算",
         "API key": "API Key",

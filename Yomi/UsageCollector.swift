@@ -51,25 +51,6 @@ actor UsageCollector {
             ?? ClaudeWeeklyAmountEstimator()
     }
 
-    func collectMagpieClaudeUsage(for id: ProviderID) async throws -> ProviderUsage {
-        var credential = try await MagpieClaudeAccounts.credential(for: id, session: session)
-        let claudeID = ProviderID(rawValue: "claude")
-        let descriptor = await MainActor.run { ProviderCatalog.byID[claudeID]! }
-        let recipe = ProviderRecipes.recipe(for: claudeID)!
-        var usage: ProviderUsage
-        do {
-            usage = try await remoteUsage(descriptor: descriptor, recipe: recipe, secret: credential.token)
-        } catch UsageCollectionError.requestFailed(401) {
-            credential = try await MagpieClaudeAccounts.credential(
-                for: id, session: session, rejectedToken: credential.token
-            )
-            usage = try await remoteUsage(descriptor: descriptor, recipe: recipe, secret: credential.token)
-        }
-        usage.id = id
-        usage.plan = credential.plan
-        return usage
-    }
-
     func collect(
         descriptor: ProviderDescriptor,
         configuration: ProviderConfiguration,
@@ -117,6 +98,7 @@ actor UsageCollector {
             || descriptor.id.rawValue == "claude"
             || descriptor.id.rawValue == "vertexai"
             || descriptor.id.rawValue == "deepseek"
+            || descriptor.id.rawValue == "pi"
         else {
             return usage
         }
@@ -136,6 +118,7 @@ actor UsageCollector {
             || descriptor.id.rawValue == "claude"
             || descriptor.id.rawValue == "vertexai"
             || descriptor.id.rawValue == "deepseek"
+            || descriptor.id.rawValue == "pi"
         else {
             return usage
         }
@@ -342,8 +325,9 @@ actor UsageCollector {
         }
 
         let environmentValue = environmentSecret(for: descriptor)
-        let localValue = localCredential(for: descriptor.id)
-        let resolvedSecret = [secret, environmentValue, localValue].first(where: { !$0.isEmpty }) ?? ""
+        // 已有手动或环境变量凭据时不读本地凭据，避免白白弹出钥匙串授权。
+        let resolvedSecret = [secret, environmentValue].first(where: { !$0.isEmpty })
+            ?? localCredential(for: descriptor.id)
         if descriptor.id.rawValue == "notion" {
             let cachedCookie = await MainActor.run {
                 ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie")
@@ -450,6 +434,10 @@ actor UsageCollector {
             )
         }
         if descriptor.id.rawValue == "gemini" {
+            // Gemini 应用额度属于浏览器账号，只在明确选择时使用，不替代 CLI 额度。
+            if configuration.source == .cookie {
+                return try await GeminiAppUsageFetcher.fetch(manualCookie: secret, session: session)
+            }
             return try await GeminiUsageFetcher.fetch(session: session)
         }
         if descriptor.id.rawValue == "antigravity" {
@@ -664,12 +652,6 @@ actor UsageCollector {
         if descriptor.id.rawValue == "deepinfra" {
             return try await DeepInfraUsageFetcher.fetch(
                 apiKey: resolvedSecret.isEmpty ? nil : resolvedSecret,
-                session: session
-            )
-        }
-        if descriptor.id.rawValue == "crof" {
-            return try await CrofUsageFetcher.fetch(
-                apiKey: secret.isEmpty ? nil : secret,
                 session: session
             )
         }
@@ -1074,6 +1056,38 @@ actor UsageCollector {
                 organizationID: configuration.account, session: session
             )
         }
+        if descriptor.id.rawValue == "abliteration" {
+            return try await AbliterationUsageFetcher.fetch(apiKey: secret.isEmpty ? nil : secret, session: session)
+        }
+        if descriptor.id.rawValue == "chatbox" {
+            return try await ChatboxUsageFetcher.fetch(licenseKey: secret.isEmpty ? nil : secret, session: session)
+        }
+        if descriptor.id.rawValue == "futureagi" {
+            let secretKey = await MainActor.run {
+                ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "secret-key")
+            }
+            return try await FutureAGIUsageFetcher.fetch(
+                apiKey: secret.isEmpty ? nil : secret,
+                secretKey: secretKey.isEmpty ? nil : secretKey,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "munito" {
+            return try await MunitoUsageFetcher.fetch(apiKey: secret.isEmpty ? nil : secret, session: session)
+        }
+        if descriptor.id.rawValue == "soniox" {
+            return try await SonioxUsageFetcher.fetch(apiKey: secret.isEmpty ? nil : secret, session: session)
+        }
+        if descriptor.id.rawValue == "opendesign" {
+            return try await OpenDesignUsageFetcher.fetch(manualCookie: secret, session: session)
+        }
+        if descriptor.id.rawValue == "traecn" {
+            return try await TraeCNUsageFetcher.fetch(manualCookie: secret, session: session)
+        }
+        if descriptor.id.rawValue == "pi" {
+            // Pi 没有额度接口，只统计本地会话日志里的 Token 和金额。
+            return ProviderUsage(id: descriptor.id, state: .ready, windows: [], updatedAt: Date())
+        }
         if let recipe = ProviderRecipes.recipe(for: descriptor.id), !resolvedSecret.isEmpty {
             return try await remoteUsage(descriptor: descriptor, recipe: recipe, secret: resolvedSecret)
         }
@@ -1262,6 +1276,15 @@ actor UsageCollector {
         if id.rawValue == "opencodego", let key = openCodeGoLocalAPIKey() {
             return key
         }
+        if id.rawValue == "claude" {
+            // 凭据里还可能有 MCP 服务的 token，只能取 claudeAiOauth 下的那个。
+            for url in localCandidates(for: id) {
+                if let data = try? Data(contentsOf: url), let token = Self.claudeOAuthAccessToken(in: data) {
+                    return token
+                }
+            }
+            return claudeKeychainCredentialData().flatMap(Self.claudeOAuthAccessToken) ?? ""
+        }
         let keys = ["access_token", "accessToken", "oauth_token", "token", "api_key", "apiKey"]
         for url in localCandidates(for: id) {
             guard let data = try? Data(contentsOf: url),
@@ -1269,25 +1292,20 @@ actor UsageCollector {
                   let value = Self.findString(in: object, keys: Set(keys)) else { continue }
             return value
         }
-        if id.rawValue == "claude", let data = claudeKeychainCredentialData(),
-           let object = try? JSONSerialization.jsonObject(with: data),
-           let value = Self.findString(
-               in: object,
-               keys: ["access_token", "accessToken", "oauth_token", "token"]
-           ) {
-            return value
-        }
         return ""
     }
 
-    private func openCodeGoLocalAPIKey() -> String? {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: ".local/share/opencode/auth.json")
-        guard let data = try? Data(contentsOf: url),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let entry = root["opencode-go"] as? [String: Any],
-              let key = entry["key"] as? String
+    nonisolated static func claudeOAuthAccessToken(in data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let oauth = root["claudeAiOauth"] as? [String: Any],
+              let token = oauth["accessToken"] as? String,
+              !token.isEmpty
         else { return nil }
+        return token
+    }
+
+    private func openCodeGoLocalAPIKey() -> String? {
+        guard let key = OpenCodeGoLocalUsageReader.cliCredential() else { return nil }
         let normalized = OpenCodeGoUsageFetcher.normalizeAPIKey(key)
         return normalized.isEmpty ? nil : normalized
     }
@@ -1315,10 +1333,25 @@ actor UsageCollector {
             guard process.terminationStatus == 0 else { return nil }
             let token = String(data: data, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            return token?.isEmpty == false ? token : nil
+            guard let token, !token.isEmpty else { return nil }
+            return Self.decryptedCursorAppToken(token)
         } catch {
             return nil
         }
+    }
+
+    // Cursor 3.27 起把令牌包成 cursor-safe-storage:v1: 加密串，需要用钥匙串里的 Cursor Safe Storage 解密。
+    nonisolated static func decryptedCursorAppToken(_ token: String) -> String? {
+        let prefix = "cursor-safe-storage:v1:"
+        guard token.hasPrefix(prefix) else { return token }
+        guard let encrypted = Data(base64Encoded: String(token.dropFirst(prefix.count))),
+              encrypted.count > 3, encrypted.starts(with: Data("v10".utf8)),
+              (encrypted.count - 3).isMultiple(of: 16),
+              let password = ChromiumSafeStorage.password(service: "Cursor Safe Storage", account: "Cursor"),
+              let plaintext = ChromiumSafeStorage.decrypt(encrypted, key: ChromiumSafeStorage.deriveKey(from: password)),
+              let decoded = String(data: plaintext, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !decoded.isEmpty else { return nil }
+        return decoded
     }
 
     func claudeKeychainCredentialData(
@@ -1359,10 +1392,58 @@ actor UsageCollector {
         return true
     }
 
-    private nonisolated static func readClaudeKeychain(_ query: [String: Any]) -> (OSStatus, Data?) {
+    nonisolated static func readClaudeKeychain(_ query: [String: Any]) -> (OSStatus, Data?) {
+        // Claude Code 刷新令牌会改写钥匙串条目并清掉 Yomi 的授权，
+        // 它自己用 security 命令写入，所以先用同一个命令读取，避免反复弹窗。
+        if let service = query[kSecAttrService as String] as? String,
+           let data = readKeychainViaSecurityCLI(service: service) {
+            return (errSecSuccess, data)
+        }
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         return (status, item as? Data)
+    }
+
+    private nonisolated static func readKeychainViaSecurityCLI(service: String) -> Data? {
+        let path = "/usr/bin/security"
+        guard FileManager.default.isExecutableFile(atPath: path) else { return nil }
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = ["find-generic-password", "-s", service, "-w"]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        // 边运行边读输出，避免内容较多时写满管道卡住。
+        let handle = output.fileHandleForReading
+        let reading = DispatchGroup()
+        nonisolated(unsafe) var data = Data()
+        reading.enter()
+        DispatchQueue.global(qos: .utility).async {
+            data = handle.readDataToEndOfFile()
+            reading.leave()
+        }
+        // 与 CodexBar 一致，超时就放弃，改走系统接口读取。
+        let deadline = Date().addingTimeInterval(1.5)
+        while process.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if process.isRunning {
+            process.terminate()
+            return nil
+        }
+        reading.wait()
+        guard process.terminationStatus == 0 else { return nil }
+        while let last = data.last, last == 0x0A || last == 0x0D {
+            data.removeLast()
+        }
+        // 含不可打印字符时命令会输出十六进制，不是 JSON 就交给系统接口读取。
+        guard !data.isEmpty, (try? JSONSerialization.jsonObject(with: data)) != nil else { return nil }
+        return data
     }
 
     private func addingLocalMetadata(

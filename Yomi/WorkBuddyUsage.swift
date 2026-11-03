@@ -218,6 +218,8 @@ nonisolated enum WorkBuddyUsageFetcher {
             } catch let error as URLError where error.code == .cancelled {
                 throw CancellationError()
             } catch {}
+            // 付费套餐按周期续额度，试用或赠送额度可能更早到期，不能拿来提前重置时间。
+            if let earliest { return earliest }
         }
         return earliest
     }

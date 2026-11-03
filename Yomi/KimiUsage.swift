@@ -210,7 +210,7 @@ nonisolated enum KimiUsageFetcher {
     }
 
     struct WebResponse: Codable, Sendable, Equatable {
-        let usages: [WebUsage]
+        let usages: [WebUsage]?
     }
 
     struct SubscriptionBalance: Codable, Sendable, Equatable {
@@ -399,14 +399,13 @@ nonisolated enum KimiUsageFetcher {
 
     static func parseWeb(_ data: Data, subscriptionData: Data? = nil) throws -> Snapshot {
         let response = try JSONDecoder().decode(WebResponse.self, from: data)
-        guard let coding = response.usages.first(where: { $0.scope == "FEATURE_CODING" }) else {
-            throw KimiUsageError.parseFailed
-        }
+        // 编程套餐过期后可能没有 Code 额度，仍保留会员额度；两者都没有时由 providerUsage 报解析失败。
+        let coding = response.usages?.first(where: { $0.scope == "FEATURE_CODING" })
         let subscription = subscriptionData.flatMap { try? JSONDecoder().decode(SubscriptionResponse.self, from: $0) }
         return Snapshot(
-            weekly: coding.detail,
-            rateLimit: coding.limits?.first?.detail,
-            rateLimitWindow: coding.limits?.first?.window,
+            weekly: coding?.detail,
+            rateLimit: coding?.limits?.first?.detail,
+            rateLimitWindow: coding?.limits?.first?.window,
             subscription: subscription
         )
     }

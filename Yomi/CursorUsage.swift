@@ -33,7 +33,15 @@ enum CursorUsageFetcher {
             nil
         }
         try Task.checkCancellation()
-        let requestUsageData: Data? = if teamBudget == nil,
+        // 统一计费账号的月度花费单独从 usage-status 读，旧的请求额度接口对它们无意义。
+        let isUnified = parsedSummary?.usesUnifiedPersonalBilling == true
+        let unified: CursorUnifiedUsage? = if isUnified {
+            await optionalRequest(path: "/api/dashboard/v2/usage-status?scope=user", cookie: cookie, session: session)
+                .flatMap { try? JSONDecoder().decode(CursorUnifiedUsage.self, from: $0) }
+        } else {
+            nil
+        }
+        let requestUsageData: Data? = if !isUnified, teamBudget == nil,
                                        let userID = user?.sub ?? identity(from: cookie)?.subject {
             await optionalRequest(
                 path: "/api/usage?user=\(userID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")",
@@ -51,6 +59,7 @@ enum CursorUsageFetcher {
             legacy: legacy,
             sand: sand,
             teamBudget: teamBudget,
+            unified: unified,
             now: now
         )
     }
@@ -61,6 +70,7 @@ enum CursorUsageFetcher {
         legacy: CursorLegacyUsage? = nil,
         sand: CursorSand? = nil,
         teamBudget: CursorTeamBudget? = nil,
+        unified: CursorUnifiedUsage? = nil,
         now: Date = Date()
     ) throws -> ProviderUsage {
         let summary: CursorSummary
@@ -107,8 +117,26 @@ enum CursorUsageFetcher {
         let legacyUsed = legacy?.gpt4?.numRequestsTotal ?? legacy?.gpt4?.numRequests
         let legacyLimit = legacy?.gpt4?.maxRequestUsage
         let hasLegacy = teamBudget == nil && legacyUsed != nil && (legacyLimit ?? 0) > 0
+        let hasSandLimit = sand?.includedLimitZero.map { !$0 } ?? sand?.hasNonZeroIncludedLimit
+        let hasSandTrial = hasSandLimit != true && date(sand?.sandTrialExpiresAt).map { $0 > now } == true
+        let sandReset = hasSandTrial ? nil : date(sand?.nextResetTimestampUtc)
+        // X 订阅共用一个每周额度池，usage-summary 里的月度数据已过时，用每周池做主额度。
+        let sharedWeeklyReset: Date? = if !hasLegacy, sand?.isUnified == true, hasSandLimit == true || hasSandTrial,
+                                          sand?.usagePercent != nil, let sandReset, sandReset > now {
+            sandReset
+        } else {
+            nil
+        }
         var windows: [UsageWindow] = []
-        if hasLegacy || totalPercent != nil {
+        if let sharedWeeklyReset, let percent = sand?.usagePercent {
+            windows.append(UsageWindow(
+                id: "cursor-weekly",
+                label: "Weekly",
+                usedFraction: clampedPercent(percent) / 100,
+                resetsAt: sharedWeeklyReset,
+                detail: nil
+            ))
+        } else if hasLegacy || totalPercent != nil {
             windows.append(UsageWindow(
                 id: "cursor-total",
                 label: "Total",
@@ -119,7 +147,7 @@ enum CursorUsageFetcher {
                 detail: hasLegacy ? "\(legacyUsed ?? 0) / \(legacyLimit ?? 0) requests" : nil
             ))
         }
-        if !hasLegacy, let autoPercent {
+        if !hasLegacy, sharedWeeklyReset == nil, let autoPercent {
             windows.append(UsageWindow(
                 id: "cursor-auto",
                 label: "Cursor",
@@ -128,7 +156,7 @@ enum CursorUsageFetcher {
                 detail: nil
             ))
         }
-        if !hasLegacy, let apiPercent {
+        if !hasLegacy, sharedWeeklyReset == nil, let apiPercent {
             windows.append(UsageWindow(
                 id: "cursor-api",
                 label: "Third Party",
@@ -138,14 +166,12 @@ enum CursorUsageFetcher {
             ))
         }
         var additional: [UsageWindow] = []
-        let hasSandLimit = sand?.includedLimitZero.map { !$0 } ?? sand?.hasNonZeroIncludedLimit
-        let hasSandTrial = hasSandLimit != true && date(sand?.sandTrialExpiresAt).map { $0 > now } == true
-        if !hasLegacy, hasSandLimit == true || hasSandTrial, let percent = sand?.usagePercent {
+        if !hasLegacy, sharedWeeklyReset == nil, hasSandLimit == true || hasSandTrial, let percent = sand?.usagePercent {
             additional.append(UsageWindow(
                 id: "cursor-grok-bot",
                 label: "Grok Bot",
                 usedFraction: clampedPercent(percent) / 100,
-                resetsAt: hasSandTrial ? nil : date(sand?.nextResetTimestampUtc),
+                resetsAt: sandReset,
                 detail: nil
             ))
         }
@@ -154,7 +180,16 @@ enum CursorUsageFetcher {
         let personalLimit = summary.individualUsage?.onDemand?.limit.map { Double($0) / 100 }
         let teamUsed = summary.teamUsage?.onDemand?.used.map { Double($0) / 100 }
         let teamLimit = summary.teamUsage?.onDemand?.limit.map { Double($0) / 100 }
-        let cost: ProviderCostSummary? = if (personalLimit ?? 0) > 0 {
+        let monthly = summary.usesUnifiedPersonalBilling ? unified?.currentMonthlyUsage(at: now) : nil
+        let cost: ProviderCostSummary? = if let monthly {
+            ProviderCostSummary(
+                used: monthly.usedCents / 100,
+                limit: monthly.limitCents / 100,
+                currencyCode: "USD",
+                period: "Monthly",
+                balance: nil
+            )
+        } else if (personalLimit ?? 0) > 0 {
             ProviderCostSummary(
                 used: personalUsed,
                 limit: personalLimit ?? 0,
@@ -369,6 +404,36 @@ struct CursorSand: Decodable {
     var hasNonZeroIncludedLimit: Bool?
     var includedLimitZero: Bool?
     var sandTrialExpiresAt: String?
+    var isUnified: Bool?
+}
+
+struct CursorUnifiedUsage: Decodable {
+    struct MonthlyUsage: Decodable {
+        var usedCents: Double
+        var limitCents: Double
+        var periodStart: String
+        var resetsAt: String
+    }
+
+    var availability: String
+    var monthlyUsage: MonthlyUsage?
+
+    // 只采用当前计费周期内、数值有效的月度花费。
+    func currentMonthlyUsage(at now: Date) -> MonthlyUsage? {
+        let formatter = ISO8601DateFormatter()
+        func parse(_ raw: String) -> Date? {
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: raw) { return date }
+            formatter.formatOptions = [.withInternetDateTime]
+            return formatter.date(from: raw)
+        }
+        guard availability == "available", let usage = monthlyUsage,
+              usage.usedCents.isFinite, usage.usedCents >= 0,
+              usage.limitCents.isFinite, usage.limitCents >= 0,
+              let start = parse(usage.periodStart), let reset = parse(usage.resetsAt),
+              start <= now, now < reset else { return nil }
+        return usage
+    }
 }
 
 struct CursorTeamBudget {
@@ -442,6 +507,10 @@ private struct CursorSummary: Decodable {
     var limitType: String?
     var individualUsage: UsageBlock?
     var teamUsage: UsageBlock?
+
+    var usesUnifiedPersonalBilling: Bool {
+        membershipType?.lowercased().hasPrefix("unified_") == true && limitType?.lowercased() == "user"
+    }
 
     var isTeamPlan: Bool {
         ["enterprise", "business", "team", "teams"].contains(membershipType?.lowercased() ?? "")

@@ -100,6 +100,26 @@ final class UsageParserTests: XCTestCase {
         )
     }
 
+    func testCodexFreeThirtyDayWindowIsKeptWithoutWeeklyWindow() throws {
+        let usage = try parseCodex(
+            """
+            {
+              "rate_limit": {
+                "primary_window": {
+                  "used_percent": 42,
+                  "reset_at": 1788250009,
+                  "limit_window_seconds": 2592000
+                },
+                "secondary_window": null
+              }
+            }
+            """
+        )
+
+        XCTAssertEqual(usage.windows.map(\.label), ["30-day"])
+        XCTAssertEqual(usage.windows.first?.usedFraction, 0.42)
+    }
+
     func testCodexAdditionalRateLimitsCannotCreateCoreQuotaWindows() {
         XCTAssertThrowsError(
             try parseCodex(

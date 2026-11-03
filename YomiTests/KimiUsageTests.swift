@@ -59,6 +59,21 @@ struct KimiUsageTests {
         #expect(result.additionalWindows.isEmpty)
     }
 
+    @Test func lapsedCodePlanKeepsMembershipUsage() throws {
+        let usageData = Data(#"{"usages":[{"scope":"FEATURE_OMNI","detail":{"limit":"10","used":"9"}}]}"#.utf8)
+        let subscription = Data(#"""
+        {"subscriptionBalance":{"feature":"FEATURE_OMNI","type":"SUBSCRIPTION","amountUsedRatio":0.3}}
+        """#.utf8)
+        let result = KimiUsageFetcher.providerUsage(
+            snapshot: try KimiUsageFetcher.parseWeb(usageData, subscriptionData: subscription)
+        )
+        #expect(result.state == .ready)
+        #expect(result.additionalWindows.map(\.id) == ["kimi-monthly"])
+
+        let empty = KimiUsageFetcher.providerUsage(snapshot: try KimiUsageFetcher.parseWeb(Data("{}".utf8)))
+        #expect(empty.state == .failed)
+    }
+
     @Test func invalidCountersDoNotCreateQuotaWindows() throws {
         let data = Data(#"{"usage":{"limit":"invalid","used":"5"}}"#.utf8)
         let usage = KimiUsageFetcher.providerUsage(snapshot: try KimiUsageFetcher.parseCode(data))

@@ -60,6 +60,21 @@ struct ClaudeWeeklyAmountEstimatorTests {
         #expect(try #require(nextPercent) == 2_000)
     }
 
+    @Test(arguments: [("Max 20x", "Ultra"), ("Max 5x", "Max")])
+    func planRenameKeepsTheQualifiedEstimate(oldName: String, newName: String) throws {
+        var estimator = ClaudeWeeklyAmountEstimator()
+        _ = estimator.estimate(currentCostUSD: 240, usedFraction: 0.12, resetAt: firstReset, plan: oldName)
+
+        let amount = estimator.estimate(
+            currentCostUSD: 100,
+            usedFraction: 0.01,
+            resetAt: firstReset.addingTimeInterval(7 * 24 * 60 * 60),
+            plan: newName
+        )
+
+        #expect(try #require(amount) == 2_000)
+    }
+
     @Test
     func weightedMedianRejectsASmallOutlier() throws {
         var estimator = ClaudeWeeklyAmountEstimator()
@@ -145,5 +160,22 @@ struct ClaudeWeeklyAmountEstimatorTests {
         )
 
         #expect(try #require(amount) == 2_000)
+    }
+
+    @Test(arguments: [("Ultra", 2_200.0), ("Max 20x", 2_200.0), ("Max", 770.0), ("Max 5x", 770.0), ("Pro", nil)])
+    func coldStartPriorAcceptsRenamedAndCachedPlans(plan: String, expected: Double?) {
+        var estimator = ClaudeWeeklyAmountEstimator()
+        let amount = estimator.estimate(
+            currentCostUSD: 10,
+            usedFraction: 0.01,
+            resetAt: Date().addingTimeInterval(86_400),
+            plan: plan
+        )
+
+        if let expected {
+            #expect(amount == expected)
+        } else {
+            #expect(amount != 770 && amount != 2_200)
+        }
     }
 }

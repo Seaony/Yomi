@@ -1,5 +1,7 @@
 import Darwin
 import Foundation
+import LocalAuthentication
+import Security
 import SweetCookieKit
 
 nonisolated enum BrowserCookieAccess {
@@ -78,6 +80,74 @@ nonisolated enum BrowserCookieAccess {
                 throw error
             }
         }
+    }
+
+    // 读取其他应用的钥匙串条目：后台只在之前授权成功过时静默读取，
+    // 需要授权时只在手动刷新时弹一次，拒绝后 6 小时内不再弹。
+    static func readForeignKeychainItem(
+        service: String,
+        read: (_ allowPrompt: Bool) -> (OSStatus, Data?),
+        exists: () -> Bool
+    ) -> (OSStatus, Data?) {
+        let manual = scope?.allowInteraction == true
+        let granted = denialLock.withLock { UserDefaults.standard.bool(forKey: credentialGrantKey(service)) }
+        // 旧式 ACL 的条目即使设置了不弹窗也可能弹，后台没授权记录时不碰密码，只查条目是否存在。
+        if !manual, !granted {
+            return (exists() ? errSecInteractionNotAllowed : errSecItemNotFound, nil)
+        }
+        var (status, data) = read(false)
+        if status == errSecInteractionNotAllowed || status == errSecAuthFailed {
+            setCredentialGrant(false, service: service)
+            guard claimCredentialPrompt(service: service) else { return (status, nil) }
+            (status, data) = read(true)
+            if [errSecUserCanceled, errSecAuthFailed, errSecNoAccessForItem].contains(status) {
+                denialLock.withLock {
+                    UserDefaults.standard.set(Date().addingTimeInterval(6 * 60 * 60), forKey: credentialDenialKey(service))
+                }
+            }
+        }
+        if status == errSecSuccess { setCredentialGrant(true, service: service) }
+        return (status, data)
+    }
+
+    // 不弹窗的钥匙串查询：同时设置 LAContext 和旧式钥匙串的 UI-fail 标志。
+    static func applyNoUI(to query: inout [String: Any]) {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        query[kSecUseAuthenticationContext as String] = context
+        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+    }
+
+    // 只查条目是否存在，不读取密码，不会触发授权弹窗。
+    static func foreignKeychainItemExists(service: String, account: String) -> Bool {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnAttributes as String: true,
+        ]
+        applyNoUI(to: &query)
+        return SecItemCopyMatching(query as CFDictionary, nil) != errSecItemNotFound
+    }
+
+    private static func claimCredentialPrompt(service: String) -> Bool {
+        let coolingDown = denialLock.withLock {
+            (UserDefaults.standard.object(forKey: credentialDenialKey(service)) as? Date).map { $0 > Date() } ?? false
+        }
+        return !coolingDown && scope?.claimInteraction() == true
+    }
+
+    private static func setCredentialGrant(_ granted: Bool, service: String) {
+        denialLock.withLock { UserDefaults.standard.set(granted, forKey: credentialGrantKey(service)) }
+    }
+
+    private static func credentialDenialKey(_ service: String) -> String {
+        "credential-keychain-denied-until.\(service)"
+    }
+
+    private static func credentialGrantKey(_ service: String) -> String {
+        "credential-keychain-granted.\(service)"
     }
 
     private static var isCoolingDown: Bool {

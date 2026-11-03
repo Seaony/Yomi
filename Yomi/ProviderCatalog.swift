@@ -30,7 +30,7 @@ enum ProviderCatalog {
         item("qwencloud", "Qwen Cloud", "5-hour", "Weekly", .quota, [.cookie], ["QWEN_CLOUD_COOKIE"], "q.circle", 0.20),
         item("factory", "Droid", "Standard", "Premium", .quota, [.token, .cookie], ["FACTORY_API_KEY"], "gearshape.2", 0.22),
         item("fireworks", "Fireworks", "Spend", "Spend", .spend, [.token], ["FIREWORKS_API_KEY", "FIREWORKS_KEY"], "sparkles", 0.01),
-        item("gemini", "Gemini", "Pro", "Flash", .quota, [.account], ["GEMINI_OAUTH_CLIENT_ID", "GEMINI_OAUTH_CLIENT_SECRET", "GEMINI_OAUTH2_JS_PATH"], "diamond", 0.23),
+        item("gemini", "Gemini", "Pro", "Flash", .quota, [.account, .cookie], ["GEMINI_OAUTH_CLIENT_ID", "GEMINI_OAUTH_CLIENT_SECRET", "GEMINI_OAUTH2_JS_PATH"], "diamond", 0.23),
         item("antigravity", "Antigravity", "Gemini Models", "Claude and " + letterPair, .quota, [.account, .token], ["ANTIGRAVITY_OAUTH_CREDENTIALS_JSON"], "arrow.up.circle", 0.25),
         item("copilot", "Copilot", "Premium", "Chat", .quota, [.token], ["COPILOT_API_TOKEN"], "point.topleft.down.to.point.bottomright.curvepath", 0.27),
         item("devin", "Devin", "Daily", "Weekly", .quota, [.account, .token], ["DEVIN_BEARER_TOKEN", "DEVIN_AUTHORIZATION"], "d.circle", 0.29),
@@ -62,7 +62,6 @@ enum ProviderCatalog {
         item("deepseek", "DeepSeek", "Balance", "", .balance, [.token, .cookie], ["DEEPSEEK_API_KEY", "DEEPSEEK_KEY"], "scope", 0.81),
         item("deepinfra", "DeepInfra", "Balance", "Balance", .balance, [.token], ["DEEPINFRA_API_KEY", "DEEPINFRA_TOKEN"], "server.rack", 0.83),
         item("codebuff", "Codebuff", "Credits", "Weekly", .credits, [.token], ["CODEBUFF_API_KEY"], "curlybraces", 0.85),
-        item("crof", "Crof", "Credits", "Credits", .credits, [.token], ["CROF_API_KEY", "CROFAI_API_KEY"], "c.square", 0.87),
         item("venice", "Venice", "Balance", "Balance", .balance, [.token, .cookie], ["VENICE_API_KEY", "VENICE_KEY"], "v.circle", 0.89),
         item("commandcode", "Command Code", "5-hour", "Weekly", .quota, [.token, .cookie], ["COMMAND_CODE_API_KEY"], "command", 0.91),
         item("qoder", "Qoder", "Credits", "Balance", .credits, [.cookie], [], "q.square", 0.93),
@@ -135,6 +134,14 @@ enum ProviderCatalog {
         item("sailresearch", "Sail Research", "Balance", "Spend", .balance, [.token], ["SAIL_API_KEY"], "s.circle", 0.615),
         item("flora", "FLORA", "Balance", "Balance", .balance, [.token], ["FLORA_API_KEY"], "f.circle", 0.20),
         item("claudeplatform", "Claude Platform", "API credit", "Purchased credit", .credits, [.cookie], [], "sun.max", 0.04),
+        item("abliteration", "abliteration.ai", "Credits", "Balance", .credits, [.token], ["ABLITERATION_API_KEY"], "a.circle", 0.0),
+        item("chatbox", "Chatbox AI", "Plan", "Top-up credits", .credits, [.token], ["CHATBOX_LICENSE_KEY"], "c.circle", 0.59),
+        item("futureagi", "Future AGI", "AI credits", "Gateway requests", .credits, [.token], ["FI_API_KEY"], "f.circle", 0.72),
+        item("munito", "Munito", "Today", "This month", .spend, [.token], ["MUNITO_API_KEY", "MUNITO_ADMIN_KEY"], "m.circle", 0.74),
+        item("soniox", "Soniox", "Monthly budget", "Balance", .spend, [.token], ["SONIOX_ORG_API_KEY"], "waveform", 0.63),
+        item("opendesign", "OpenDesign", "5-hour", "Weekly", .quota, [.cookie], [], "o.circle", 0.0),
+        item("traecn", "Trae CN", "Usage", "Credits", .credits, [.cookie], [], "t.square", 0.63),
+        item("pi", "Pi", "Today", "30 days", .tokens, [], [], "p.square", 0.55),
     ]
 
     static let byID = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })

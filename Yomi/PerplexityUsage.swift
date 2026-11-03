@@ -90,6 +90,9 @@ nonisolated enum PerplexityUsageFetcher {
         let currentPeriodPurchasedCents: Double
         let creditGrants: [CreditGrant]
         let totalUsageCents: Double
+        var orgPoolDrawsCents: Double?
+        var orgUserCapCents: Double?
+        var isOrgPoolDepleted: Bool?
 
         private enum CodingKeys: String, CodingKey {
             case balanceCentsSnake = "balance_cents"
@@ -102,6 +105,12 @@ nonisolated enum PerplexityUsageFetcher {
             case creditGrantsCamel = "creditGrants"
             case totalUsageCentsSnake = "total_usage_cents"
             case totalUsageCentsCamel = "totalUsageCents"
+            case orgPoolDrawsSnake = "org_pool_draws_cents"
+            case orgPoolDrawsCamel = "orgPoolDrawsCents"
+            case orgUserCapSnake = "org_user_cap_cents"
+            case orgUserCapCamel = "orgUserCapCents"
+            case orgPoolDepletedSnake = "is_org_pool_depleted"
+            case orgPoolDepletedCamel = "isOrgPoolDepleted"
         }
 
         init(
@@ -142,6 +151,12 @@ nonisolated enum PerplexityUsageFetcher {
                 snake: .totalUsageCentsSnake,
                 camel: .totalUsageCentsCamel
             )
+            orgPoolDrawsCents = try values.decodeIfPresent(Double.self, forKey: .orgPoolDrawsSnake)
+                ?? values.decodeIfPresent(Double.self, forKey: .orgPoolDrawsCamel)
+            orgUserCapCents = try values.decodeIfPresent(Double.self, forKey: .orgUserCapSnake)
+                ?? values.decodeIfPresent(Double.self, forKey: .orgUserCapCamel)
+            isOrgPoolDepleted = try values.decodeIfPresent(Bool.self, forKey: .orgPoolDepletedSnake)
+                ?? values.decodeIfPresent(Bool.self, forKey: .orgPoolDepletedCamel)
         }
 
         private static func requiredNumber(
@@ -168,6 +183,8 @@ nonisolated enum PerplexityUsageFetcher {
         let renewalDate: Date
         let promoExpiration: Date?
         let updatedAt: Date
+        var orgUsed: Double?
+        var orgAvailable: Double?
 
         var planName: String? {
             if recurringTotal <= 0 { return nil }
@@ -223,6 +240,25 @@ nonisolated enum PerplexityUsageFetcher {
                     used: purchasedUsed, total: purchasedTotal, unit: "credits"
                 )
             ))
+
+            if let orgUsed, let orgAvailable {
+                let orgTotal = orgUsed + orgAvailable
+                let organization = UsageWindow(
+                    id: "perplexity-organization",
+                    label: AppLocalization.text("组织额度", "Organization"),
+                    usedFraction: orgTotal > 0 ? PerplexityUsageFetcher.fraction(used: orgUsed, total: orgTotal) : 1,
+                    resetsAt: nil,
+                    detail: PerplexityUsageFetcher.creditDescription(used: orgUsed, total: orgTotal, unit: "credits")
+                )
+                // 个人额度用完后实际在用组织池，把组织额度放到最前面作为主显示。
+                let personalLeft = (recurringTotal - recurringUsed) + (purchasedTotal - purchasedUsed)
+                    + (promoTotal - promoUsed)
+                if personalLeft <= 0 {
+                    windows.insert(organization, at: 0)
+                } else {
+                    windows.append(organization)
+                }
+            }
 
             return ProviderUsage(
                 id: ProviderID(rawValue: "perplexity"),
@@ -359,6 +395,16 @@ nonisolated enum PerplexityUsageFetcher {
         remaining -= purchasedUsed
         let promoUsed = min(remaining, promoTotal)
 
+        // 组织成员先用个人额度再用组织池；balance 是总可用额度，个人池剩余之外的部分就是组织池可用。
+        var orgUsed: Double?
+        var orgAvailable: Double?
+        if response.orgPoolDrawsCents != nil || response.orgUserCapCents != nil {
+            let personalLeft = (recurringTotal - recurringUsed) + (purchasedTotal - purchasedUsed)
+                + (promoTotal - promoUsed)
+            orgUsed = max(0, response.orgPoolDrawsCents ?? 0)
+            orgAvailable = response.isOrgPoolDepleted == true ? 0 : max(0, response.balanceCents - personalLeft)
+        }
+
         return Snapshot(
             recurringTotal: recurringTotal,
             recurringUsed: recurringUsed,
@@ -370,7 +416,9 @@ nonisolated enum PerplexityUsageFetcher {
             totalUsageCents: response.totalUsageCents,
             renewalDate: Date(timeIntervalSince1970: response.renewalDate),
             promoExpiration: promotional.compactMap(\.expiresAt).min().map(Date.init(timeIntervalSince1970:)),
-            updatedAt: now
+            updatedAt: now,
+            orgUsed: orgUsed,
+            orgAvailable: orgAvailable
         )
     }
 

@@ -280,6 +280,19 @@ struct CodexUsageTests {
     }
 
     @Test
+    func RPCKeepsFreeThirtyDayWindowWithoutWeeklyWindow() throws {
+        let data = Data(#"""
+        {"rateLimits": {"primary": {"usedPercent": 42, "windowDurationMins": 43200, "resetsAt": 1802592000},
+          "secondary": null, "planType": "free"}}
+        """#.utf8)
+
+        let usage = try CodexUsageFetcher.parseRPCResponse(data, now: Self.now)
+
+        #expect(usage.windows.map(\.label) == ["30-day"])
+        #expect(usage.windows.map(\.usedFraction) == [0.42])
+    }
+
+    @Test
     func CLIUsesOfficialAppServerArgumentsAndRateLimitsRPC() async throws {
         let directory = try Self.temporaryCodexHome()
         defer { try? FileManager.default.removeItem(at: directory) }

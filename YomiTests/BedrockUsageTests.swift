@@ -371,17 +371,18 @@ struct BedrockUsageTests {
     }
 
     @Test
-    func costExplorerDataUnavailableIsExactZeroButOtherHTTP400Fails() async {
+    func costExplorerDataUnavailableIsNotZeroAndOtherHTTP400Fails() async {
         BedrockTestURLProtocol.handler = { _ in
             (400, Data(#"{"__type":"DataUnavailableException"}"#.utf8))
         }
-        let zero = try? await BedrockUsageFetcher.fetchMonthlyCost(
-            credentials: Self.credentials,
-            session: Self.session(),
-            environment: ["CODEXBAR_BEDROCK_API_URL": "https://ce.test"],
-            now: Self.now
-        )
-        #expect(zero == 0)
+        await #expect(throws: BedrockUsageError.spendUnavailable) {
+            _ = try await BedrockUsageFetcher.fetchMonthlyCost(
+                credentials: Self.credentials,
+                session: Self.session(),
+                environment: ["CODEXBAR_BEDROCK_API_URL": "https://ce.test"],
+                now: Self.now
+            )
+        }
 
         BedrockTestURLProtocol.handler = { _ in (400, Data(#"{"__type":"ValidationException"}"#.utf8)) }
         await #expect(throws: BedrockUsageError.apiError("HTTP 400")) {

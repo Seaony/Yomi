@@ -34,8 +34,10 @@ nonisolated struct ClaudeWeeklyAmountEstimator: Codable, Equatable, Sendable {
               (0...1).contains(usedFraction)
         else { return estimatedAmountUSD }
 
-        let normalizedPlan = newPlan?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let planChanged = plan != nil && normalizedPlan != nil && plan != normalizedPlan
+        // 套餐改名不算换套餐，比较前都换成新名称。
+        let normalizedPlan = newPlan.map(UsageParser.renamedClaudePlan)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let previousPlan = plan.map(UsageParser.renamedClaudePlan)
+        let planChanged = previousPlan != nil && normalizedPlan != nil && previousPlan != normalizedPlan
         let sameCycle = cycleResetAt.map {
             abs($0.timeIntervalSince(resetAt)) <= Self.resetTolerance
         } ?? false
@@ -116,9 +118,9 @@ nonisolated struct ClaudeWeeklyAmountEstimator: Codable, Equatable, Sendable {
             .lowercased()
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
             .map(String.init) ?? []
-        guard words.contains("max") else { return nil }
-        if words.contains("20x") { return 2_200 }
-        if words.contains("5x") { return 770 }
+        // 缓存里可能还是旧名称 Max 20x / Max 5x。
+        if words.contains("ultra") || words.contains("max") && words.contains("20x") { return 2_200 }
+        if words.contains("max") { return 770 }
         return nil
     }
 }

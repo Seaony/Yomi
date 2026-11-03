@@ -380,6 +380,32 @@ struct PerplexityUsageTests {
         configuration.protocolClasses = [PerplexityTestURLProtocol.self]
         return URLSession(configuration: configuration)
     }
+
+    @Test
+    func organizationPoolCreditsBecomeTheMainWindowAfterPersonalCreditsRunOut() throws {
+        let now = Date(timeIntervalSince1970: 1_792_000_000)
+        let json = """
+        {
+          "balance_cents": 3342.28,
+          "renewal_date_ts": 1794405600,
+          "current_period_purchased_cents": 0,
+          "org_pool_draws_cents": 24371,
+          "org_user_cap_cents": 300000,
+          "is_org_pool_depleted": false,
+          "credit_grants": [
+            { "type": "recurring", "amount_cents": 500, "expires_at_ts": 1794405600 }
+          ],
+          "total_usage_cents": 24870.74
+        }
+        """
+
+        let usage = try PerplexityUsageFetcher.parse(data: Data(json.utf8), now: now).toProviderUsage()
+
+        let organization = try #require(usage.windows.first)
+        #expect(organization.id == "perplexity-organization")
+        #expect(organization.detail == "24371/27713 credits")
+        #expect(abs(organization.usedFraction - 24371 / 27713.28) < 1e-9)
+    }
 }
 
 private final class PerplexityTestURLProtocol: URLProtocol {

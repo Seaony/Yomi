@@ -417,6 +417,79 @@ struct MiniMaxUsageTests {
     }
     """
 
+    @Test
+    func chinaConsoleQuotaMapsPercentStringsAndBoostedLimits() async throws {
+        let session = makeSession { request in
+            switch request.url?.path {
+            case "/console/usage":
+                return response(request, body: "<html></html>", contentType: "text/html")
+            case "/backend/account/token_plan/remains_percent":
+                return response(request, body: """
+                {"base_resp":{"status_code":0},"model_remains":[{
+                  "model_name":"general", "current_interval_used_percent":"8%",
+                  "current_interval_total_percent":"100%", "remains_time":3600000,
+                  "current_weekly_used_percent":"45%", "current_weekly_total_percent":"150%",
+                  "weekly_remains_time":7200000
+                }]}
+                """)
+            default:
+                return response(request, status: 404, body: "{}")
+            }
+        }
+
+        let snapshot = try await MiniMaxUsageFetcher.fetchWeb(
+            cookie: "session=fixture", bearer: nil, groupID: "42", region: .chinaMainland,
+            session: session, now: Date(timeIntervalSince1970: 1_800_000_000), environment: [:]
+        )
+
+        let requests = MiniMaxURLProtocol.requests
+        #expect(requests.first?.url?.absoluteString == "https://platform.minimax.cn/console/usage")
+        let remains = try #require(requests.first { $0.url?.path == "/backend/account/token_plan/remains_percent" })
+        // 国内新接口用请求头传 Group ID，不拼在网址上。
+        #expect(remains.url?.query == nil)
+        #expect(remains.value(forHTTPHeaderField: "X-Group-Id") == "42")
+        #expect(remains.value(forHTTPHeaderField: "Origin") == "https://platform.minimax.cn")
+        #expect(snapshot.quotas.map(\.label) == ["5 hours", "Weekly"])
+        #expect(snapshot.quotas.map(\.limit) == [100, 150])
+        #expect(abs(snapshot.quotas[0].usedFraction - 0.08) < 0.000_001)
+        #expect(abs(snapshot.quotas[1].usedFraction - 0.3) < 0.000_001)
+    }
+
+    @Test
+    func chinaConsoleFallsBackToLegacyRemainsWhenCurrentEndpointIsMissing() async throws {
+        let session = makeSession { request in
+            if request.url?.host == "platform.minimaxi.com",
+               request.url?.path == "/v1/api/openplatform/coding_plan/remains" {
+                return response(request, body: Self.simplePayload)
+            }
+            return response(request, status: 404, body: "{}")
+        }
+
+        let snapshot = try await MiniMaxUsageFetcher.fetchWeb(
+            cookie: "session=fixture", bearer: nil, groupID: nil, region: .chinaMainland,
+            session: session, now: Date(), environment: [:]
+        )
+
+        #expect(!snapshot.quotas.isEmpty)
+        #expect(MiniMaxURLProtocol.requests.prefix(3).map { $0.url?.host } == [
+            "platform.minimax.cn", "www.minimax.cn", "platform.minimaxi.com",
+        ])
+    }
+
+    @Test
+    func webPercentSchemaMarksUnlimitedWindows() throws {
+        let data = Data("""
+        {"base_resp":{"status_code":0},"model_remains":[{"model_name":"general",
+          "current_interval_used_percent":"0%", "current_interval_total_percent":"0%",
+          "current_interval_status":3, "current_weekly_used_percent":"0%",
+          "current_weekly_total_percent":"100%", "current_weekly_status":3}]}
+        """.utf8)
+
+        let snapshot = try MiniMaxUsageFetcher.parse(data: data)
+
+        #expect(snapshot.quotas.map(\.unlimited) == [true, true])
+    }
+
     private func makeSession(
         handler: @escaping @Sendable (URLRequest) throws -> (Data, HTTPURLResponse)
     ) -> URLSession {

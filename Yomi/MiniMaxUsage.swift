@@ -176,8 +176,9 @@ nonisolated enum MiniMaxUsageFetcher {
 
     private static let timeout: TimeInterval = 15
     private static let cookieDomains = [
-        "platform.minimax.io", "openplatform.minimax.io", "minimax.io",
-        "platform.minimaxi.com", "openplatform.minimaxi.com", "minimaxi.com",
+        "platform.minimax.io", "openplatform.minimax.io", "account.minimax.io", "www.minimax.io", "minimax.io",
+        "platform.minimax.cn", "account.minimax.cn", "www.minimax.cn", "minimax.cn",
+        "platform.minimaxi.com", "openplatform.minimaxi.com", "account.minimaxi.com", "www.minimaxi.com", "minimaxi.com",
     ]
 
     static func fetch(
@@ -339,7 +340,10 @@ nonisolated enum MiniMaxUsageFetcher {
         let codingURL = try endpoint(
             overrideKey: "MINIMAX_CODING_PLAN_URL",
             hostKey: "MINIMAX_HOST",
-            defaultURL: "https://\(region.platformHost)/user-center/payment/coding-plan?cycle_type=3",
+            // 国内的套餐页已迁到 platform.minimax.cn 控制台。
+            defaultURL: region == .chinaMainland
+                ? "https://platform.minimax.cn/console/usage"
+                : "https://\(region.platformHost)/user-center/payment/coding-plan?cycle_type=3",
             pathForHost: "/user-center/payment/coding-plan?cycle_type=3",
             environment: environment
         )
@@ -356,20 +360,27 @@ nonisolated enum MiniMaxUsageFetcher {
             snapshot = try parseWebResponse(data: data, now: now)
         } catch MiniMaxUsageError.parseFailed {
             snapshot = nil
+        } catch let MiniMaxUsageError.apiError(message)
+            where ["HTTP 302", "HTTP 404", "HTTP 405"].contains(where: message.contains) {
+            snapshot = nil
         }
 
         if snapshot?.hasDetailedQuotas != true {
             var remainsError: Error?
             for url in try remainsURLs(region: region, environment: environment) {
                 do {
-                    let target = appendingGroupID(groupID, to: url)
+                    // 国内新接口用请求头传 Group ID，Origin 必须是控制台页面。
+                    let isChinaPercentEndpoint = url.path == "/backend/account/token_plan/remains_percent"
+                    let target = isChinaPercentEndpoint ? url : appendingGroupID(groupID, to: url)
                     let data = try await webRequest(
                         url: target,
                         cookie: normalized,
                         bearer: bearer,
                         referer: codingURL.deletingQuery(),
                         accept: "application/json, text/plain, */*",
-                        session: session
+                        session: session,
+                        origin: isChinaPercentEndpoint ? origin(codingURL) : nil,
+                        groupIDHeader: isChinaPercentEndpoint ? groupID : nil
                     )
                     var parsed = try parse(data: data, now: now)
                     if parsed.plan == nil { parsed.plan = snapshot?.plan }
@@ -454,17 +465,23 @@ nonisolated enum MiniMaxUsageFetcher {
             guard let item = dictionary(value) else { continue }
             let modelName = string(item["model_name"]) ?? "general"
             let service = mappedService(modelName)
+            // 国内控制台接口只给已用和总量百分比，总量超过 100 表示加量。
+            let intervalUsed = percentValue(item["current_interval_used_percent"])
+            let weeklyUsed = percentValue(item["current_weekly_used_percent"])
             if let interval = makeQuota(
                 service: service,
-                windowOverride: nil,
+                windowOverride: intervalUsed != nil && item["start_time"] == nil ? "5 hours" : nil,
                 total: integer(item["current_interval_total_count"]),
                 remaining: integer(item["current_interval_usage_count"]),
-                remainingPercent: number(item["current_interval_remaining_percent"]),
+                remainingPercent: number(item["current_interval_remaining_percent"])
+                    ?? remainingPercent(used: intervalUsed, total: percentValue(item["current_interval_total_percent"])),
                 status: integer(item["current_interval_status"]),
                 start: integer(item["start_time"]),
                 end: integer(item["end_time"]),
                 remainsTime: integer(item["remains_time"]),
-                boostPermille: integer(item["interval_boost_permill"] ?? item["interval_boost_permille"]),
+                boostPermille: integer(item["interval_boost_permill"] ?? item["interval_boost_permille"])
+                    ?? percentBoost(item["current_interval_total_percent"]),
+                isWebPercentSchema: intervalUsed != nil,
                 now: now
             ) {
                 quotas.append(interval)
@@ -474,12 +491,15 @@ nonisolated enum MiniMaxUsageFetcher {
                 windowOverride: "Weekly",
                 total: integer(item["current_weekly_total_count"]),
                 remaining: integer(item["current_weekly_usage_count"]),
-                remainingPercent: number(item["current_weekly_remaining_percent"]),
+                remainingPercent: number(item["current_weekly_remaining_percent"])
+                    ?? remainingPercent(used: weeklyUsed, total: percentValue(item["current_weekly_total_percent"])),
                 status: integer(item["current_weekly_status"]),
                 start: integer(item["weekly_start_time"]),
                 end: integer(item["weekly_end_time"]),
                 remainsTime: integer(item["weekly_remains_time"]),
-                boostPermille: integer(item["weekly_boost_permill"] ?? item["weekly_boost_permille"]),
+                boostPermille: integer(item["weekly_boost_permill"] ?? item["weekly_boost_permille"])
+                    ?? percentBoost(item["current_weekly_total_percent"]),
+                isWebPercentSchema: weeklyUsed != nil,
                 now: now
             ) {
                 quotas.append(weekly)
@@ -565,7 +585,8 @@ nonisolated enum MiniMaxUsageFetcher {
     private static func shouldTryLegacy(after error: MiniMaxUsageError) -> Bool {
         switch error {
         case .invalidCredentials, .parseFailed: true
-        case let .apiError(message): message.contains("HTTP 404") || message.contains("HTTP 405")
+        case let .apiError(message):
+            message.contains("HTTP 302") || message.contains("HTTP 404") || message.contains("HTTP 405")
         default: false
         }
     }
@@ -592,7 +613,9 @@ nonisolated enum MiniMaxUsageFetcher {
         bearer: String?,
         referer: URL,
         accept: String,
-        session: URLSession
+        session: URLSession,
+        origin originOverride: URL? = nil,
+        groupIDHeader: String? = nil
     ) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -602,7 +625,8 @@ nonisolated enum MiniMaxUsageFetcher {
         request.setValue(accept, forHTTPHeaderField: "Accept")
         request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
         request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
-        request.setValue(origin(url).absoluteString, forHTTPHeaderField: "Origin")
+        request.setValue((originOverride ?? origin(url)).absoluteString, forHTTPHeaderField: "Origin")
+        if let groupIDHeader, !groupIDHeader.isEmpty { request.setValue(groupIDHeader, forHTTPHeaderField: "X-Group-Id") }
         request.setValue(referer.absoluteString, forHTTPHeaderField: "Referer")
         request.setValue(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -763,10 +787,12 @@ nonisolated enum MiniMaxUsageFetcher {
         end: Int?,
         remainsTime: Int?,
         boostPermille: Int?,
+        isWebPercentSchema: Bool = false,
         now: Date
     ) -> Quota? {
         let weekly = windowOverride?.caseInsensitiveCompare("Weekly") == .orderedSame
-        let unlimited = weekly && status == 3 && isTextService(service) && (remainingPercent ?? 0) >= 100
+        let unlimited = status == 3 && isTextService(service)
+            && (isWebPercentSchema || weekly && (remainingPercent ?? 0) >= 100)
         let unavailable = status == 3
             && (total ?? 0) == 0
             && (remaining ?? 0) == 0
@@ -788,7 +814,7 @@ nonisolated enum MiniMaxUsageFetcher {
         } else if durationHours >= 1 {
             "\(Int(durationHours)) hours"
         } else {
-            "Window"
+            windowOverride ?? "Window"
         }
         if unlimited {
             return Quota(
@@ -1074,6 +1100,7 @@ nonisolated enum MiniMaxUsageFetcher {
     private static func automaticStorageTokens(browsers: [Browser]) -> [StoredToken] {
         let origins = [
             "https://platform.minimax.io", "https://www.minimax.io", "https://minimax.io",
+            "https://platform.minimax.cn", "https://www.minimax.cn", "https://minimax.cn",
             "https://platform.minimaxi.com", "https://www.minimaxi.com", "https://minimaxi.com",
         ]
         let roots = ChromiumProfileLocator.roots(
@@ -1103,6 +1130,7 @@ nonisolated enum MiniMaxUsageFetcher {
                         .filter {
                             let text = ($0.key + $0.value).lowercased()
                             return text.contains("minimax.io") || text.contains("minimaxi.com")
+                                || text.contains("minimax.cn")
                                 || text.contains("access_token") || text.contains("accesstoken")
                         }
                         .map(\.value)
@@ -1150,6 +1178,7 @@ nonisolated enum MiniMaxUsageFetcher {
         ) else { return [] }
         let prefixes = [
             "https_platform.minimax.io_", "https_www.minimax.io_", "https_minimax.io_",
+            "https_platform.minimax.cn_", "https_www.minimax.cn_", "https_minimax.cn_",
             "https_platform.minimaxi.com_", "https_www.minimaxi.com_", "https_minimaxi.com_",
         ]
         return databases.filter { database in
@@ -1262,7 +1291,10 @@ nonisolated enum MiniMaxUsageFetcher {
             let base = try validatedBase(raw, key: "MINIMAX_HOST")
             return [base.appendingPathComponent("v1/api/openplatform/coding_plan/remains")]
         }
-        return [
+        let current = region == .chinaMainland
+            ? [URL(string: "https://www.minimax.cn/backend/account/token_plan/remains_percent")!]
+            : []
+        return current + [
             URL(string: "https://\(region.platformHost)/v1/api/openplatform/coding_plan/remains")!,
             URL(string: "https://\(region.webHost)/v1/api/openplatform/coding_plan/remains")!,
         ]
@@ -1320,7 +1352,8 @@ nonisolated enum MiniMaxUsageFetcher {
     private static func validateProviderOwnedHost(_ url: URL, key: String) throws {
         guard let host = url.host?.lowercased(),
               host == "minimax.io" || host.hasSuffix(".minimax.io")
-                || host == "minimaxi.com" || host.hasSuffix(".minimaxi.com") else {
+                || host == "minimaxi.com" || host.hasSuffix(".minimaxi.com")
+                || host == "minimax.cn" || host.hasSuffix(".minimax.cn") else {
             throw MiniMaxUsageError.invalidEndpoint(key)
         }
     }
@@ -1393,6 +1426,26 @@ nonisolated enum MiniMaxUsageFetcher {
         if let value = value as? String { return Int(clean(value)) }
         return nil
     }
+    private static func percentValue(_ value: Any?) -> Double? {
+        if let value = number(value), value.isFinite { return value }
+        guard let text = value as? String, text.hasSuffix("%"),
+              let value = Double(text.dropLast()), value.isFinite else { return nil }
+        return value
+    }
+
+    private static func percentBoost(_ value: Any?) -> Int? {
+        guard let total = percentValue(value), total > 0 else { return nil }
+        return Int(exactly: (total * 10).rounded())
+    }
+
+    private static func remainingPercent(used: Double?, total: Double?) -> Double? {
+        guard let used, used >= 0 else { return nil }
+        let rawLimit = total ?? 100
+        guard rawLimit >= 0 else { return nil }
+        let limit = rawLimit == 0 ? 100 : rawLimit
+        return max(0, min(100, 100 - used / limit * 100))
+    }
+
     private static func number(_ value: Any?) -> Double? {
         let number: Double?
         if let value = value as? Double { number = value }

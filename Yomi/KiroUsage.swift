@@ -174,73 +174,125 @@ nonisolated enum KiroUsageFetcher {
             throw KiroUsageError.cliNotFound
         }
 
-        async let accountResult = fetchAccount(binary: binary, environment: environment)
-
-        let usageOutput: String
-        do {
-            usageOutput = try await runAcceptedCommand(
-                binary: binary,
-                arguments: ["chat", "--no-interactive", "/usage"],
-                timeout: 20,
-                idleTimeout: 4,
-                environment: environment,
-                accepts: { output in (try? parseCLI(output, now: now)) != nil }
-            )
-        } catch {
-            do {
-                _ = try await accountResult
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch KiroUsageError.notLoggedIn {
-                throw KiroUsageError.notLoggedIn
-            } catch {}
-            throw error
-        }
-
+        var accountNotLoggedIn = false
         let account: Account?
         do {
-            account = try await accountResult
+            account = try await fetchAccount(binary: binary, environment: environment)
         } catch is CancellationError {
             throw CancellationError()
+        } catch KiroUsageError.notLoggedIn {
+            accountNotLoggedIn = true
+            account = nil
         } catch {
             account = nil
         }
-        let context: KiroContextUsage?
-        do {
-            context = try await fetchContext(binary: binary, environment: environment)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            context = nil
-        }
-        let report = try parseCLI(
-            usageOutput,
-            accountEmail: account?.email,
-            authMethod: account?.authMethod,
-            contextUsage: context,
-            now: now
-        )
-
         let databaseURL = stateDatabaseURL(
             homeDirectory: homeDirectory,
             environment: environment,
             usesMacOSApplicationSupport: true
         )
-        let limits: KiroUsageLimits?
+        func loadLimits() async throws -> KiroUsageLimits? {
+            do {
+                return try await fetchUsageLimits(databaseURL: databaseURL, session: session)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                return nil
+            }
+        }
+        // 接口能给出明确的套餐额度时直接用，不再启动 CLI 聊天会话。
+        var limits: KiroUsageLimits?
+        if !accountNotLoggedIn { limits = try await loadLimits() }
+        if let usage = apiOnlyUsage(limits: limits, account: account, now: now) { return usage }
+
+        let report: KiroCLIUsage
         do {
-            limits = try await fetchUsageLimits(
-                databaseURL: databaseURL,
-                session: session
+            let usageOutput = try await runChatCommand(
+                "/usage",
+                binary: binary,
+                timeout: 20,
+                idleTimeout: 4,
+                environment: environment,
+                accepts: { output in (try? parseCLI(output, now: now)) != nil }
+            )
+            let context: KiroContextUsage?
+            do {
+                context = try await fetchContext(binary: binary, environment: environment)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                context = nil
+            }
+            report = try parseCLI(
+                usageOutput,
+                accountEmail: account?.email,
+                authMethod: account?.authMethod,
+                contextUsage: context,
+                now: now
             )
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            limits = nil
+            try Task.checkCancellation()
+            if accountNotLoggedIn { throw KiroUsageError.notLoggedIn }
+            if case KiroUsageError.notLoggedIn = error { throw error }
+            // CLI 运行时可能刷新了令牌，再试一次接口。
+            if limits == nil { limits = try await loadLimits() }
+            guard let usage = apiOnlyUsage(limits: limits, account: account, now: now) else { throw error }
+            return usage
         }
-        if let limits {
-            return providerUsage(report: report, limits: limits, now: now)
+        if limits == nil { limits = try await loadLimits() }
+        return providerUsage(report: report, limits: limits, now: now)
+    }
+
+    private static func apiOnlyUsage(limits: KiroUsageLimits?, account: Account?, now: Date) -> ProviderUsage? {
+        guard let limits, !limits.hasUnseparatedBonus, limits.planLimit > 0 else { return nil }
+        let report = KiroCLIUsage(
+            planName: "Kiro",
+            accountEmail: cleaned(account?.email),
+            authMethod: cleaned(account?.authMethod),
+            creditsUsed: 0,
+            creditsTotal: 0,
+            creditsPercent: 0,
+            hasUsageMetrics: false,
+            bonusCreditsUsed: nil,
+            bonusCreditsTotal: nil,
+            bonusExpiryDays: nil,
+            overagesStatus: nil,
+            overageCreditsUsed: nil,
+            estimatedOverageCostUSD: nil,
+            manageURL: nil,
+            contextUsage: nil,
+            resetsAt: nil
+        )
+        return providerUsage(report: report, limits: limits, now: now)
+    }
+
+    // Kiro CLI 3 会把无交互的斜杠命令当成提问，需要 --v2 才输出用量报告；旧版不认识这个参数时去掉重试。
+    private static func runChatCommand(
+        _ command: String,
+        binary: String,
+        timeout: TimeInterval,
+        idleTimeout: TimeInterval,
+        environment: [String: String],
+        accepts: @escaping @Sendable (String) -> Bool
+    ) async throws -> String {
+        let arguments = ["chat", "--no-interactive", command]
+        do {
+            return try await runAcceptedCommand(
+                binary: binary, arguments: arguments + ["--v2"], timeout: timeout,
+                idleTimeout: idleTimeout, environment: environment, accepts: accepts
+            )
+        } catch let KiroUsageError.cliFailed(message)
+            where message.range(
+                of: #"(?:unexpected argument|unrecognized option|unknown option) ['"]?--v2(?:['"\s]|$)"#,
+                options: .regularExpression
+            ) != nil {
+            return try await runAcceptedCommand(
+                binary: binary, arguments: arguments, timeout: timeout,
+                idleTimeout: idleTimeout, environment: environment, accepts: accepts
+            )
         }
-        return providerUsage(report: report, limits: nil, now: now)
     }
 
     static func resolveBinary(
@@ -634,9 +686,9 @@ nonisolated enum KiroUsageFetcher {
     }
 
     private static func fetchContext(binary: String, environment: [String: String]) async throws -> KiroContextUsage? {
-        let output = try await runAcceptedCommand(
+        let output = try await runChatCommand(
+            "/context",
             binary: binary,
-            arguments: ["chat", "--no-interactive", "/context"],
             timeout: 8,
             idleTimeout: 3,
             environment: environment,

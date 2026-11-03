@@ -62,6 +62,9 @@ nonisolated enum UsageParser {
         case 604_800:
             role = .weekly
             label = "Weekly"
+        case 2_592_000:
+            role = .unknown
+            label = "30-day"
         default:
             role = .unknown
             label = fallbackLabel
@@ -82,9 +85,9 @@ nonisolated enum UsageParser {
         primary: CodexWindow?,
         secondary: CodexWindow?
     ) -> [UsageWindow] {
-        [primary, secondary]
-            .compactMap { $0 }
-            .first { $0.role == .weekly }
+        // 只显示每周窗口；Free 账号没有每周窗口时保留它实际上报的窗口（如固定 30 天）。
+        let windows = [primary, secondary].compactMap { $0 }
+        return (windows.first { $0.role == .weekly } ?? windows.first { $0.role == .unknown })
             .map { [$0.usage] } ?? []
     }
 
@@ -374,8 +377,9 @@ nonisolated enum UsageParser {
         ],
         "claude": [
             "free": "Free", "claude free": "Free", "pro": "Pro", "claude pro": "Pro",
-            "max": "Max", "claude max": "Max", "max 5x": "Max 5x", "claude max 5x": "Max 5x",
-            "max 20x": "Max 20x", "claude max 20x": "Max 20x", "team": "Team",
+            // Claude 已把 Max 5x 改名为 Max、Max 20x 改名为 Ultra，旧名称一并换成新名称。
+            "max": "Max", "claude max": "Max", "max 5x": "Max", "claude max 5x": "Max",
+            "max 20x": "Ultra", "claude max 20x": "Ultra", "team": "Team",
             "claude team": "Team", "claude team standard": "Team Standard",
             "claude team premium": "Team Premium", "enterprise": "Enterprise",
             "claude enterprise": "Enterprise", "ultra": "Ultra", "claude ultra": "Ultra",
@@ -490,6 +494,15 @@ nonisolated enum UsageParser {
         return claudePlanLabel(plan, rateLimitTier: rateLimitTier, seatTier: seatTier)
     }
 
+    /// Claude 已把 Max 5x 改名为 Max、Max 20x 改名为 Ultra；旧缓存里的名称换成新名称，其他名称原样返回。
+    static func renamedClaudePlan(_ plan: String) -> String {
+        switch plan.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "max 20x", "claude max 20x": "Ultra"
+        case "max 5x", "claude max 5x": "Max"
+        default: plan
+        }
+    }
+
     private static func claudeCompatibilityPlan(_ value: String?) -> String? {
         let words = value?
             .lowercased()
@@ -519,11 +532,10 @@ nonisolated enum UsageParser {
                 .lowercased()
                 .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
                 .map(String.init) ?? []
-            if let maxIndex = words.firstIndex(of: "max"), words.indices.contains(maxIndex + 1) {
-                let multiplier = words[maxIndex + 1]
-                if multiplier.last == "x", Int(multiplier.dropLast()) != nil {
-                    return "Max \(multiplier)"
-                }
+            // 接口里的等级仍叫 max_20x，对应改名后的 Ultra；max_5x 对应现在的 Max。
+            if let maxIndex = words.firstIndex(of: "max"), words.indices.contains(maxIndex + 1),
+               words[maxIndex + 1] == "20x" {
+                return "Ultra"
             }
             return "Max"
         }

@@ -166,10 +166,13 @@ nonisolated struct GrokBillingSnapshot: Sendable, Equatable {
     let percentWasPublished: Bool
     let windowMinutes: Int?
     let prepaidBalanceUSD: Double?
+    /// 用量字段省略、但确认处于有效的当前周期，才能把推断出的 0% 当成真实用量。
+    let percentIsImplicitZero: Bool
 
     init(
         usedPercent: Double?, resetsAt: Date?, plan: String? = nil,
-        percentWasPublished: Bool = true, windowMinutes: Int? = nil, prepaidBalanceUSD: Double? = nil
+        percentWasPublished: Bool = true, windowMinutes: Int? = nil, prepaidBalanceUSD: Double? = nil,
+        percentIsImplicitZero: Bool = false
     ) {
         self.usedPercent = usedPercent
         self.resetsAt = resetsAt
@@ -177,6 +180,7 @@ nonisolated struct GrokBillingSnapshot: Sendable, Equatable {
         self.percentWasPublished = percentWasPublished
         self.windowMinutes = windowMinutes
         self.prepaidBalanceUSD = prepaidBalanceUSD
+        self.percentIsImplicitZero = percentIsImplicitZero
     }
 }
 
@@ -226,7 +230,7 @@ nonisolated enum GrokUsageFetcher {
     static let settingsURL = URL(string: "https://cli-chat-proxy.grok.com/v1/settings")!
     static let grpcURL = URL(string: "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig")!
 
-    typealias CLILoader = @Sendable ([String: String]) async throws -> GrokBillingResponse
+    typealias CLILoader = @Sendable ([String: String]) async throws -> GrokBillingSnapshot
 
     static func fetch(
         source: ProviderSource,
@@ -250,12 +254,9 @@ nonisolated enum GrokUsageFetcher {
         switch source {
         case .account:
             do {
-                let billing = try await cliLoader(environment)
-                let tier = await settingsTier(credentials: credentials, session: session)
-                return usage(
-                    GrokBillingSnapshot(usedPercent: billing.usedPercent, resetsAt: billing.resetsAt, plan: tier),
-                    credentials: credentials,
-                    minutes: billing.windowMinutes)
+                let billing = try await cliBilling(
+                    try await cliLoader(environment), credentials: credentials, session: session)
+                return usage(billing, credentials: credentials)
             } catch let error as GrokUsageError where isCLITeamUsageUnavailable(error, credentials: credentials) {
                 return await teamIdentityUsage(
                     credentials: credentials!, local: local, now: now, session: session)
@@ -284,12 +285,9 @@ nonisolated enum GrokUsageFetcher {
             }
         case .automatic:
             do {
-                let billing = try await cliLoader(environment)
-                let tier = await settingsTier(credentials: credentials, session: session)
-                return usage(
-                    GrokBillingSnapshot(usedPercent: billing.usedPercent, resetsAt: billing.resetsAt, plan: tier),
-                    credentials: credentials,
-                    minutes: billing.windowMinutes)
+                let billing = try await cliBilling(
+                    try await cliLoader(environment), credentials: credentials, session: session)
+                return usage(billing, credentials: credentials)
             } catch is CancellationError { throw CancellationError() }
             catch {}
             if case .cookie = route {
@@ -378,7 +376,10 @@ nonisolated enum GrokUsageFetcher {
         guard !payloads.isEmpty else { throw GrokUsageError.parseFailed }
         var fixed: [(path: [UInt64], value: Float, order: Int)] = []
         var vars: [(path: [UInt64], value: UInt64)] = []
-        for payload in payloads { scan(payload, path: [], depth: 0, order: &fixed, vars: &vars) }
+        var complete = true
+        for payload in payloads {
+            complete = scan(payload, path: [], depth: 0, order: &fixed, vars: &vars) && complete
+        }
         let percent = fixed.filter { $0.path.last == 1 && $0.value.isFinite && (0...100).contains($0.value) }
             .min { $0.path.count == $1.path.count ? $0.order < $1.order : $0.path.count < $1.path.count }
             .map { Double($0.value) }
@@ -391,7 +392,17 @@ nonisolated enum GrokUsageFetcher {
         let hasPeriod = vars.contains { $0.path.starts(with: [1, 6]) || ($0.path == [1, 8, 1] && ($0.value == 1 || $0.value == 2)) }
         let inferredZero = percent == nil && fixed.isEmpty && reset != nil && hasPeriod
         guard let used = percent ?? (inferredZero ? 0 : nil) else { throw GrokUsageError.parseFailed }
-        return GrokBillingSnapshot(usedPercent: used, resetsAt: reset, percentWasPublished: percent != nil)
+        func timestamp(_ path: [UInt64]) -> Date? {
+            vars.first { $0.path == path && (1_700_000_000...2_100_000_000).contains($0.value) }
+                .map { Date(timeIntervalSince1970: TimeInterval($0.value)) }
+        }
+        let hasActiveCurrentPeriod = vars.contains { $0.path == [1, 8, 1] && ($0.value == 1 || $0.value == 2) }
+            && timestamp([1, 8, 2, 1]).map { $0 <= now } == true
+            && timestamp([1, 8, 3, 1]).map { $0 > now } == true
+        return GrokBillingSnapshot(
+            usedPercent: used, resetsAt: reset, percentWasPublished: percent != nil,
+            percentIsImplicitZero: inferredZero && payloads.count == 1 && complete && hasActiveCurrentPeriod
+        )
     }
 
     static func providerUsage(
@@ -450,34 +461,8 @@ nonisolated enum GrokUsageFetcher {
     private static func oauthBilling(credentials: GrokCredentials, session: URLSession) async throws -> GrokBillingSnapshot {
         let billing: GrokBillingSnapshot
         do {
-            var proxy = try await fetchProxy(credentials: credentials, session: session)
-            if proxy.usedPercent == nil {
-                do {
-                    let grpc = try await fetchGRPC(
-                        bearer: credentials.accessToken,
-                        cookie: nil,
-                        session: session,
-                        timeout: 6)
-                    if let percent = grpc.usedPercent, grpc.percentWasPublished {
-                        proxy = GrokBillingSnapshot(
-                            usedPercent: percent,
-                            resetsAt: proxy.resetsAt ?? grpc.resetsAt,
-                            plan: proxy.plan,
-                            percentWasPublished: true,
-                            windowMinutes: proxy.resetsAt == nil ? grpc.windowMinutes : proxy.windowMinutes,
-                            prepaidBalanceUSD: proxy.prepaidBalanceUSD ?? grpc.prepaidBalanceUSD)
-                    }
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch let error as URLError where error.code == .cancelled {
-                    throw error
-                } catch let error as GrokUsageError {
-                    if isTeamUsageUnavailable(error, credentials: credentials) {
-                        throw GrokUsageError.teamUsageUnsupported
-                    }
-                } catch {}
-            }
-            billing = proxy
+            let proxy = try await fetchProxy(credentials: credentials, session: session)
+            billing = try await resolvingUnknownUsage(proxy, credentials: credentials, session: session)
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as URLError where error.code == .cancelled {
@@ -500,6 +485,67 @@ nonisolated enum GrokUsageFetcher {
             usedPercent: billing.usedPercent, resetsAt: billing.resetsAt,
             plan: tier ?? billing.plan, percentWasPublished: billing.percentWasPublished,
             windowMinutes: billing.windowMinutes, prepaidBalanceUSD: billing.prepaidBalanceUSD)
+    }
+
+    // 账单只给了钱包没给用量时，用 gRPC 补；零用量的周按 0% 显示，不让周额度消失。
+    private static func resolvingUnknownUsage(
+        _ proxy: GrokBillingSnapshot, credentials: GrokCredentials, session: URLSession
+    ) async throws -> GrokBillingSnapshot {
+        guard proxy.usedPercent == nil else { return proxy }
+        do {
+            let grpc = try await fetchGRPC(
+                bearer: credentials.accessToken,
+                cookie: nil,
+                session: session,
+                timeout: 6)
+            guard let percent = grpc.usedPercent,
+                  grpc.percentWasPublished || percent == 0 && grpc.percentIsImplicitZero else { return proxy }
+            return GrokBillingSnapshot(
+                usedPercent: percent,
+                resetsAt: proxy.resetsAt ?? grpc.resetsAt,
+                plan: proxy.plan,
+                percentWasPublished: grpc.percentWasPublished,
+                windowMinutes: proxy.resetsAt == nil ? grpc.windowMinutes : proxy.windowMinutes,
+                prepaidBalanceUSD: proxy.prepaidBalanceUSD ?? grpc.prepaidBalanceUSD)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw error
+        } catch {
+            // 补充请求失败时保留已经拿到的账单（比如团队账号的钱包余额）。
+            return proxy
+        }
+    }
+
+    private static func cliBilling(
+        _ billing: GrokBillingSnapshot, credentials: GrokCredentials?, session: URLSession
+    ) async throws -> GrokBillingSnapshot {
+        var billing = billing
+        if let credentials, !credentials.isExpired {
+            billing = try await resolvingUnknownUsage(billing, credentials: credentials, session: session)
+        }
+        let tier = await settingsTier(credentials: credentials, session: session)
+        return GrokBillingSnapshot(
+            usedPercent: billing.usedPercent, resetsAt: billing.resetsAt,
+            plan: tier ?? billing.plan, percentWasPublished: billing.percentWasPublished,
+            windowMinutes: billing.windowMinutes, prepaidBalanceUSD: billing.prepaidBalanceUSD)
+    }
+
+    // CLI 的 _x.ai/billing 现在返回和代理一样的 credits 结构，旧版顶层结构继续兼容。
+    static func parseCLIBilling(_ data: Data) throws -> GrokBillingSnapshot {
+        if let credits = try? parseProxy(data), credits.usedPercent != nil || credits.prepaidBalanceUSD != nil {
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            return GrokBillingSnapshot(
+                usedPercent: credits.usedPercent, resetsAt: credits.resetsAt,
+                plan: credits.plan ?? GrokPlan.display(root?["subscription_tier"] as? String),
+                percentWasPublished: credits.percentWasPublished, windowMinutes: credits.windowMinutes,
+                prepaidBalanceUSD: credits.prepaidBalanceUSD)
+        }
+        if let legacy = try? JSONDecoder().decode(GrokBillingResponse.self, from: data), legacy.usedPercent != nil {
+            return GrokBillingSnapshot(
+                usedPercent: legacy.usedPercent, resetsAt: legacy.resetsAt, windowMinutes: legacy.windowMinutes)
+        }
+        throw GrokUsageError.parseFailed
     }
 
     private static func fetchProxy(credentials: GrokCredentials, session: URLSession) async throws -> GrokBillingSnapshot {
@@ -658,7 +704,7 @@ nonisolated enum GrokUsageFetcher {
         }
     }
 
-    private static func runCLI(environment: [String: String]) async throws -> GrokBillingResponse {
+    private static func runCLI(environment: [String: String]) async throws -> GrokBillingSnapshot {
         guard let executable = cliExecutable(environment: environment) else { throw GrokUsageError.cliUnavailable }
         let process = Process(); let input = Pipe(); let output = Pipe(); let errors = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -680,7 +726,7 @@ nonisolated enum GrokUsageFetcher {
                 "fs": ["readTextFile": false, "writeTextFile": false], "terminal": false,
             ]],
         ]
-        let billing: [String: Any] = ["jsonrpc": "2.0", "id": 2, "method": "x.ai/billing", "params": [:]]
+        let billing: [String: Any] = ["jsonrpc": "2.0", "id": 2, "method": "_x.ai/billing", "params": [:]]
         try sendCLI(initialize, to: input.fileHandleForWriting)
         _ = try await cliResponse(id: 1, timeout: 4, lines: lines)
         try sendCLI(billing, to: input.fileHandleForWriting)
@@ -690,7 +736,7 @@ nonisolated enum GrokUsageFetcher {
         }
         guard let value = root["result"] else { throw GrokUsageError.parseFailed }
         let data = try JSONSerialization.data(withJSONObject: value)
-        return try JSONDecoder().decode(GrokBillingResponse.self, from: data)
+        return try parseCLIBilling(data)
     }
 
     private static func sendCLI(_ payload: [String: Any], to handle: FileHandle) throws {
@@ -815,31 +861,34 @@ nonisolated enum GrokUsageFetcher {
         _ data: Data, path: [UInt64], depth: Int,
         order: inout [(path: [UInt64], value: Float, order: Int)],
         vars: inout [(path: [UInt64], value: UInt64)]
-    ) {
+    ) -> Bool {
+        // 返回 false 表示数据不完整或格式不对。
         let bytes = [UInt8](data); var index = 0
+        var complete = true
         while index < bytes.count {
             guard let key = readVarint(bytes, index: &index),
-                  key >> 3 > 0, key >> 3 <= 536_870_911 else { return }
+                  key >> 3 > 0, key >> 3 <= 536_870_911 else { return false }
             let field = path + [key >> 3]
             switch key & 7 {
             case 0:
-                guard let value = readVarint(bytes, index: &index) else { return }
+                guard let value = readVarint(bytes, index: &index) else { return false }
                 vars.append((field, value))
-            case 1: guard index + 8 <= bytes.count else { return }; index += 8
+            case 1: guard index + 8 <= bytes.count else { return false }; index += 8
             case 2:
-                guard let length = readVarint(bytes, index: &index), length <= UInt64(bytes.count - index) else { return }
+                guard let length = readVarint(bytes, index: &index), length <= UInt64(bytes.count - index) else { return false }
                 let end = index + Int(length)
                 if depth < 4, isBillingMessage(field) {
-                    scan(Data(bytes[index..<end]), path: field, depth: depth + 1, order: &order, vars: &vars)
+                    complete = scan(Data(bytes[index..<end]), path: field, depth: depth + 1, order: &order, vars: &vars) && complete
                 }
                 index = end
             case 5:
-                guard index + 4 <= bytes.count else { return }
+                guard index + 4 <= bytes.count else { return false }
                 let bits = UInt32(bytes[index]) | UInt32(bytes[index + 1]) << 8 | UInt32(bytes[index + 2]) << 16 | UInt32(bytes[index + 3]) << 24
                 order.append((field, Float(bitPattern: bits), order.count)); index += 4
-            default: return
+            default: return false
             }
         }
+        return complete
     }
 
     private static func isBillingMessage(_ path: [UInt64]) -> Bool {

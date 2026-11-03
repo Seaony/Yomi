@@ -925,7 +925,9 @@ nonisolated enum DeepSeekPlatformTokenImporter {
     static func importTokens(
         homeDirectories: [URL] = BrowserCookieClient.defaultHomeDirectories()
     ) -> [TokenInfo] {
-        let roots = ChromiumProfileLocator.roots(for: [.chrome], homeDirectories: homeDirectories)
+        let roots = ChromiumProfileLocator.roots(
+            for: Browser.defaultImportOrder.filter(\.usesChromiumProfileStore), homeDirectories: homeDirectories
+        )
         var results: [TokenInfo] = []
         for root in roots {
             guard let profiles = try? FileManager.default.contentsOfDirectory(
@@ -945,7 +947,7 @@ nonisolated enum DeepSeekPlatformTokenImporter {
                 guard let raw = entries.first(where: { $0.key == "userToken" })?.value,
                       let token = extractUserToken(raw)
                 else { continue }
-                let id = "chrome:\(name)"
+                let id = "\(root.browser.rawValue):\(name)"
                 if !results.contains(where: { $0.id == id && $0.token == token }) {
                     results.append(TokenInfo(
                         id: id,

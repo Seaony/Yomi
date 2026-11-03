@@ -44,6 +44,8 @@ actor LocalDailyUsageScanner {
         let turnID: String?
         let responseID: String?
         let priority: Bool?
+        // 恢复 turn 时切回标准档后的请求，日志库里同一 turn 的 Fast 记录不能把它改成 Fast。
+        var confirmedStandard: Bool?
     }
 
     private struct CodexMirrorKey: Codable, Hashable {
@@ -253,6 +255,9 @@ actor LocalDailyUsageScanner {
         let type: String?
         let timestamp: String?
         let requestID: String?
+        let snakeRequestID: String?
+        let sessionID: String?
+        let snakeSessionID: String?
         let isSidechain: Bool?
         let message: Message?
 
@@ -260,8 +265,24 @@ actor LocalDailyUsageScanner {
             case type
             case timestamp
             case requestID = "requestId"
+            case snakeRequestID = "request_id"
+            case sessionID = "sessionId"
+            case snakeSessionID = "session_id"
             case isSidechain
             case message
+        }
+
+        // 桌面版 Cowork 的 audit.jsonl 和内嵌会话各存一份，两种写法都要认才能只计一次。
+        var dedupeKey: String? {
+            guard let messageID = message?.id else { return nil }
+            if let requestID = requestID ?? snakeRequestID {
+                return "\(messageID):\(requestID)"
+            }
+            guard !messageID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let sessionID = sessionID ?? snakeSessionID,
+                  !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return nil }
+            return "session:\(sessionID):\(messageID)"
         }
 
         struct Message: Decodable {
@@ -495,7 +516,9 @@ actor LocalDailyUsageScanner {
     }
 
     private struct CodexFileState: Codable {
-        var parserVersion = 2
+        static let currentParserVersion = 3
+
+        var parserVersion = currentParserVersion
         var size: UInt64 = 0
         var modificationNanoseconds: Int64 = 0
         var fileID = ""
@@ -509,8 +532,10 @@ actor LocalDailyUsageScanner {
         var hasCreatorAccount = false
         var currentModel: String?
         var currentTurnID: String?
+        var startedTurnID: String?
         var threadPriority: Bool?
         var turnPriorities: [String: Bool] = [:]
+        var resumedStandardTurns: Set<String> = []
         var turnModels: [String: String] = [:]
         var nextSequence = 0
         var responseIDs: Set<String> = []
@@ -538,7 +563,8 @@ actor LocalDailyUsageScanner {
             samples.append(CodexSample(
                 sequence: sequence, timestamp: timestamp, model: model, tokens: tokens,
                 eventKey: eventKey, turnID: turnID, responseID: responseID,
-                priority: turnPriorities[turnID ?? ""]
+                priority: turnPriorities[turnID ?? ""],
+                confirmedStandard: resumedStandardTurns.contains(turnID ?? "") ? true : nil
             ))
             return sequence
         }
@@ -655,7 +681,9 @@ actor LocalDailyUsageScanner {
     }
 
     private struct ClaudeFileState: Codable {
-        var parserVersion = 2
+        static let currentParserVersion = 3
+
+        var parserVersion = currentParserVersion
         var size: UInt64 = 0
         var modificationNanoseconds: Int64 = 0
         var fileID = ""
@@ -668,6 +696,8 @@ actor LocalDailyUsageScanner {
     private var codexFileStates: [String: CodexFileState] = [:]
     private var claudeFileStates: [String: ClaudeFileState] = [:]
     private var vertexFileStates: [String: ClaudeFileState] = [:]
+    // Pi 会话文件按大小和修改时间缓存解析结果，没变的文件不重复读取。
+    private var piFileCache: [String: (size: UInt64, modified: Int64, usage: PiSessionFileUsage)] = [:]
     private var activeVertexCacheProvider: String?
     private var loadedProviders: Set<String> = []
     private let cacheStore = LocalUsageCacheStore()
@@ -758,6 +788,8 @@ actor LocalDailyUsageScanner {
                 filter: .excludeVertex,
                 modelFilter: Self.isDeepSeekModel
             )
+        case "pi":
+            scanPi(periods: &periods, homeDirectory: homeDirectory, pricingCatalog: pricingCatalog)
         default:
             return nil
         }
@@ -770,11 +802,13 @@ actor LocalDailyUsageScanner {
         pricingCatalog: ModelPricingCatalog?,
         modelFilter: (String?) -> Bool
     ) {
-        let files = Self.logFiles(
+        let (files, isRetained) = Self.logFiles(
             modifiedSince: periods.last30DaysStart,
             below: Self.codexSessionRoots(homeDirectory: homeDirectory)
         )
+        // Codex 会把旧会话压缩成 .jsonl.zst 并删掉原文件，已算过的用量要保留，不读压缩内容。
         let currentPaths = Set(files.map { $0.url.path })
+            .union(codexFileStates.keys.filter { Self.isArchivedCodexRollout($0) || isRetained($0) })
         let deletedPaths = Set(codexFileStates.keys).subtracting(currentPaths)
         var changedPaths: Set<String> = []
         for file in files where codexFileStates[file.url.path] == nil {
@@ -792,10 +826,26 @@ actor LocalDailyUsageScanner {
             changedPaths.insert(file.url.path)
         }
         codexFileStates = codexFileStates.filter { currentPaths.contains($0.key) }
+        // 保留下来但本轮不读的会话也要按窗口裁剪，否则和 fork 子会话的前缀对不齐会重复计数。
+        let filePaths = Set(files.map { $0.url.path })
+        for (path, var state) in codexFileStates where !filePaths.contains(path) {
+            let previousSampleCount = state.samples.count
+            state.samples.removeAll {
+                $0.timestamp < periods.last30DaysStart || $0.timestamp >= periods.end
+            }
+            if state.samples.count != previousSampleCount {
+                codexFileStates[path] = state
+                changedPaths.insert(path)
+            }
+        }
 
         for file in files {
             let path = file.url.path
             var state = codexFileStates[path] ?? CodexFileState()
+            // 归档期间保留的旧版本结果，原文件恢复后要按当前版本重算。
+            if state.parserVersion != CodexFileState.currentParserVersion {
+                state = CodexFileState()
+            }
             let previousSampleCount = state.samples.count
             state.samples.removeAll {
                 $0.timestamp < periods.last30DaysStart || $0.timestamp >= periods.end
@@ -870,6 +920,18 @@ actor LocalDailyUsageScanner {
                     state.currentModel = payload.model ?? payload.modelName
                     if let turnID = payload.turnID ?? payload.turnId {
                         state.currentTurnID = turnID
+                        // 恢复同一个 turn 时不会再有 task_started，按当前线程档位刷新，之前的请求不受影响。
+                        if let priority = state.threadPriority,
+                           state.startedTurnID == nil || state.startedTurnID == turnID {
+                            if priority != (state.turnPriorities[turnID] == true) {
+                                if priority {
+                                    state.resumedStandardTurns.remove(turnID)
+                                } else {
+                                    state.resumedStandardTurns.insert(turnID)
+                                }
+                            }
+                            state.turnPriorities[turnID] = priority
+                        }
                     }
                     if let turnID = state.currentTurnID, let model = state.currentModel {
                         state.turnModels[turnID] = model
@@ -885,6 +947,7 @@ actor LocalDailyUsageScanner {
                    payload.type == "task_started" {
                     state.clearPendingMirrors()
                     state.currentTurnID = payload.turnID ?? payload.turnId ?? payload.id
+                    state.startedTurnID = state.currentTurnID
                     state.turnPriorities[state.currentTurnID ?? ""] = state.threadPriority
                     return
                 }
@@ -955,7 +1018,7 @@ actor LocalDailyUsageScanner {
                     && sample.model.map { Self.normalizedCodexModel($0.lowercased()) } == "codex-auto-review"
                 let valueUSD = isIncludedAutoReview ? 0 : rates.map { rates -> Double in
                     let base = Self.codexCost(tokens: sample.tokens, rates: rates)
-                    guard priorityTurn != nil || sample.priority == true,
+                    guard (priorityTurn != nil && sample.confirmedStandard != true) || sample.priority == true,
                           let multiplier = pricedModel.flatMap({
                               Self.codexFastMultiplier(for: $0, inputTokens: sample.tokens.input)
                           })
@@ -1057,12 +1120,12 @@ actor LocalDailyUsageScanner {
         filter: ClaudeLogProviderFilter,
         modelFilter: (String?) -> Bool
     ) {
-        let files = Self.logFiles(
+        let (files, isRetained) = Self.logFiles(
             modifiedSince: periods.last30DaysStart,
             below: Self.claudeProjectRoots(homeDirectory: homeDirectory)
         )
         var fileStates = cacheProvider.hasPrefix("vertexai-") ? vertexFileStates : claudeFileStates
-        let currentPaths = Set(files.map { $0.url.path })
+        let currentPaths = Set(files.map { $0.url.path }).union(fileStates.keys.filter(isRetained))
         let deletedPaths = Set(fileStates.keys).subtracting(currentPaths)
         fileStates = fileStates.filter { currentPaths.contains($0.key) }
         var changedPaths: Set<String> = []
@@ -1140,8 +1203,8 @@ actor LocalDailyUsageScanner {
                     ),
                     isSidechain: line.isSidechain ?? false
                 )
-                if let messageID = message.id, let requestID = line.requestID {
-                    state.keyedSamples["\(messageID):\(requestID)"] = sample
+                if let key = line.dedupeKey {
+                    state.keyedSamples[key] = sample
                 } else {
                     state.unkeyedSamples.append(sample)
                 }
@@ -1172,7 +1235,7 @@ actor LocalDailyUsageScanner {
 
         var keyedSamples: [String: (path: String, sample: ClaudeSample)] = [:]
         var unkeyedSamples: [ClaudeSample] = []
-        for path in files.map({ $0.url.path }).sorted() {
+        for path in fileStates.keys.sorted() {
             guard let state = fileStates[path] else { continue }
             for (key, sample) in state.keyedSamples {
                 let candidate = (path: path, sample: sample)
@@ -1220,14 +1283,34 @@ actor LocalDailyUsageScanner {
         }
     }
 
-    private static func logFiles(modifiedSince start: Date, below roots: [URL]) -> [LogFile] {
+    private static func logFiles(
+        modifiedSince start: Date, below roots: [URL]
+    ) -> (files: [LogFile], isRetained: (String) -> Bool) {
         var filesByPath: [String: LogFile] = [:]
+        var unreadableRoots: [String] = []
         for root in roots {
-            for file in filesModified(since: start, below: root) {
+            guard let files = filesModified(since: start, below: root) else {
+                // 遍历结果可能是真实路径（如 /private/var），两种写法都要匹配。
+                unreadableRoots.append(root.standardizedFileURL.path + "/")
+                unreadableRoots.append(realPath(of: root) + "/")
+                continue
+            }
+            for file in files {
                 filesByPath[file.url.standardizedFileURL.path] = file
             }
         }
-        return filesByPath.values.sorted { $0.url.path < $1.url.path }
+        // 读不了的目录本轮不动，其下已有的统计原样保留。
+        let isRetained = { (path: String) in unreadableRoots.contains { path.hasPrefix($0) } }
+        return (filesByPath.values.sorted { $0.url.path < $1.url.path }, isRetained)
+    }
+
+    private static func isArchivedCodexRollout(_ path: String) -> Bool {
+        guard path.lowercased().hasSuffix(".jsonl"), !FileManager.default.fileExists(atPath: path) else {
+            return false
+        }
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path + ".zst", isDirectory: &isDirectory)
+            && !isDirectory.boolValue
     }
 
     private static func codexHomeDirectory(homeDirectory: URL) -> URL {
@@ -1290,14 +1373,26 @@ actor LocalDailyUsageScanner {
                isDirectory.boolValue {
                 roots.append(projects.standardizedFileURL)
             }
+            // Cowork 会话把用量写在 audit.jsonl，作为单个文件加入统计。
+            let audit = current.url.appending(path: "audit.jsonl")
+            if let values = try? audit.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+               values.isRegularFile == true, values.isSymbolicLink != true {
+                roots.append(audit.standardizedFileURL)
+            }
 
-            guard current.depth < 4,
-                  let children = try? FileManager.default.contentsOfDirectory(
-                      at: current.url,
-                      includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-                      options: [.skipsHiddenFiles, .skipsPackageDescendants]
-                  )
-            else { continue }
+            guard current.depth < 4 else { continue }
+            let children: [URL]
+            do {
+                children = try FileManager.default.contentsOfDirectory(
+                    at: current.url,
+                    includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                    options: [.skipsHiddenFiles, .skipsPackageDescendants]
+                )
+            } catch {
+                // 读不了的会话目录作为扫描入口交给后面判断，其下已有统计才会保留，不会被当作删除。
+                if !isMissingFileError(error) { roots.append(current.url.standardizedFileURL) }
+                continue
+            }
             for child in children where !skipped.contains(child.lastPathComponent) {
                 guard let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
                       values.isDirectory == true,
@@ -1311,14 +1406,30 @@ actor LocalDailyUsageScanner {
         return roots
     }
 
-    private static func filesModified(since start: Date, below root: URL) -> [LogFile] {
+    private static func filesModified(since start: Date, below root: URL) -> [LogFile]? {
+        if root.pathExtension.lowercased() == "jsonl" {
+            guard let file = fileMetadata(for: root),
+                  TimeInterval(file.modificationNanoseconds) / 1_000_000_000 >= start.timeIntervalSince1970
+            else { return [] }
+            return [file]
+        }
+        // 目录读不了不能当成空目录，否则已有统计会被当作删除；上层目录没权限时 fileExists 也会返回 false。
+        var status = stat()
+        guard root.path.withCString({ fstatat(AT_FDCWD, $0, &status, 0) }) == 0 else { return errno == ENOENT || errno == ENOTDIR ? [] : nil }
+        guard access(root.path, R_OK | X_OK) == 0 else { return nil }
+        var unreadable = false
         guard let enumerator = FileManager.default.enumerator(
             at: root,
             includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return [] }
+            options: [.skipsHiddenFiles, .skipsPackageDescendants],
+            errorHandler: { _, error in
+                let missing = isMissingFileError(error)
+                if !missing { unreadable = true }
+                return missing
+            }
+        ) else { return nil }
 
-        return enumerator.compactMap { element -> LogFile? in
+        let files = enumerator.compactMap { element -> LogFile? in
             guard let url = element as? URL,
                   url.pathExtension.lowercased() == "jsonl",
                   let file = fileMetadata(for: url),
@@ -1326,6 +1437,29 @@ actor LocalDailyUsageScanner {
             else { return nil }
             return file
         }
+        return unreadable ? nil : files
+    }
+
+    // 目录本身没权限时解析不了，从最近一个能解析的上级目录拼出真实路径。
+    private static func realPath(of url: URL) -> String {
+        var current = url.standardizedFileURL
+        var suffix: [String] = []
+        while current.path != "/" {
+            if let real = realpath(current.path, nil) {
+                defer { free(real) }
+                return ([String(cString: real)] + suffix.reversed()).joined(separator: "/")
+            }
+            suffix.append(current.lastPathComponent)
+            current = current.deletingLastPathComponent()
+        }
+        return url.standardizedFileURL.path
+    }
+
+    private static func isMissingFileError(_ error: Error) -> Bool {
+        let error = error as NSError
+        return (error.domain == NSCocoaErrorDomain
+            && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(error.code))
+            || (error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT))
     }
 
     private static func readJSONLines<Value: Decodable>(
@@ -1485,7 +1619,8 @@ actor LocalDailyUsageScanner {
             switch provider {
             case "codex":
                 guard var state = try? cacheDecoder.decode(CodexFileState.self, from: record.payload),
-                      state.parserVersion == 2
+                      state.parserVersion == CodexFileState.currentParserVersion
+                        || Self.isArchivedCodexRollout(record.path)
                 else {
                     invalidPaths.insert(record.path)
                     continue
@@ -1496,7 +1631,7 @@ actor LocalDailyUsageScanner {
                 codexFileStates[record.path] = state
             case "claude-filtered":
                 guard var state = try? cacheDecoder.decode(ClaudeFileState.self, from: record.payload),
-                      state.parserVersion == 2
+                      state.parserVersion == ClaudeFileState.currentParserVersion
                 else {
                     invalidPaths.insert(record.path)
                     continue
@@ -1507,7 +1642,7 @@ actor LocalDailyUsageScanner {
                 claudeFileStates[record.path] = state
             case "vertexai-only", "vertexai-all":
                 guard var state = try? cacheDecoder.decode(ClaudeFileState.self, from: record.payload),
-                      state.parserVersion == 2
+                      state.parserVersion == ClaudeFileState.currentParserVersion
                 else {
                     invalidPaths.insert(record.path)
                     continue
@@ -1752,11 +1887,11 @@ actor LocalDailyUsageScanner {
     private static func codexFastMultiplier(for model: String, inputTokens: Int = 0) -> Double? {
         let model = normalizedCodexModel(model.lowercased())
         if inputTokens > codexFastInputTokenLimit,
-           model != "gpt-6-astra" {
+           model != "gpt-6-astra", model != "gpt-6.1-sol" {
             return nil
         }
         return switch model {
-        case "gpt-6-astra": 2
+        case "gpt-6-astra", "gpt-6.1-sol": 2
         case "gpt-5.4", "gpt-5.4-mini", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna": 2
         case "gpt-5.5": 2.5
         default: nil
@@ -1977,8 +2112,11 @@ actor LocalDailyUsageScanner {
         if let rates = claudeCatalogRates(for: rawModel, catalog: catalog) {
             return rates
         }
-        if model == "claude-fable-5" {
+        if model == "claude-fable-5" || model == "claude-mythos-5" {
             return ModelTokenRates(input: 1e-5, cacheRead: 1e-6, cacheWrite: 1.25e-5, output: 5e-5, threshold: nil, inputAboveThreshold: nil, cacheReadAboveThreshold: nil, cacheWriteAboveThreshold: nil, outputAboveThreshold: nil)
+        }
+        if model == "claude-mythos-5-1" {
+            return ModelTokenRates(input: 1e-5, cacheRead: 2.5e-7, cacheWrite: 1.25e-5, output: 5e-5, threshold: nil, inputAboveThreshold: nil, cacheReadAboveThreshold: nil, cacheWriteAboveThreshold: nil, outputAboveThreshold: nil)
         }
         if model == "claude-haiku-4-5" {
             return ModelTokenRates(input: 1e-6, cacheRead: 1e-7, cacheWrite: 1.25e-6, output: 5e-6, threshold: nil, inputAboveThreshold: nil, cacheReadAboveThreshold: nil, cacheWriteAboveThreshold: nil, outputAboveThreshold: nil)
@@ -2058,6 +2196,86 @@ actor LocalDailyUsageScanner {
                 tokens: session.tokens,
                 valueUSD: rates.map { Self.deepSeekHarnessCost(session, rates: $0) }
             )
+        }
+    }
+
+    private func scanPi(
+        periods: inout PeriodAccumulators,
+        homeDirectory: URL,
+        pricingCatalog: ModelPricingCatalog?
+    ) {
+        var files: [(path: String, usage: PiSessionFileUsage)] = []
+        let roots = PiSessionUsageReader.sessionRoots(
+            homeDirectory: homeDirectory,
+            environment: ProcessInfo.processInfo.environment
+        )
+        for root in roots {
+            guard let rootFiles = Self.filesModified(since: periods.last30DaysStart, below: root) else {
+                // 目录暂时读不了时沿用上次的解析结果，不能当成空目录把已有统计丢掉。
+                let prefixes = [root.standardizedFileURL.path, Self.realPath(of: root)].map { $0 + "/" }
+                files += piFileCache.filter { entry in prefixes.contains { entry.key.hasPrefix($0) } }
+                    .map { ($0.key, $0.value.usage) }
+                continue
+            }
+            for file in rootFiles {
+                let path = file.url.path
+                if let cached = piFileCache[path],
+                   cached.size == file.size,
+                   cached.modified == file.modificationNanoseconds {
+                    files.append((path, cached.usage))
+                    continue
+                }
+                guard let data = try? Data(contentsOf: file.url, options: .mappedIfSafe) else { continue }
+                let usage = PiSessionUsageReader.parse(data)
+                piFileCache[path] = (file.size, file.modificationNanoseconds, usage)
+                files.append((path, usage))
+            }
+        }
+        let livePaths = Set(files.map(\.path))
+        piFileCache = piFileCache.filter { livePaths.contains($0.key) }
+        let entries = PiSessionUsageReader.deduplicated(files.sorted { $0.path < $1.path }.map(\.usage))
+        for entry in entries {
+            periods.add(
+                timestamp: entry.timestamp,
+                tokens: entry.totalTokens,
+                valueUSD: Self.piCost(entry, catalog: pricingCatalog)
+            )
+        }
+    }
+
+    // 与 CodexBar 一致：openai-codex 按 Codex 价格、anthropic 按 Claude 价格、Bedrock 按目录里的 Bedrock 价格，其他后端不计价。
+    private static func piCost(_ entry: PiSessionUsageEntry, catalog: ModelPricingCatalog?) -> Double? {
+        guard entry.countsMatchTotal else { return nil }
+        let tokens = Tokens(
+            input: entry.inputTokens,
+            cacheRead: entry.cacheReadTokens,
+            cacheWrite: entry.cacheWriteTokens,
+            output: entry.outputTokens
+        )
+        let sample = ClaudeSample(
+            timestamp: entry.timestamp,
+            model: entry.model,
+            tokens: tokens,
+            cacheWrite1h: entry.cacheWrite1hTokens,
+            isSidechain: false
+        )
+        switch entry.backend {
+        case "openai-codex":
+            guard let rates = codexRates(for: entry.model, at: entry.timestamp, catalog: catalog) else { return nil }
+            // Pi 把输入、缓存读、缓存写分开记，Codex 计价要求缓存部分包含在输入里。
+            var codexTokens = tokens
+            codexTokens.input = entry.inputTokens + entry.cacheReadTokens + entry.cacheWriteTokens
+            return codexCost(tokens: codexTokens, rates: rates)
+        case "anthropic":
+            guard let rates = claudeRates(for: entry.model, at: entry.timestamp, catalog: catalog) else { return nil }
+            return claudeCost(sample: sample, rates: rates)
+        case "amazon-bedrock":
+            // Bedrock 价格按区域区分，必须完整模型 ID 精确匹配。
+            guard let rates = catalog?.rates(providerID: "amazon-bedrock", modelID: entry.model, exactModelID: true)
+            else { return nil }
+            return claudeCost(sample: sample, rates: rates)
+        default:
+            return nil
         }
     }
 

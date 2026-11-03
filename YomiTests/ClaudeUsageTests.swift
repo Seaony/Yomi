@@ -115,9 +115,40 @@ struct ClaudeUsageTests {
         ]}
         """#.utf8)
 
-        #expect(ClaudeWebUsageFetcher.accountPlan(from: data, organizationID: "selected") == "Max 20x")
+        #expect(ClaudeWebUsageFetcher.accountPlan(from: data, organizationID: "selected") == "Ultra")
         #expect(ClaudeWebUsageFetcher.accountPlan(from: data, organizationID: "name-only") == nil)
         #expect(ClaudeWebUsageFetcher.accountPlan(from: data, organizationID: "missing") == nil)
+    }
+
+    @Test(arguments: [
+        ("default_claude_max_20x", "Ultra"),
+        ("default_claude_max_5x", "Max"),
+        ("default_claude_max", "Max"),
+        ("default_claude_pro", "Pro"),
+    ])
+    func maxTiersUseRenamedPlans(tier: String, expected: String) {
+        #expect(UsageParser.displayClaudeOAuthPlan(subscriptionType: nil, rateLimitTier: tier) == expected)
+    }
+
+    @Test(arguments: [("Max 20x", "Ultra"), ("Claude Max 5x", "Max"), ("Max", "Max"), ("Ultra", "Ultra")])
+    func cachedOldPlanNamesShowRenamedPlans(cached: String, expected: String) throws {
+        let descriptor = try #require(ProviderCatalog.byID[ProviderID(rawValue: "claude")])
+        #expect(UsageParser.displayPlan(cached, descriptor: descriptor) == expected)
+    }
+
+    @Test @MainActor
+    func restoredCacheShowsRenamedPlan() throws {
+        struct Cached: Encodable { let usage: ProviderUsage; let revision: Int }
+        let suite = "yomi-claude-plan-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let id = ProviderID(rawValue: "claude")
+        let cached = ProviderUsage(id: id, state: .ready, windows: [], plan: "Max 20x", updatedAt: Date())
+        defaults.set(try JSONEncoder().encode([Cached(usage: cached, revision: 0)]), forKey: "usage-cache.v3")
+
+        let store = UsageStore(preferences: ProviderPreferences(defaults: defaults), defaults: defaults)
+
+        #expect(store.usage(for: id).plan == "Ultra")
     }
 
     @Test
@@ -191,6 +222,25 @@ struct ClaudeUsageTests {
         #expect(snapshot.modelName == "Sonnet")
         #expect(snapshot.sessionResetDescription == "Resets 3:15pm (Asia/Taipei)")
         #expect(snapshot.weeklyResetDescription == "Resets Sep 7 at 2pm (Asia/Taipei)")
+    }
+
+    @Test
+    func rateLimitedModelBreakdownKeepsSessionAndWeeklyQuota() throws {
+        let snapshot = try ClaudeCLIUsageFetcher.parse("""
+        Settings: Status Config Usage Stats
+        Current session
+        12% used
+        Resets 3:15pm (Asia/Taipei)
+
+        Current week (all models)
+        62% left
+        Resets Sep 7 at 2pm (Asia/Taipei)
+
+        Per-model breakdown unavailable (rate limited, press r to retry)
+        """)
+
+        #expect(snapshot.sessionPercentLeft == 88)
+        #expect(snapshot.weeklyPercentLeft == 62)
     }
 
     @Test

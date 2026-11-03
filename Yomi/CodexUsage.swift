@@ -674,6 +674,7 @@ nonisolated enum CodexUsageFetcher {
         let label = switch value.windowDurationMins {
         case 300: "Session"
         case 10_080: "Weekly"
+        case 43_200: "30-day"
         default: fallbackLabel
         }
         return UsageWindow(
@@ -682,7 +683,8 @@ nonisolated enum CodexUsageFetcher {
     }
 
     private static func normalizeWindows(_ windows: [UsageWindow]) -> [UsageWindow] {
-        windows.first { $0.label == "Weekly" }.map { [$0] } ?? []
+        // 没有每周窗口时保留 Free 账号的固定 30 天窗口。
+        (windows.first { $0.label == "Weekly" } ?? windows.first { $0.label == "30-day" }).map { [$0] } ?? []
     }
 
     private static func displayPlan(_ raw: String) -> String? {

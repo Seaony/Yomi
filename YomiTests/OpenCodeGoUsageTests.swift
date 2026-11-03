@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import Yomi
 
@@ -100,5 +101,87 @@ struct OpenCodeGoUsageTests {
         #expect(enriched.todayRequests?.valueUSD == 1.25)
         #expect(enriched.last30DaysRequests?.requests == 3)
         #expect(enriched.last30DaysRequests?.valueUSD == 4.75)
+    }
+
+    @Test(arguments: [false, true])
+    func localDatabaseReadsV2SessionMessagesOnce(withLegacyTables: Bool) throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "yomi-opencode-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appending(path: "opencode.db")
+        var handle: OpaquePointer?
+        #expect(sqlite3_open(database.path, &handle) == SQLITE_OK)
+        func execute(_ sql: String) {
+            #expect(sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK)
+        }
+        let created = 1_800_000_000_000
+        func v2(_ id: String, type: String, provider: String, cost: Double) -> String {
+            """
+            INSERT INTO session_message VALUES ('\(id)', '\(type)', \(created), '{"time":{"created":\(created)},\
+            "cost":\(cost),"model":{"providerID":"\(provider)","id":"glm"},"tokens":{"input":10,"output":5,\
+            "reasoning":0,"cache":{"read":0,"write":0}}}');
+            """
+        }
+        execute("CREATE TABLE session_message (id TEXT, type TEXT, time_created INTEGER, data TEXT)")
+        execute(v2("m1", type: "assistant", provider: "opencode-go", cost: 1))
+        execute(v2("m2", type: "compaction", provider: "opencode-go", cost: 0.5))
+        execute(v2("m3", type: "assistant", provider: "other", cost: 9))
+        execute(v2("m4", type: "user", provider: "opencode-go", cost: 9))
+        if withLegacyTables {
+            execute("CREATE TABLE message (id TEXT, time_created INTEGER, data TEXT)")
+            execute("CREATE TABLE part (id TEXT, message_id TEXT, time_created INTEGER, data TEXT)")
+            execute("""
+            INSERT INTO message VALUES ('m1', \(created), '{"providerID":"opencode-go","role":"assistant",\
+            "cost":2,"tokens":{"input":20,"output":10,"reasoning":0,"cache":{"read":0,"write":0}}}');
+            """)
+            // 旧表金额溢出成无穷大时不能挡住 v2 的有效记录。
+            execute("""
+            INSERT INTO message VALUES ('m2', \(created), '{"providerID":"opencode-go","role":"assistant",\
+            "cost":1e999}');
+            """)
+        }
+        sqlite3_close(handle)
+
+        let rows = try #require(OpenCodeGoLocalUsageReader.readRows(
+            since: Date(timeIntervalSince1970: 1_799_000_000), database: database
+        ))
+        #expect(rows.count == 2)
+        #expect(rows.map(\.cost).reduce(0, +) == (withLegacyTables ? 2.5 : 1.5))
+        #expect(rows.compactMap(\.tokens).reduce(0, +) == (withLegacyTables ? 45 : 30))
+    }
+
+    @Test
+    func cliCredentialPrefersActiveDatabaseLoginOverLegacyAuthFile() throws {
+        let home = FileManager.default.temporaryDirectory.appending(path: "yomi-opencode-\(UUID().uuidString)")
+        let directory = home.appending(path: ".local/share/opencode")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try Data(#"{"opencode-go":{"type":"api","key":"legacy-key"}}"#.utf8)
+            .write(to: directory.appending(path: "auth.json"))
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(OpenCodeGoLocalUsageReader.cliCredential(environment: [:], homeDirectory: home, now: now) == "legacy-key")
+
+        var handle: OpaquePointer?
+        #expect(sqlite3_open(directory.appending(path: "opencode.db").path, &handle) == SQLITE_OK)
+        func execute(_ sql: String) {
+            #expect(sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK)
+        }
+        execute("CREATE TABLE credential (integration_id TEXT, active INTEGER, value TEXT)")
+        execute(#"INSERT INTO credential VALUES ('opencode', 1, '{"type":"key","key":"shared-key"}')"#)
+        execute(#"INSERT INTO credential VALUES ('opencode-go', 0, '{"type":"key","key":"inactive"}')"#)
+        #expect(OpenCodeGoLocalUsageReader.cliCredential(environment: [:], homeDirectory: home, now: now) == "shared-key")
+
+        execute("""
+        INSERT INTO credential VALUES ('opencode-go', 1, '{"type":"oauth","access":"go-access","expires":1800000060000}')
+        """)
+        #expect(OpenCodeGoLocalUsageReader.cliCredential(environment: [:], homeDirectory: home, now: now) == "go-access")
+        // 登录过期后不回退到其他凭据，交给用户重新登录。
+        #expect(OpenCodeGoLocalUsageReader.cliCredential(
+            environment: [:], homeDirectory: home, now: now.addingTimeInterval(120)
+        ) == nil)
+
+        execute(#"DELETE FROM credential"#)
+        sqlite3_close(handle)
+        #expect(OpenCodeGoLocalUsageReader.cliCredential(environment: [:], homeDirectory: home, now: now) == nil)
     }
 }

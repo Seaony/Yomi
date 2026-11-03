@@ -62,7 +62,7 @@ struct UsageRailView: View {
     }
 
     private var railProviders: [ProviderDescriptor] {
-        [ProviderCatalog.overview] + store.displayedProviders
+        [ProviderCatalog.overview] + store.enabledProviders
     }
 
     var body: some View {
@@ -552,9 +552,9 @@ enum ProviderBrandColors {
         "codebuff": 0x44FF00,
         "coderabbit": 0xFF5C35,
         "codex": 0x49A3B0,
+        "chatbox": 0x228BE6,
         "commandcode": 0xA04DFD,
         "copilot": 0xA855F7,
-        "crof": 0x2EAB94,
         "cosmic": 0x29ABE2,
         "cursor": 0x00BFA5,
         "deepgram": 0x6467F2,
@@ -568,6 +568,7 @@ enum ProviderBrandColors {
         "fal": 0x7C3AED,
         "factory": 0xFF6B35,
         "fireworks": 0xF25B1C,
+        "futureagi": 0x7857FC,
         "gemini": 0xAB87EA,
         "gitkraken": 0x179287,
         "grok": 0x10A37F,
@@ -592,6 +593,7 @@ enum ProviderBrandColors {
         "muse": 0x0668E1,
         "museai": 0x0668E1,
         "mistral": 0xFF500F,
+        "munito": 0x702CF6,
         "moonshot": 0x205DEB,
         "neuralwatt": 0x38D98C,
         "notion": 0x337EA9,
@@ -602,6 +604,7 @@ enum ProviderBrandColors {
         "opencodego": 0x3B82F6,
         "openrouter": 0x6467F2,
         "perplexity": 0x20B2AA,
+        "pi": 0x4D9ABF,
         "poe": 0x5D5CDE,
         "qoder": 0x10B981,
         "qwencloud": 0x615CED,
@@ -609,12 +612,14 @@ enum ProviderBrandColors {
         "sakana": 0x2975DB,
         "sailresearch": 0x2C4681,
         "sofya": 0xB0B820,
+        "soniox": 0x253772,
         "stepfun": 0x2196F2,
         "sub2api": 0x2DC6D8,
         "synthetic": 0x141414,
         "t3chat": 0xF56647,
         "tavily": 0x78B0A1,
         "tinyapi": 0xF97316,
+        "traecn": 0x4D7CFE,
         "venice": 0x3399FF,
         "vertexai": 0x4285F4,
         "warp": 0x938BB4,
@@ -632,10 +637,10 @@ enum ProviderBrandColors {
     ]
 
     static func color(for id: ProviderID) -> Color {
-        if ["vercel", "linkup", "replicate", "v0", "typesafe", "parallel", "flora"].contains(id.rawValue) {
+        if ["vercel", "linkup", "replicate", "v0", "typesafe", "parallel", "flora", "abliteration", "opendesign"].contains(id.rawValue) {
             return .primary
         }
-        let value = values[id.catalogID.rawValue] ?? 0xFFFFFF
+        let value = values[id.rawValue] ?? 0xFFFFFF
         return Color(
             red: Double((value >> 16) & 0xFF) / 255,
             green: Double((value >> 8) & 0xFF) / 255,
@@ -665,13 +670,18 @@ private struct ProviderRailItem: View {
     }
 
     private var remainingFraction: Double {
-        if descriptor.id == ProviderCatalog.overview.id { return 1 }
+        if showsTodayTokens { return 1 }
         guard let window = headlineWindow else { return 0 }
         return 1 - window.clampedFraction
     }
 
+    // 总览和 Pi 没有额度，显示今天的 Token 数。
+    private var showsTodayTokens: Bool {
+        descriptor.id == ProviderCatalog.overview.id || descriptor.id.rawValue == "pi"
+    }
+
     private var railValue: String? {
-        if descriptor.id == ProviderCatalog.overview.id {
+        if showsTodayTokens {
             guard let tokens = usage.today?.tokens else { return "—" }
             return compactTokenCount(tokens, language: language)
         }
@@ -733,7 +743,8 @@ private struct ProviderRailItem: View {
         }
         guard descriptor.id.rawValue == "perplexity" else { return usage.windows.first }
         let primary = usage.windows.first { $0.id == "perplexity-recurring" }
-        let fallbacks = ["perplexity-purchased", "perplexity-promotional"]
+        // 个人额度都用完后才轮到组织池。
+        let fallbacks = ["perplexity-purchased", "perplexity-promotional", "perplexity-organization"]
             .compactMap { id in usage.windows.first { $0.id == id } }
         let orderedFallbacks = fallbacks.filter { $0.clampedFraction < 1 }
             + fallbacks.filter { $0.clampedFraction >= 1 }

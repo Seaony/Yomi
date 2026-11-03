@@ -175,6 +175,23 @@ nonisolated enum ZaiUsageFetcher {
             timeout: timeout
         )
         let quotaData = try await requiredData(for: quotaRequest, session: session)
+        // BigModel 国内个人账号没买 Coding Plan 时只有预付余额，余额能读到才算成功。
+        if region == .bigModelCN, scope == .personal, isNoCodingPlanResponse(quotaData) {
+            guard let balanceEndpoint = balanceURL(region: region, environment: environment),
+                  let balance = try? await fetchBalance(url: balanceEndpoint, token: token, session: session)
+            else {
+                throw ZaiUsageError.parseFailed(noCodingPlanMessage)
+            }
+            return ProviderUsage(
+                id: ProviderID(rawValue: "zai"),
+                state: .ready,
+                windows: [],
+                balance: balance.value,
+                details: [balance.detail],
+                updatedAt: now,
+                message: nil
+            )
+        }
         var usage = try parseQuota(quotaData, now: now)
 
         if let balanceEndpoint = balanceURL(region: region, environment: environment),
@@ -293,6 +310,15 @@ nonisolated enum ZaiUsageFetcher {
         if let raw = cleaned(environment[balanceURLEnvironmentKey]), normalizedHTTPSURL(raw) == nil {
             throw ZaiUsageError.invalidEndpointOverride(balanceURLEnvironmentKey)
         }
+    }
+
+    private static let noCodingPlanMessage = "当前用户不存在coding plan"
+
+    static func isNoCodingPlanResponse(_ data: Data) -> Bool {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return root["success"] as? Bool == false
+            && integer(root["code"]) == 500
+            && root["msg"] as? String == noCodingPlanMessage
     }
 
     static func parseQuota(_ data: Data, now: Date = Date()) throws -> ProviderUsage {

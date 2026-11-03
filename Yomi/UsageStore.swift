@@ -7,7 +7,6 @@ final class UsageStore: ObservableObject {
 
     @Published private(set) var usageByID: [ProviderID: ProviderUsage] = [:]
     @Published private(set) var isRefreshing = false
-    @Published private var magpieClaudeAccounts: [MagpieClaudeAccount] = []
 
     let preferences: ProviderPreferences
     private let collector: UsageCollector
@@ -48,20 +47,6 @@ final class UsageStore: ObservableObject {
         return ProviderCatalog.all.filter { enabled.contains($0.id) }
     }
 
-    var displayedProviders: [ProviderDescriptor] {
-        enabledProviders.flatMap { descriptor in
-            descriptor.id.rawValue == "claude" && usesMagpieClaudeAccounts
-                ? magpieClaudeAccounts.map(\.descriptor)
-                : [descriptor]
-        }
-    }
-
-    private var usesMagpieClaudeAccounts: Bool {
-        let configuration = preferences.configuration(for: ProviderID(rawValue: "claude"))
-        return !magpieClaudeAccounts.isEmpty
-            && (configuration.source == .automatic || configuration.source == .account)
-    }
-
     init(
         preferences: ProviderPreferences? = nil,
         collector: UsageCollector = UsageCollector(),
@@ -81,11 +66,6 @@ final class UsageStore: ObservableObject {
                 guard let self else { return }
                 self.usageByID.removeValue(forKey: id)
                 self.usageRevisions.removeValue(forKey: id)
-                if id.rawValue == "claude" {
-                    self.magpieClaudeAccounts = []
-                    self.usageByID = self.usageByID.filter { !$0.key.isMagpieClaudeAccount }
-                    self.usageRevisions = self.usageRevisions.filter { !$0.key.isMagpieClaudeAccount }
-                }
                 self.persistCache()
             }
     }
@@ -93,6 +73,13 @@ final class UsageStore: ObservableObject {
     deinit {
         refreshLoop?.cancel()
     }
+
+    #if DEBUG
+    /// 生成产品截图时直接填入演示数据，发布版本不包含。
+    func showPreviewUsage(_ usages: [ProviderUsage]) {
+        usageByID = Dictionary(uniqueKeysWithValues: usages.map { ($0.id, $0) })
+    }
+    #endif
 
     func start() {
         guard refreshLoop == nil else { return }
@@ -151,38 +138,14 @@ final class UsageStore: ObservableObject {
     }
 
     private func performRefresh(providerID: ProviderID?, allowBrowserCookieImport: Bool) async {
-        let claudeID = ProviderID(rawValue: "claude")
-        if providerID == nil || providerID?.catalogID == claudeID {
-            let configuration = preferences.configuration(for: claudeID)
-            if configuration.isEnabled,
-               configuration.source == .automatic || configuration.source == .account,
-               preferences.secret(for: claudeID).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                if let accounts = try? MagpieClaudeAccounts.accounts() {
-                    magpieClaudeAccounts = accounts
-                }
-            } else {
-                magpieClaudeAccounts = []
-            }
-            let accountIDs = Set(magpieClaudeAccounts.map(\.id))
-            usageByID = usageByID.filter { !$0.key.isMagpieClaudeAccount || accountIDs.contains($0.key) }
-            usageRevisions = usageRevisions.filter { !$0.key.isMagpieClaudeAccount || accountIDs.contains($0.key) }
-        }
-        let magpieDescriptors = usesMagpieClaudeAccounts ? magpieClaudeAccounts.map(\.descriptor) : []
-        let requestedID = providerID?.isMagpieClaudeAccount == true && !usesMagpieClaudeAccounts
-            ? claudeID : providerID
-        let providers = (enabledProviders + magpieDescriptors).filter {
-            requestedID == nil || $0.id == requestedID
-                || (requestedID == claudeID && $0.id.isMagpieClaudeAccount)
-                || (requestedID?.isMagpieClaudeAccount == true && $0.id == claudeID)
-        }
+        let providers = enabledProviders.filter { providerID == nil || $0.id == providerID }
         let preferences = preferences
         let jobs = providers.map { descriptor in
-            (descriptor, preferences.configuration(for: descriptor.id.catalogID))
+            (descriptor, preferences.configuration(for: descriptor.id))
         }
         let revisions = Dictionary(uniqueKeysWithValues: providers.map {
-            ($0.id, preferences.usageRevision(for: $0.id.catalogID))
+            ($0.id, preferences.usageRevision(for: $0.id))
         })
-        let claudeLocalStatisticsOnly = usesMagpieClaudeAccounts
         let allowVertexClaudeFallback = !enabledProviders.contains { $0.id.rawValue == "claude" }
 
         var loadingUsage = usageByID
@@ -226,17 +189,6 @@ final class UsageStore: ObservableObject {
                 let revision = revisions[descriptor.id]!
                 group.addTask { [collector] in
                     do {
-                        if descriptor.id.isMagpieClaudeAccount {
-                            return (try await collector.collectMagpieClaudeUsage(for: descriptor.id), revision)
-                        }
-                        if descriptor.id.rawValue == "claude", claudeLocalStatisticsOnly {
-                            // 本地日志没有账号标识，各卡片共用，总览只计一次。
-                            let usage = await collector.enrichLocalMetadata(
-                                to: ProviderUsage(id: descriptor.id, state: .ready, windows: [], updatedAt: Date()),
-                                descriptor: descriptor
-                            )
-                            return (usage, revision)
-                        }
                         let secret = try await MainActor.run {
                             guard revision == preferences.usageRevision(for: descriptor.id) else {
                                 throw CancellationError()
@@ -272,7 +224,7 @@ final class UsageStore: ObservableObject {
             }
 
             while let (usage, revision) = await group.next() {
-                if revision == preferences.usageRevision(for: usage.id.catalogID) {
+                if revision == preferences.usageRevision(for: usage.id) {
                     let resolvedUsage = Self.commandCodeUsageResolvingDepletionOnEnrichmentFailure(
                         current: usage,
                         previous: refreshedUsage[usage.id]
@@ -298,7 +250,7 @@ final class UsageStore: ObservableObject {
                         refreshedUsage[resolvedUsage.id] = resolvedUsage
                     }
 
-                    if revision == preferences.usageRevision(for: usage.id.catalogID) {
+                    if revision == preferences.usageRevision(for: usage.id) {
                         usageByID[usage.id] = refreshedUsage[usage.id]
                         usageRevisions[usage.id] = revision
                     }
@@ -314,7 +266,7 @@ final class UsageStore: ObservableObject {
     }
 
     func usage(for id: ProviderID) -> ProviderUsage {
-        var usage = Self.usageForCurrentDay(usageByID[id] ?? ProviderUsage(
+        Self.usageForCurrentDay(usageByID[id] ?? ProviderUsage(
             id: id,
             state: .unavailable,
             windows: [],
@@ -323,26 +275,6 @@ final class UsageStore: ObservableObject {
             updatedAt: nil,
             message: AppLocalization.text("等待首次刷新", "Waiting for the first refresh")
         ))
-        if id.isMagpieClaudeAccount, usesMagpieClaudeAccounts,
-           let localUsage = usageByID[id.catalogID].map({ Self.usageForCurrentDay($0) }) {
-            usage.today = localUsage.today
-            usage.todayDate = localUsage.todayDate
-            usage.last30Days = localUsage.last30Days
-            usage.last30DaysDaily = localUsage.last30DaysDaily
-        }
-        if id.rawValue == "claude", usesMagpieClaudeAccounts {
-            let accounts = magpieClaudeAccounts.map { self.usage(for: $0.id) }
-            if accounts.contains(where: { $0.state == .loading }) {
-                usage.state = .loading
-                usage.message = nil
-            } else if accounts.contains(where: { $0.state != .ready }) {
-                usage.state = .unavailable
-                usage.message = AppLocalization.text(
-                    "部分 Claude 账号用量未能刷新", "Usage could not be refreshed for some Claude accounts"
-                )
-            }
-        }
-        return usage
     }
 
     nonisolated static func usageForCurrentDay(
@@ -457,7 +389,11 @@ final class UsageStore: ObservableObject {
     private func restoreCache() {
         guard let data = defaults.data(forKey: cacheKey),
               let cached = try? JSONDecoder().decode([CachedUsage].self, from: data) else { return }
-        let current = cached.filter { $0.revision == preferences.usageRevision(for: $0.usage.id.catalogID) }
+        // 旧版本按 Magpie 账号单独缓存的 Claude 条目已不再使用，恢复时丢掉。
+        let current = cached.filter {
+            !$0.usage.id.rawValue.hasPrefix("claude-magpie-")
+                && $0.revision == preferences.usageRevision(for: $0.usage.id)
+        }
         usageRevisions = Dictionary(uniqueKeysWithValues: current.map { ($0.usage.id, $0.revision) })
         let sanitized = current.map { Self.sanitizeCachedUsage($0.usage) }
         usageByID = Dictionary(uniqueKeysWithValues: sanitized.map { ($0.id, $0) })
@@ -466,6 +402,9 @@ final class UsageStore: ObservableObject {
     private static func sanitizeCachedUsage(_ usage: ProviderUsage) -> ProviderUsage {
         var sanitized = usage
         sanitized.state = .unavailable
+        if sanitized.id.rawValue == "claude" {
+            sanitized.plan = sanitized.plan.map(UsageParser.renamedClaudePlan)
+        }
         if sanitized.id.rawValue == "zai" {
             let latestReset = Date().addingTimeInterval(5 * 60 * 60 + 60)
             for index in sanitized.windows.indices {
@@ -489,8 +428,8 @@ final class UsageStore: ObservableObject {
             }
         }
         guard usage.id.rawValue == "codex" else { return sanitized }
-        let weekly = (sanitized.windows + sanitized.additionalWindows)
-            .first { $0.label == "Weekly" }
+        let windows = sanitized.windows + sanitized.additionalWindows
+        let weekly = windows.first { $0.label == "Weekly" } ?? windows.first { $0.label == "30-day" }
         sanitized.windows = weekly.map { [$0] } ?? []
         sanitized.additionalWindows = []
         return sanitized
@@ -538,7 +477,7 @@ final class UsageStore: ObservableObject {
     private func persistCache() {
         let values = usageByID.values.compactMap { usage -> CachedUsage? in
             guard Self.hasCacheableData(usage), let revision = usageRevisions[usage.id],
-                  revision == preferences.usageRevision(for: usage.id.catalogID) else { return nil }
+                  revision == preferences.usageRevision(for: usage.id) else { return nil }
             return CachedUsage(usage: usage, revision: revision)
         }
         guard let data = try? JSONEncoder().encode(values) else { return }

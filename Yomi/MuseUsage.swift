@@ -1,8 +1,10 @@
 import Foundation
+import Security
 
 nonisolated enum MuseUsageError: LocalizedError, Equatable {
     case missingCredentials
-    case keychainCredentials
+    case keychainAccessNotGranted
+    case keychainUnavailable
     case invalidCredentials
     case unauthorized
     case rateLimited
@@ -15,8 +17,10 @@ nonisolated enum MuseUsageError: LocalizedError, Equatable {
         switch self {
         case .missingCredentials:
             AppLocalization.text("未找到 Muse Code 登录信息，请先运行 muse login 或填写 dca: 访问令牌", "Muse Code login was not found. Run muse login or enter a dca: access token")
-        case .keychainCredentials:
-            AppLocalization.text("Muse Code 登录信息保存在钥匙串中，当前请填写 dca: 访问令牌", "Muse Code stores this login in Keychain. Enter its dca: access token to use it here")
+        case .keychainAccessNotGranted:
+            AppLocalization.text("Yomi 还没有读取 Muse Code 钥匙串登录的权限，请手动刷新并在弹窗中允许，或填写 dca: 访问令牌", "Yomi cannot read the Muse Code Keychain login yet. Refresh manually and allow access, or enter a dca: access token")
+        case .keychainUnavailable:
+            AppLocalization.text("暂时无法读取钥匙串，请解锁钥匙串后再刷新", "Keychain is temporarily unavailable. Unlock it and refresh again")
         case .invalidCredentials:
             AppLocalization.text("Muse Code 需要 dca: 登录令牌，推理 API Key 无法读取额度", "Muse Code requires a dca: login token. Inference API keys cannot read quota")
         case .unauthorized:
@@ -75,7 +79,11 @@ nonisolated enum MuseUsageFetcher {
         source: ProviderSource,
         configuredToken: String?,
         environment: [String: String],
-        homeDirectory: URL
+        homeDirectory: URL,
+        readKeychain: (_ allowPrompt: Bool) -> (OSStatus, Data?) = readKeychainItem,
+        keychainItemExists: () -> Bool = {
+            BrowserCookieAccess.foreignKeychainItemExists(service: keychainService, account: "meta")
+        }
     ) throws -> String {
         if source != .account,
            let token = cleaned(configuredToken) ?? cleaned(environment["MUSE_DEVICE_TOKEN"]) {
@@ -85,19 +93,49 @@ nonisolated enum MuseUsageFetcher {
         let path = cleaned(environment["MUSE_AUTH_PATH"])
         let url = path.map { URL(fileURLWithPath: $0) }
             ?? homeDirectory.appendingPathComponent(".config/muse/auth.json")
-        guard let data = try? Data(contentsOf: url),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let providers = root["providers"] as? [String: Any],
-              let meta = providers["meta"] as? [String: Any] else {
-            throw MuseUsageError.missingCredentials
-        }
-        if let token = cleaned(meta["access_token"] as? String) {
+        if let data = try? Data(contentsOf: url),
+           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let providers = root["providers"] as? [String: Any],
+           let meta = providers["meta"] as? [String: Any],
+           let token = cleaned(meta["access_token"] as? String) {
             return try requireDeviceToken(token)
         }
-        if cleaned(meta["mechanism"] as? String)?.lowercased() == "oauth" {
-            throw MuseUsageError.keychainCredentials
+        // OAuth 登录的令牌存在钥匙串里，授权规则见 BrowserCookieAccess.readForeignKeychainItem。
+        let (status, data) = BrowserCookieAccess.readForeignKeychainItem(
+            service: keychainService, read: readKeychain, exists: keychainItemExists
+        )
+        if status == errSecInteractionNotAllowed || status == errSecAuthFailed
+            || [errSecUserCanceled, errSecNoAccessForItem].contains(status) {
+            throw MuseUsageError.keychainAccessNotGranted
         }
-        throw MuseUsageError.missingCredentials
+        switch status {
+        case errSecSuccess:
+            guard let data,
+                  let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw MuseUsageError.parseFailed
+            }
+            return try requireDeviceToken(cleaned(payload["access_token"] as? String) ?? "")
+        case errSecItemNotFound:
+            throw MuseUsageError.missingCredentials
+        default:
+            throw MuseUsageError.keychainUnavailable
+        }
+    }
+
+    static let keychainService = "ai.meta.dev.credentials"
+
+    private static func readKeychainItem(allowPrompt: Bool) -> (OSStatus, Data?) {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: "meta",
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnData as String: true,
+        ]
+        if !allowPrompt { BrowserCookieAccess.applyNoUI(to: &query) }
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        return (status, result as? Data)
     }
 
     static func parse(_ data: Data, now: Date = Date()) throws -> ProviderUsage {

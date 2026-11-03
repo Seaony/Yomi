@@ -96,10 +96,12 @@ nonisolated struct ModelPricingCatalog: Codable, Sendable {
         try container.encode(providers)
     }
 
-    func rates(providerID: String, modelID: String) -> ModelTokenRates? {
+    /// exactModelID 为 true 时只按完整模型 ID 查找，不去掉区域前缀或日期后缀。
+    func rates(providerID: String, modelID: String, exactModelID: Bool = false) -> ModelTokenRates? {
         let normalizedProvider = providerID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard let provider = providers[normalizedProvider] else { return nil }
-        for candidate in modelCandidates(modelID) {
+        let candidates = exactModelID ? [modelID.trimmingCharacters(in: .whitespacesAndNewlines)] : modelCandidates(modelID)
+        for candidate in candidates {
             let model = provider.models[candidate]
                 ?? provider.models.values.first { $0.id == candidate }
             guard let model,

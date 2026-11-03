@@ -610,20 +610,33 @@ nonisolated enum ClaudeCLIUsageFetcher {
     private static func terminalError(_ text: String) -> ClaudeCLIUsageError? {
         let lower = text.lowercased()
         let compact = normalizeLabel(text)
-        if lower.contains("token_expired") || lower.contains("token has expired") {
+        // 只看 "Failed to load usage data" 那一行，"Per-model breakdown unavailable (rate limited)" 不影响会话和周额度。
+        let failureLine = usageFailureLine(text)?.lowercased() ?? ""
+        if failureLine.contains("token_expired") || failureLine.contains("token has expired") {
             return .authenticationFailed("Claude CLI token expired. Run `claude login` to refresh.")
         }
-        if lower.contains("authentication_error") || lower.contains("not authenticated")
+        if failureLine.contains("authentication_error") || lower.contains("not authenticated")
             || lower.contains("unauthorized") || lower.contains("run /login") {
             return .authenticationFailed("Claude CLI authentication error. Run `claude login`.")
         }
-        if lower.contains("rate_limit_error") || lower.contains("rate limited") || compact.contains("ratelimited") {
+        if failureLine.contains("rate_limit_error") || failureLine.contains("rate limited")
+            || failureLine.filter({ !$0.isWhitespace }).contains("ratelimited") {
             return .parseFailed("Claude CLI usage endpoint is rate limited right now. Please try again later.")
         }
         if lower.contains("failed to load usage data") || compact.contains("failedtoloadusagedata") {
             return .parseFailed("Claude CLI could not load usage data. Open the CLI and retry `/usage`.")
         }
         return nil
+    }
+
+    private static func usageFailureLine(_ text: String) -> String? {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"failed\s*to\s*load\s*usage\s*data[^\r\n]*"#, options: [.caseInsensitive]
+        ) else { return nil }
+        guard let match = regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).last,
+              let range = Range(match.range, in: text)
+        else { return nil }
+        return String(text[range])
     }
 
     private static func isStillLoading(_ text: String) -> Bool {

@@ -60,9 +60,9 @@ struct GeminiUsageTests {
     }
 
     @Test
-    func catalogUsesOAuthAccountSourceOnly() {
+    func catalogOffersCLIAccountAndExplicitGeminiAppSource() {
         let descriptor = ProviderCatalog.byID[ProviderID(rawValue: "gemini")]
-        #expect(descriptor?.preferredSources == [.account])
+        #expect(descriptor?.preferredSources == [.account, .cookie])
         #expect(descriptor?.defaultEnabled == false)
     }
 }

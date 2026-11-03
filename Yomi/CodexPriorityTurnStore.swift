@@ -12,6 +12,35 @@ nonisolated final class CodexPriorityTurnStore {
         var epochSeconds: Int64
     }
 
+    private struct IdleDatabaseState: Equatable {
+        let size: UInt64
+        let modified: Date
+        let fileNumber: UInt64
+        let header: Data
+
+        static func read(at url: URL) -> Self? {
+            // SQLite 把 -wal 放在解析符号链接后的真实文件旁边。
+            let resolved = url.resolvingSymlinksInPath()
+            guard !FileManager.default.fileExists(atPath: resolved.path + "-wal"),
+                  let attributes = try? FileManager.default.attributesOfItem(atPath: resolved.path),
+                  let size = (attributes[.size] as? NSNumber)?.uint64Value,
+                  let modified = attributes[.modificationDate] as? Date,
+                  let fileNumber = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
+                  let handle = try? FileHandle(forReadingFrom: resolved)
+            else { return nil }
+            defer { try? handle.close() }
+            guard let header = try? handle.read(upToCount: 100) else { return nil }
+            return Self(size: size, modified: modified, fileNumber: fileNumber, header: header)
+        }
+
+        static func immutableURI(for url: URL) -> String? {
+            var allowed = CharacterSet.urlPathAllowed
+            allowed.remove(charactersIn: "%?#")
+            guard let path = url.path.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+            return "file:\(path)?immutable=1"
+        }
+    }
+
     private var databaseFileID = ""
     private var lastRowID: Int64 = 0
     private var coverageSinceEpoch = Int64.max
@@ -33,23 +62,47 @@ nonisolated final class CodexPriorityTurnStore {
 
         var handle: OpaquePointer?
         guard sqlite3_open_v2(databaseURL.path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
-              let db = handle
+              var db = handle
         else {
             if let handle { sqlite3_close_v2(handle) }
             return snapshot(since: sinceEpoch)
         }
-        defer { sqlite3_close_v2(db) }
         sqlite3_busy_timeout(db, 250)
 
-        guard let maxRowID = Self.maxRowID(db) else { return snapshot(since: sinceEpoch) }
+        var idleState: IdleDatabaseState?
+        var maxRowID = Self.maxRowID(db)
+        if maxRowID == nil {
+            // Codex 退出后会留下没有 -wal 的 WAL 库，只读连接打不开，此时主文件就是完整数据，改用不加锁方式读取。
+            let cannotOpen = sqlite3_errcode(db) == SQLITE_CANTOPEN
+            sqlite3_close_v2(db)
+            handle = nil
+            guard cannotOpen,
+                  let before = IdleDatabaseState.read(at: databaseURL),
+                  let uri = IdleDatabaseState.immutableURI(for: databaseURL),
+                  sqlite3_open_v2(uri, &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK,
+                  let immutable = handle,
+                  let rowID = Self.maxRowID(immutable)
+            else {
+                if let handle { sqlite3_close_v2(handle) }
+                return snapshot(since: sinceEpoch)
+            }
+            db = immutable
+            idleState = before
+            maxRowID = rowID
+        }
+        defer { sqlite3_close_v2(db) }
+        guard let maxRowID else { return snapshot(since: sinceEpoch) }
+
         if maxRowID < lastRowID {
             lastRowID = 0
             turns.removeAll()
             completedModels.removeAll()
             completedTurnOrder.removeAll()
         }
+        // 不加锁读取时发现不了中途写入，读完文件有变化就不推进位置，下次重读。
         if maxRowID > lastRowID,
-           ingest(db, afterRowID: lastRowID, sinceEpoch: coverageSinceEpoch) {
+           ingest(db, afterRowID: lastRowID, sinceEpoch: coverageSinceEpoch),
+           idleState == nil || IdleDatabaseState.read(at: databaseURL) == idleState {
             lastRowID = maxRowID
         }
         turns = turns.filter { $0.value.epochSeconds >= sinceEpoch }

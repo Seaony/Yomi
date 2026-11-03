@@ -266,9 +266,11 @@ struct AntigravityUsageTests {
         #expect(usage.windows.first?.usedFraction == 0.6)
         #expect(usage.plan == "Paid")
         #expect(usage.details.isEmpty)
-        #expect(protocolStub.requests.map { $0.url?.path } == [
-            "/v1internal:loadCodeAssist", "/v1internal:retrieveUserQuotaSummary",
-            "/v1internal:fetchAvailableModels",
+        // 额度汇总走 daily 主机，失败后回退到稳定主机的模型列表。
+        #expect(protocolStub.requests.map { "\($0.url?.host ?? "")\($0.url?.path ?? "")" } == [
+            "cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+            "daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+            "cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
         ])
         #if arch(arm64)
         let expectedUserAgent = "antigravity/hub/2.9.1 darwin/arm64"
@@ -328,6 +330,61 @@ struct AntigravityUsageTests {
         #expect(usage.windows.first?.usedFraction == 0.8)
         let paths = protocolStub.requests.compactMap { $0.url?.path }
         #expect(paths.contains("/v1internal:retrieveUserQuota"))
+    }
+
+    @Test
+    func ordinaryGeminiBucketRepresentsGeminiOverModelSpecificAllowance() throws {
+        let data = Data("""
+        {"groups":[{"displayName":"Gemini Models","buckets":[
+          {"bucketId":"gemini-pro-weekly","displayName":"Gemini Pro Weekly","remainingFraction":0},
+          {"bucketId":"gemini-weekly","displayName":"Weekly Limit","remainingFraction":0.75}
+        ]}]}
+        """.utf8)
+
+        let usage = try AntigravityUsageFetcher.parseQuotaSummary(data: data)
+
+        #expect(usage.windows.first?.usedFraction == 0.25)
+        #expect(usage.additionalWindows.count == 2)
+    }
+
+    @Test(arguments: [
+        (#"{"cloudaicompanionProject":"p","paidTier":{"id":"g1-ultra-tier","name":"Google AI Ultra"},"currentTier":{"id":"free-tier"}}"#, "Google AI Ultra"),
+        (#"{"cloudaicompanionProject":"p","paidTier":{"id":"g1-pro-tier"},"currentTier":{"id":"free-tier"}}"#, "Paid"),
+        (#"{"cloudaicompanionProject":"p","currentTier":{"id":"free-tier"}}"#, nil),
+    ] as [(String, String?)])
+    func remotePlanUsesPaidTierAndDropsContradictedFree(codeAssist: String, expectedPlan: String?) async throws {
+        let protocolStub = AntigravityTestURLProtocol.self
+        protocolStub.requests = []
+        protocolStub.handler = { request in
+            guard let url = request.url else { throw URLError(.badURL) }
+            switch url.path {
+            case "/v1internal:loadCodeAssist":
+                return response(url, codeAssist)
+            case "/v1internal:retrieveUserQuotaSummary":
+                return response(url, """
+                {"groups":[{"displayName":"Gemini Models","buckets":[
+                  {"bucketId":"gemini-5h","displayName":"Five Hour Limit","remainingFraction":0.5}
+                ]}]}
+                """)
+            default:
+                return response(url, "{}", status: 404)
+            }
+        }
+        defer { protocolStub.handler = nil; protocolStub.requests = [] }
+        let credentials = AntigravityOAuthCredentials(
+            accessToken: "token", refreshToken: nil, expiryDate: Date().addingTimeInterval(3600)
+        )
+        let credential = try #require(String(data: try JSONEncoder().encode(credentials), encoding: .utf8))
+
+        let usage = try await AntigravityUsageFetcher.fetchRemote(
+            credential: credential,
+            session: stubSession(protocolStub),
+            environment: [:],
+            homeDirectory: FileManager.default.temporaryDirectory
+        )
+
+        // Free 账号不会有 5 小时额度，两者矛盾时不显示套餐名。
+        #expect(usage.plan == expectedPlan)
     }
 
     private func stubSession(_ protocolClass: AnyClass) -> URLSession {

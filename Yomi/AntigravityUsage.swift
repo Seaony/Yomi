@@ -169,6 +169,8 @@ nonisolated enum AntigravityUsageFetcher {
     }
 
     private static let baseURL = "https://cloudcode-pa.googleapis.com"
+    // 当前额度汇总只在 daily 主机上是最新的，其余请求仍走稳定主机。
+    private static let dailyBaseURL = "https://daily-cloudcode-pa.googleapis.com"
     private static let loadCodeAssistPath = "/v1internal:loadCodeAssist"
     private static let onboardUserPath = "/v1internal:onboardUser"
     private static let availableModelsPath = "/v1internal:fetchAvailableModels"
@@ -289,7 +291,8 @@ nonisolated enum AntigravityUsageFetcher {
                 accessToken: accessToken,
                 body: modelBody,
                 session: session,
-                timeout: 2
+                timeout: 2,
+                host: dailyBaseURL
             )
             try Task.checkCancellation()
             return try parseQuotaSummary(
@@ -426,12 +429,23 @@ nonisolated enum AntigravityUsageFetcher {
             throw AntigravityUsageError.unreadableResponse("missing quota buckets")
         }
 
-        let identity = suppliedIdentity
+        var identity = suppliedIdentity
             ?? identityData.flatMap { try? parseIdentity(data: $0) } ?? Identity(email: nil, plan: nil)
+        // 远程返回 Free 却带有付费才有的 5 小时额度时，说明套餐信息不可靠，不显示套餐名。
+        if suppliedIdentity != nil, identity.plan?.lowercased() == "free",
+           windows.contains(where: { $0.cadenceRank == 0 }) {
+            identity = Identity(email: identity.email, plan: nil)
+        }
         let families = Dictionary(grouping: detailed, by: familyKey)
         let core = ["gemini", "other"].compactMap { key -> UsageWindow? in
             guard let familyWindows = families[key], !familyWindows.isEmpty else { return nil }
-            guard let representative = familyWindows
+            // 优先用普通 Gemini 额度做代表，避免某个模型专属额度用尽时把整个 Gemini 显示成 100%。
+            let ordinary = familyWindows.filter { window in
+                var id = window.id.lowercased().replacingOccurrences(of: "_", with: "-")
+                if id.hasSuffix(" limit") { id.removeLast(" limit".count) }
+                return ordinaryGeminiWindowIDs.contains(id)
+            }
+            guard let representative = (ordinary.isEmpty ? familyWindows : ordinary)
                 .max(by: { $0.usedFraction < $1.usedFraction }) else { return nil }
             return UsageWindow(
                 id: "antigravity-\(key)",
@@ -839,6 +853,10 @@ nonisolated enum AntigravityUsageFetcher {
         return window.label
     }
 
+    private static let ordinaryGeminiWindowIDs = Set(
+        ["session", "5h", "5-hour", "five hour", "five-hour", "weekly"].map { "antigravity-quota-summary-gemini-\($0)" }
+    )
+
     private static func quotaCadence(
         bucketID: String, displayName: String, window: String?
     ) -> (rank: Int, title: String?) {
@@ -925,6 +943,11 @@ nonisolated enum AntigravityUsageFetcher {
     }
 
     private static func plan(codeAssist: [String: Any], hostedDomain: String?) -> String? {
+        // 明确的付费等级优先；只有 id 没有名称时显示通用的 Paid。
+        if let paid = dictionary(codeAssist["paidTier"]),
+           clean(paid["name"] as? String) != nil || clean(paid["id"] as? String) != nil {
+            return clean(paid["name"] as? String) ?? "Paid"
+        }
         if let explicit = clean(dictionary(codeAssist["planInfo"])?["planType"] as? String) { return explicit }
         let tierID = clean(dictionary(codeAssist["currentTier"])?["id"] as? String)
         switch tierID {
@@ -1000,9 +1023,10 @@ nonisolated enum AntigravityUsageFetcher {
         accessToken: String,
         body: [String: Any],
         session: URLSession,
-        timeout: TimeInterval = 10
+        timeout: TimeInterval = 10,
+        host: String = baseURL
     ) async throws -> [String: Any] {
-        var request = try remoteRequest(path: path, accessToken: accessToken, body: body)
+        var request = try remoteRequest(path: path, accessToken: accessToken, body: body, host: host)
         request.timeoutInterval = timeout
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -1019,8 +1043,10 @@ nonisolated enum AntigravityUsageFetcher {
         }
     }
 
-    static func remoteRequest(path: String, accessToken: String, body: [String: Any]) throws -> URLRequest {
-        var request = URLRequest(url: URL(string: baseURL + path)!)
+    static func remoteRequest(
+        path: String, accessToken: String, body: [String: Any], host: String = baseURL
+    ) throws -> URLRequest {
+        var request = URLRequest(url: URL(string: host + path)!)
         request.httpMethod = "POST"
         request.timeoutInterval = 10
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
