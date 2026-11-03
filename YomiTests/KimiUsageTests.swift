@@ -91,6 +91,16 @@ struct KimiUsageTests {
             snapshot: try KimiUsageFetcher.parseWeb(usageData, subscriptionData: malformed), now: now
         )
         #expect(kept.additionalWindows.map(\.id) == ["kimi-monthly"])
+
+        // 没有任何额度窗口、只有赠送余额时也要显示，不能当成解析失败。
+        let giftOnly = Data(#"""
+        {"giftBalances":[{"feature":"FEATURE_OMNI","type":"GIFT","amountUsedRatio":0.5,"expireTime":"2030-01-01T00:00:00Z"}]}
+        """#.utf8)
+        let gift = KimiUsageFetcher.providerUsage(
+            snapshot: try KimiUsageFetcher.parseWeb(Data(#"{"usages":[]}"#.utf8), subscriptionData: giftOnly), now: now
+        )
+        #expect(gift.state == .ready)
+        #expect(gift.details.map(\.id) == ["kimi-gift-0"])
     }
 
     @Test func duplicateSubscriptionWeeklyIsSuppressed() throws {

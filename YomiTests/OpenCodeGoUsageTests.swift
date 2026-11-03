@@ -4,6 +4,45 @@ import Testing
 @testable import Yomi
 
 struct OpenCodeGoUsageTests {
+    // 记录请求走的是接口（/zen/go/v1/usage）还是网页会话（/_server 等），返回 500 让抓取直接结束。
+    private static func requestedPaths(
+        credential: String, source: ProviderSource, localKey: String?, browserCookie: String?, webStatus: Int = 500
+    ) async -> [String] {
+        // 上一次调用里没跑完的请求可能晚到，用标记只统计这次调用的请求。
+        let call = UUID().uuidString
+        OpenCodeGoRecordingURLProtocol.setWebStatus(webStatus)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OpenCodeGoRecordingURLProtocol.self]
+        configuration.httpAdditionalHeaders = ["X-Test-Call": call]
+        _ = try? await OpenCodeGoUsageFetcher.fetch(
+            credential: credential, source: source, workspaceID: "wrk_1",
+            session: URLSession(configuration: configuration),
+            localAPIKey: { localKey }, browserCookie: { browserCookie }
+        )
+        return OpenCodeGoRecordingURLProtocol.paths(for: call)
+    }
+
+    @Test
+    func configuredSourceDecidesTheRequestPath() async {
+        let api = "/zen/go/v1/usage"
+        // 选 API Key：即使浏览器有会话也只走接口。
+        #expect(await Self.requestedPaths(credential: "", source: .token, localKey: "cli-key", browserCookie: "auth=x") == [api])
+        // 选 Cookie：即使有 CLI 登录也只走网页会话。
+        let cookiePaths = await Self.requestedPaths(credential: "", source: .cookie, localKey: "cli-key", browserCookie: "auth=x")
+        #expect(!cookiePaths.isEmpty && !cookiePaths.contains(api))
+        // 自动：浏览器会话排在 CLI 登录前面；都没有时才用 CLI 登录。
+        let auto = await Self.requestedPaths(credential: "", source: .automatic, localKey: "cli-key", browserCookie: "auth=x")
+        #expect(!auto.isEmpty && !auto.contains(api))
+        #expect(await Self.requestedPaths(credential: "", source: .automatic, localKey: "cli-key", browserCookie: nil) == [api])
+        // 自动且手动填了 Key：直接用它。
+        #expect(await Self.requestedPaths(credential: "sk-manual", source: .automatic, localKey: nil, browserCookie: "auth=x") == [api])
+        // 浏览器会话已失效（401）时，接着用 CLI 登录。
+        let expired = await Self.requestedPaths(
+            credential: "", source: .automatic, localKey: "cli-key", browserCookie: "auth=x", webStatus: 401
+        )
+        #expect(expired.last == api)
+    }
+
     @Test
     func parsesAuthoritativeAPIWindowsAsPercentUnits() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -184,4 +223,28 @@ struct OpenCodeGoUsageTests {
         sqlite3_close(handle)
         #expect(OpenCodeGoLocalUsageReader.cliCredential(environment: [:], homeDirectory: home, now: now) == nil)
     }
+}
+
+
+private nonisolated final class OpenCodeGoRecordingURLProtocol: URLProtocol {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var recorded: [(call: String, path: String)] = []
+    nonisolated(unsafe) private static var webStatus = 500
+    static func paths(for call: String) -> [String] { lock.withLock { recorded.filter { $0.call == call }.map(\.path) } }
+    static func setWebStatus(_ status: Int) { lock.withLock { webStatus = status } }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let path = request.url?.path ?? ""
+        let status = Self.lock.withLock {
+            Self.recorded.append((request.value(forHTTPHeaderField: "X-Test-Call") ?? "", path))
+            return path == "/zen/go/v1/usage" ? 500 : Self.webStatus
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data())
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }

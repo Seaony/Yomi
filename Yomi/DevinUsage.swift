@@ -681,14 +681,10 @@ nonisolated enum DevinSessionImporter {
     }
 
     private static func readLocalStorage(from levelDBURL: URL) throws -> [String: String] {
+        // SweetCookieKit 0.5.9 起按站点流式读取，不用再整库扫描文本，大的 Local Storage 也不会占满内存。
         var storage: [String: String] = [:]
         for entry in ChromiumLocalStorageReader.readEntries(for: storageOrigin, in: levelDBURL) {
             storage[entry.key] = decodedStorageValue(entry.value)
-        }
-        for entry in ChromiumLocalStorageReader.readTextEntries(in: levelDBURL) {
-            guard let key = localStorageKey(fromRawKey: entry.key),
-                  isUsefulStorageKey(key), storage[key] == nil else { continue }
-            storage[key] = decodedStorageValue(entry.value)
         }
         if accessToken(from: storage) == nil {
             let files = try FileManager.default.contentsOfDirectory(
@@ -702,16 +698,6 @@ nonisolated enum DevinSessionImporter {
             }
         }
         return storage
-    }
-
-    private static func localStorageKey(fromRawKey raw: String) -> String? {
-        guard let separator = raw.firstIndex(of: "\u{0000}") else { return nil }
-        var origin = String(raw[..<separator])
-        if origin.hasPrefix("_") { origin.removeFirst() }
-        origin = String(origin.split(separator: "^", maxSplits: 1).first ?? "")
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard origin == storageOrigin || origin == "app.devin.ai" else { return nil }
-        return String(raw[raw.index(after: separator)...]).trimmingCharacters(in: .controlCharacters)
     }
 
     private static func organizationScore(_ session: SessionInfo) -> Int {
@@ -756,16 +742,6 @@ nonisolated enum DevinSessionImporter {
     private static func isAuth1StorageKey(_ key: String) -> Bool { key.hasSuffix("auth1_session") }
     private static func isAuth0StorageKey(_ key: String) -> Bool { key.contains("auth0spajs@@::") }
     private static func isExternalOrgStorageKey(_ key: String) -> Bool { key.contains(externalOrgPrefix) }
-
-    private static func isUsefulStorageKey(_ key: String) -> Bool {
-        isAuth1StorageKey(key)
-            || isAuth0StorageKey(key)
-            || isExternalOrgStorageKey(key)
-            || key.contains("post-auth-v")
-            || key.contains("member-info-v")
-            || key.contains("feature-flags-cache:org-")
-            || key.contains("feature-flags-cache:org_")
-    }
 
     private static func inferredOrganizationInfo(
         from storage: [String: String],

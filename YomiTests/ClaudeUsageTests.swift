@@ -84,6 +84,25 @@ struct ClaudeUsageTests {
     }
 
     @Test
+    func modelScopedLimitsAloneStillCountAsQuotaData() throws {
+        let data = Data("""
+        {
+          "five_hour": null,
+          "seven_day": null,
+          "limits": [
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 25,
+             "scope": {"model": {"id": "model-fable", "display_name": "Fable"}}}
+          ]
+        }
+        """.utf8)
+
+        let usage = try UsageParser.parse(data, descriptor: descriptor)
+
+        #expect(usage.windows.isEmpty)
+        #expect(usage.additionalWindows.map(\.label) == ["Fable"])
+    }
+
+    @Test
     func labelsOpusSpecificWindowCorrectly() throws {
         let data = Data(#"{"seven_day_opus":{"utilization":25}}"#.utf8)
 

@@ -493,6 +493,31 @@ struct KiroUsageTests {
         #expect(!calls.contains("chat"))
     }
 
+    @Test
+    func backgroundRefreshSkipsCLIWhenOffline() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let marker = root.appendingPathComponent("ran")
+        let executable = root.appendingPathComponent("kiro-cli")
+        try "#!/bin/sh\ntouch '\(marker.path)'\nexit 1\n".write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [KiroOfflineURLProtocol.self]
+
+        await #expect(throws: URLError.self) {
+            _ = try await KiroUsageFetcher.fetch(
+                configuredCommand: executable.path,
+                session: URLSession(configuration: configuration),
+                environment: ["PATH": root.path],
+                homeDirectory: root,
+                checkConnectivity: true
+            )
+        }
+        // 断网时连 whoami 都不跑，避免 CLI 打开登录页。
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
+
     private static func utcCalendar() -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -521,5 +546,12 @@ private nonisolated final class KiroTestURLProtocol: URLProtocol {
         client?.urlProtocolDidFinishLoading(self)
     }
 
+    override func stopLoading() {}
+}
+
+private nonisolated final class KiroOfflineURLProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() { client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)) }
     override func stopLoading() {}
 }

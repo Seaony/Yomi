@@ -178,7 +178,9 @@ actor UsageCollector {
         if descriptor.id.rawValue == "kiro" {
             return try await KiroUsageFetcher.fetch(
                 configuredCommand: configuration.command.isEmpty ? nil : configuration.command,
-                session: session
+                session: session,
+                // 手动刷新时允许打开登录页，不做联网检查。
+                checkConnectivity: !allowBrowserCookieImport
             )
         }
         if descriptor.id.rawValue == "windsurf" {
@@ -399,10 +401,13 @@ actor UsageCollector {
             )
         }
         if descriptor.id.rawValue == "opencodego" {
+            // CLI 登录要排在浏览器会话之后，所以不用合并好的 resolvedSecret。
             return try await OpenCodeGoUsageFetcher.fetch(
-                credential: resolvedSecret,
+                credential: [secret, environmentValue].first(where: { !$0.isEmpty }) ?? "",
+                source: configuration.source,
                 workspaceID: configuration.account.isEmpty ? nil : configuration.account,
-                session: session
+                session: session,
+                localAPIKey: { openCodeGoLocalAPIKey() }
             )
         }
         if descriptor.id.rawValue == "alibaba" {

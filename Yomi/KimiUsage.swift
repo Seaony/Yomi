@@ -498,7 +498,8 @@ nonisolated enum KimiUsageFetcher {
                 additional.append(candidate)
             }
         }
-        guard !windows.isEmpty || !additional.isEmpty else {
+        // 没有额度窗口但有未过期的赠送余额时，照样显示这些明细。
+        guard !windows.isEmpty || !additional.isEmpty || !details.isEmpty else {
             return ProviderUsage(
                 id: ProviderID(rawValue: "kimi"), state: .failed, windows: [],
                 updatedAt: now, message: KimiUsageError.parseFailed.localizedDescription

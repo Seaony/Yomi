@@ -202,7 +202,8 @@ nonisolated enum UsageParser {
                 detail: String(format: "$%.2f / $%.2f", providerCost.used, providerCost.limit)
             )]
         }
-        guard !windows.isEmpty else { return nil }
+        // 主窗口都是空的、只有按模型的附加额度时也算有额度数据，对齐 CodexBar。
+        guard !windows.isEmpty || !additional.isEmpty else { return nil }
         return ProviderUsage(
             id: descriptor.id,
             state: .ready,

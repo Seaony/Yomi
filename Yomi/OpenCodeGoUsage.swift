@@ -19,23 +19,52 @@ enum OpenCodeGoUsageFetcher {
     private static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
 
+    // 按设置里选的来源读取：API Key 只走接口，Cookie 只走网页会话；
+    // 自动时依次用填写的凭据、浏览器会话、OpenCode CLI 的登录。
     static func fetch(
         credential: String,
+        source: ProviderSource = .automatic,
         workspaceID: String?,
         session: URLSession,
-        now: Date = Date()
+        now: Date = Date(),
+        localAPIKey: () -> String? = { nil },
+        browserCookie: () -> String? = { OpenCodeUsageFetcher.automaticCookieHeader() }
     ) async throws -> ProviderUsage {
         let normalized = normalizeAPIKey(credential)
-        if let cookie = OpenCodeUsageFetcher.requestCookieHeader(from: normalized) {
+        let manualCookie = OpenCodeUsageFetcher.requestCookieHeader(from: normalized)
+        let manualKey = manualCookie == nil && !normalized.isEmpty ? normalized : nil
+        switch source {
+        case .token:
+            guard let key = manualKey ?? localAPIKey() else { throw UsageCollectionError.missingCredential }
+            return try await fetchAPI(apiKey: key, session: session, now: now)
+        case .cookie:
+            guard let cookie = manualCookie ?? browserCookie() else { throw UsageCollectionError.missingCredential }
             return try await fetchWeb(cookie: cookie, workspaceID: workspaceID, session: session, now: now)
+        default:
+            if let manualCookie {
+                return try await fetchWeb(cookie: manualCookie, workspaceID: workspaceID, session: session, now: now)
+            }
+            if let manualKey { return try await fetchAPI(apiKey: manualKey, session: session, now: now) }
+            if let cookie = browserCookie() {
+                do {
+                    return try await fetchWeb(cookie: cookie, workspaceID: workspaceID, session: session, now: now)
+                } catch let error where isAuthFailure(error) {
+                    // 浏览器里残留的会话已失效时，继续试 CLI 登录，不能挡住有效的 Key。
+                    guard let key = localAPIKey() else { throw error }
+                    return try await fetchAPI(apiKey: key, session: session, now: now)
+                }
+            }
+            if let key = localAPIKey() { return try await fetchAPI(apiKey: key, session: session, now: now) }
+            throw UsageCollectionError.missingCredential
         }
-        if !normalized.isEmpty {
-            return try await fetchAPI(apiKey: normalized, session: session, now: now)
+    }
+
+    private static func isAuthFailure(_ error: Error) -> Bool {
+        switch error {
+        case UsageCollectionError.missingCredential: true
+        case let UsageCollectionError.requestFailed(status): status == 401 || status == 403
+        default: false
         }
-        if let cookie = OpenCodeUsageFetcher.automaticCookieHeader() {
-            return try await fetchWeb(cookie: cookie, workspaceID: workspaceID, session: session, now: now)
-        }
-        throw UsageCollectionError.missingCredential
     }
 
     static func fetchAPI(

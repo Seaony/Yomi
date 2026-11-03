@@ -133,18 +133,32 @@ nonisolated enum ClaudeCLIUsageFetcher {
     private final class Capture: @unchecked Sendable {
         private let lock = NSLock()
         private var data = Data()
+        private var closed = false
         private(set) var overflowed = false
 
-        func append(_ chunk: Data) {
-            guard !chunk.isEmpty else { return }
+        // 回调里的读取和追加放在同一把锁里，close() 返回时就不会还有读到一半的数据。
+        func appendAvailable(from handle: FileHandle) {
             lock.withLock {
-                guard !overflowed else { return }
-                if data.count + chunk.count > 1_048_576 {
-                    overflowed = true
-                    return
-                }
-                data.append(chunk)
+                guard !closed else { return }
+                appendLocked(handle.availableData)
             }
+        }
+
+        func close() {
+            lock.withLock { closed = true }
+        }
+
+        func append(_ chunk: Data) {
+            lock.withLock { appendLocked(chunk) }
+        }
+
+        private func appendLocked(_ chunk: Data) {
+            guard !chunk.isEmpty, !overflowed else { return }
+            if data.count + chunk.count > 1_048_576 {
+                overflowed = true
+                return
+            }
+            data.append(chunk)
         }
 
         func snapshot() -> (Data, Bool) {
@@ -483,7 +497,7 @@ nonisolated enum ClaudeCLIUsageFetcher {
             process.standardOutput = output
             process.standardError = output
         }
-        readHandle.readabilityHandler = { capture.append($0.availableData) }
+        readHandle.readabilityHandler = { capture.appendAvailable(from: $0) }
 
         do {
             try process.run()
@@ -538,6 +552,7 @@ nonisolated enum ClaudeCLIUsageFetcher {
         terminate(process)
         process.waitUntilExit()
         usleep(20_000)
+        capture.close()
         readHandle.readabilityHandler = nil
         // 命令很快退出时最后一段输出可能还没被回调读走，这里非阻塞地读到底，避免丢掉结果。
         capture.append(drainRemainingOutput(readHandle.fileDescriptor))

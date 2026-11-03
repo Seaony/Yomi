@@ -164,7 +164,8 @@ nonisolated enum KiroUsageFetcher {
         session: URLSession,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        now: Date = Date()
+        now: Date = Date(),
+        checkConnectivity: Bool = false
     ) async throws -> ProviderUsage {
         guard let binary = resolveBinary(
             configuredCommand: configuredCommand,
@@ -173,6 +174,13 @@ nonisolated enum KiroUsageFetcher {
         ) else {
             throw KiroUsageError.cliNotFound
         }
+        let databaseURL = stateDatabaseURL(
+            homeDirectory: homeDirectory,
+            environment: environment,
+            usesMacOSApplicationSupport: true
+        )
+        // 后台刷新时先确认能连上额度接口；断网时 CLI 会反复打开登录页，这时保留上次的数据。
+        if checkConnectivity { try await ensureReachable(databaseURL: databaseURL, session: session) }
 
         var accountNotLoggedIn = false
         let account: Account?
@@ -186,11 +194,6 @@ nonisolated enum KiroUsageFetcher {
         } catch {
             account = nil
         }
-        let databaseURL = stateDatabaseURL(
-            homeDirectory: homeDirectory,
-            environment: environment,
-            usesMacOSApplicationSupport: true
-        )
         func loadLimits() async throws -> KiroUsageLimits? {
             do {
                 return try await fetchUsageLimits(databaseURL: databaseURL, session: session)
@@ -702,13 +705,7 @@ nonisolated enum KiroUsageFetcher {
         session: URLSession
     ) async throws -> KiroUsageLimits {
         let identity = try readIdentity(databaseURL: databaseURL)
-        let arn = identity.profileARN.split(separator: ":", maxSplits: 5, omittingEmptySubsequences: false)
-        guard arn.count == 6, arn[0] == "arn", arn[1] == "aws", arn[2] == "codewhisperer",
-              arn[5].hasPrefix("profile/"), arn[5].count > "profile/".count,
-              identity.profileARN.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil,
-              let endpoint = profileEndpoints[String(arn[3])] else {
-            throw KiroUsageError.credentialsUnavailable("unsupported profile ARN")
-        }
+        let endpoint = try usageEndpoint(profileARN: identity.profileARN)
         let request = try makeUsageLimitsRequest(
             identity: identity,
             endpoint: endpoint
@@ -719,6 +716,29 @@ nonisolated enum KiroUsageFetcher {
         }
         guard (200..<300).contains(http.statusCode) else { throw KiroUsageError.requestFailed(http.statusCode) }
         return try parseUsageLimits(data)
+    }
+
+    // 任何 HTTP 响应都说明网络是通的；只有连不上时才抛错。
+    static func ensureReachable(databaseURL: URL, session: URLSession) async throws {
+        try Task.checkCancellation()
+        // 读不到本地登录状态时也要检查，不能借此绕过。
+        let endpoint = (try? readIdentity(databaseURL: databaseURL))
+            .flatMap { try? usageEndpoint(profileARN: $0.profileARN) } ?? usageLimitsEndpoint
+        var request = URLRequest(url: endpoint, timeoutInterval: 4)
+        request.httpMethod = "HEAD"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        _ = try await session.data(for: request)
+    }
+
+    private static func usageEndpoint(profileARN: String) throws -> URL {
+        let arn = profileARN.split(separator: ":", maxSplits: 5, omittingEmptySubsequences: false)
+        guard arn.count == 6, arn[0] == "arn", arn[1] == "aws", arn[2] == "codewhisperer",
+              arn[5].hasPrefix("profile/"), arn[5].count > "profile/".count,
+              profileARN.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil,
+              let endpoint = profileEndpoints[String(arn[3])] else {
+            throw KiroUsageError.credentialsUnavailable("unsupported profile ARN")
+        }
+        return endpoint
     }
 
     static func readIdentity(databaseURL: URL) throws -> (accessToken: String, profileARN: String) {
