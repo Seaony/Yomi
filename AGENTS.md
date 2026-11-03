@@ -84,4 +84,5 @@ xcodebuild \
 
 - 每次完成代码修改后，重新启动上述最新 Debug 构建供用户检查。
 - 未经用户明确允许，不使用 UI 自动化工具进行视觉验收。
-- 未经用户在当前任务中明确要求，不执行 commit、push、建分支或创建 worktree。
+- commit、push 和发布新版本不用逐次征求用户确认：改动验证通过后直接提交并推送，值得发版时自行运行 `scripts/publish-unsigned-release.sh` 发布，事后汇报。
+- 未经用户要求，不建分支、不创建 worktree。
