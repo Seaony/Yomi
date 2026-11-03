@@ -4,6 +4,9 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    /// 作为单元测试宿主启动时为 true；这时不建侧边栏、不刷新、不检查更新，避免测试用真实凭据联网。
+    nonisolated static let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
     private static let panelVerticalPositionKey = "panel-vertical-position"
     private static let providerDetailDismissDelay: Duration = .milliseconds(110)
     private static let providerDetailPointerCheckInterval: Duration = .milliseconds(40)
@@ -25,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        guard !Self.isRunningTests else { return }
         restorePanelPosition()
         createPanel()
         store.start()

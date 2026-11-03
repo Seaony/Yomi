@@ -10,7 +10,7 @@ import Testing
 struct ProductShotTests {
     private static let outputDirectory = URL(fileURLWithPath: "/tmp/yomi-product-shots", isDirectory: true)
     private static let repositoryRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-    private static let demoProviders = ["codex", "claude", "cursor", "gemini", "copilot", "kiro"]
+    fileprivate static let demoProviders = ["codex", "claude", "cursor", "gemini", "copilot", "kiro"]
 
     @Test
     func renderProductShots() async throws {
@@ -324,9 +324,13 @@ private struct ProductShotCanvas: View {
     }
 
     // 详情卡箭头在卡片垂直中点，对准侧边栏第三个圆环（Claude）的圆心。
-    // 每行（圆环、百分比、名称加间距）按实际渲染量得约 64pt。
+    // 侧边栏高度按 UsageRailView.reportContentHeight 的公式算出，这里反推每行高度。
     private var cardOffset: CGFloat {
-        let rowPitch: CGFloat = 64
+        let rows = CGFloat(ProductShotTests.demoProviders.count + 1)
+        let fixed = UsageRailLayout.contentInset + UsageRailLayout.bottomContentInset
+            + UsageRailLayout.settingsAreaHeight + UsageRailLayout.providerSectionVerticalPadding * 2
+        let rowHeight = (rail.size.height - fixed - (rows - 1) * UsageRailLayout.providerSpacing) / rows
+        let rowPitch = rowHeight + UsageRailLayout.providerSpacing
         let claudeCenter = UsageRailLayout.contentInset + UsageRailLayout.providerSectionVerticalPadding
             + 2 * rowPitch + UsageRailLayout.providerRingDiameter / 2
         return max(0, claudeCenter - card.size.height / 2)

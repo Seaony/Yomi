@@ -58,7 +58,7 @@ final class UpdateController: ObservableObject {
         }
 
         let controller = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: !AppDelegate.isRunningTests,
             updaterDelegate: nil,
             userDriverDelegate: userDriverDelegate
         )

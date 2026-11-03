@@ -111,12 +111,24 @@ nonisolated enum BrowserCookieAccess {
     }
 
     // 不弹窗的钥匙串查询：同时设置 LAContext 和旧式钥匙串的 UI-fail 标志。
+    // 只设 interactionNotAllowed 时 macOS 仍可能弹“允许/拒绝”，所以旧标志必须保留。
     static func applyNoUI(to query: inout [String: Any]) {
         let context = LAContext()
         context.interactionNotAllowed = true
         query[kSecUseAuthenticationContext as String] = context
-        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        query[kSecUseAuthenticationUI as String] = authenticationUIFailPolicy as CFString
     }
+
+    // 与 CodexBar 一致，运行时读取 kSecUseAuthenticationUIFail 的值，避免编译时引用已弃用的常量。
+    static let authenticationUIFailPolicy: String = {
+        guard let handle = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW) else {
+            return "u_AuthUIF"
+        }
+        defer { dlclose(handle) }
+        guard let symbol = dlsym(handle, "kSecUseAuthenticationUIFail"),
+              let value = symbol.assumingMemoryBound(to: CFString?.self).pointee else { return "u_AuthUIF" }
+        return value as String
+    }()
 
     // 只查条目是否存在，不读取密码，不会触发授权弹窗。
     static func foreignKeychainItemExists(service: String, account: String) -> Bool {

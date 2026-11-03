@@ -825,11 +825,17 @@ func cachedUsageStatus(_ usage: ProviderUsage, language: AppLanguage) -> String?
 
 func compactTokenCount(_ value: Int64, language: AppLanguage) -> String {
     if language == .simplifiedChinese {
-        if value >= 100_000_000 {
-            return String(format: "%.1f亿", Double(value) / 100_000_000)
+        // 整数部分到四位就不显示小数，免得“5964.0万”在侧边栏里放不下。
+        func scaled(_ unit: Double, _ suffix: String) -> String {
+            let amount = Double(value) / unit
+            return String(format: amount >= 999.95 ? "%.0f%@" : "%.1f%@", amount, suffix)
+        }
+        // 9999.5 万以上会四舍五入成“10000万”，直接进位到亿。
+        if value >= 99_995_000 {
+            return scaled(100_000_000, "亿")
         }
         if value >= 10_000 {
-            return String(format: "%.1f万", Double(value) / 10_000)
+            return scaled(10_000, "万")
         }
     } else {
         if value >= 1_000_000_000 {

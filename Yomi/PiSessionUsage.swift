@@ -45,14 +45,18 @@ nonisolated enum PiSessionUsageReader {
     }
 
     // OMP（oh-my-pi）的目录规则对齐 CodexBar 的 OMPSessionRootResolver：
-    // 指定了 profile 只读该 profile；否则读默认目录，并把磁盘上所有 profile 一起算上。
+    // 指定了 profile 只读该 profile；两个 profile 变量都没设时读默认目录，并把磁盘上所有 profile 一起算上。
     private static func ompSessionRoots(homeDirectory: URL, environment: [String: String]) -> [URL] {
         let configName = environment["PI_CONFIG_DIR"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = configName?.isEmpty == false ? configName! : ".omp"
-        // 配置目录只能是主目录下的相对路径，越界时不读。
+        // 配置目录只能是主目录本身或其下的相对路径，越界时不读。
         guard !name.hasPrefix("/") else { return [] }
-        let configRoot = homeDirectory.appending(path: name, directoryHint: .isDirectory)
-        guard configRoot.standardizedFileURL.path.hasPrefix(homeDirectory.standardizedFileURL.path + "/") else { return [] }
+        let joined = homeDirectory.appending(path: name, directoryHint: .isDirectory)
+        let homePath = homeDirectory.standardizedFileURL.path
+        let configPath = joined.standardizedFileURL.path
+        guard configPath == homePath || configPath.hasPrefix(homePath + "/") else { return [] }
+        // 只做边界判断时才规范化；规范化会去掉 /private，和缓存里的路径对不上。
+        let configRoot = configPath == homePath ? homeDirectory : joined
         let customAgent = path(environment["PI_CODING_AGENT_DIR"], home: homeDirectory)
         let dataHome = path(environment["XDG_DATA_HOME"], home: homeDirectory)
             ?? homeDirectory.appending(path: ".local/share", directoryHint: .isDirectory)
@@ -63,8 +67,8 @@ nonisolated enum PiSessionUsageReader {
                 .filter(isDirectory)
         }
 
-        let rawProfile = (environment["OMP_PROFILE"] ?? environment["PI_PROFILE"])?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let profileValue = environment["OMP_PROFILE"] ?? environment["PI_PROFILE"]
+        let rawProfile = profileValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !rawProfile.isEmpty, rawProfile != "default" {
             // profile 名称不合法时不读，避免拼出意外的路径。
             guard rawProfile.range(of: #"^[a-z0-9][a-z0-9._-]{0,63}$"#, options: .regularExpression) != nil,
@@ -83,10 +87,18 @@ nonisolated enum PiSessionUsageReader {
             roots.append(dataHome.appending(path: "omp/sessions", directoryHint: .isDirectory))
             profileParents.append(dataHome.appending(path: "omp/profiles", directoryHint: .isDirectory))
         }
+        // 显式选了 default 时只读默认目录，不混入其他 profile。
+        guard profileValue == nil else { return roots }
         for parent in profileParents {
-            let profiles = (try? FileManager.default.contentsOfDirectory(
+            guard let profiles = try? FileManager.default.contentsOfDirectory(
                 at: parent, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
-            )) ?? []
+            ) else {
+                // 目录在但读不了时把它本身交给上层，上层读不了会沿用它下面各 profile 的缓存，不会把已有统计清掉。
+                var status = stat()
+                let exists = parent.path.withCString { fstatat(AT_FDCWD, $0, &status, 0) } == 0
+                if exists || (errno != ENOENT && errno != ENOTDIR) { roots.append(parent) }
+                continue
+            }
             // 与 CodexBar 一致，最多读 64 个 profile 目录。
             roots += profiles.sorted { $0.path < $1.path }.flatMap(layouts).prefix(64)
         }

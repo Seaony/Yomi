@@ -62,6 +62,22 @@ struct TraeCNUsageTests {
     }
 
     @Test
+    func redirectToLoginPageIsTreatedAsExpiredSession() async {
+        TraeCNTestURLProtocol.requests = []
+        TraeCNTestURLProtocol.redirects = ["/cloudide/api/v3/common/GetUserToken": "https://www.trae.cn/login"]
+        TraeCNTestURLProtocol.responses = ["/login": "<html>login</html>"]
+        defer { TraeCNTestURLProtocol.redirects = [:] }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [TraeCNTestURLProtocol.self]
+
+        // 跟随跳转会拿到登录页 HTML 当成格式错误；不跟随才会判定会话过期，继续试下一个会话。
+        await #expect(throws: TraeCNUsageError.sessionExpired) {
+            try await TraeCNUsageFetcher.fetch(manualCookie: "sessionid=expired", session: URLSession(configuration: configuration))
+        }
+        #expect(!TraeCNTestURLProtocol.requests.contains { $0.url?.path == "/login" })
+    }
+
+    @Test
     func code1001MeansExpiredSession() async {
         TraeCNTestURLProtocol.requests = []
         TraeCNTestURLProtocol.responses = [
@@ -79,6 +95,7 @@ struct TraeCNUsageTests {
 
 private nonisolated final class TraeCNTestURLProtocol: URLProtocol {
     nonisolated(unsafe) static var responses: [String: String] = [:]
+    nonisolated(unsafe) static var redirects: [String: String] = [:]
     nonisolated(unsafe) static var requests: [URLRequest] = []
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -86,6 +103,15 @@ private nonisolated final class TraeCNTestURLProtocol: URLProtocol {
 
     override func startLoading() {
         Self.requests.append(request)
+        if let location = Self.redirects[request.url?.path ?? ""], let target = URL(string: location) {
+            let redirect = HTTPURLResponse(
+                url: request.url!, statusCode: 302, httpVersion: nil, headerFields: ["Location": location]
+            )!
+            client?.urlProtocol(self, wasRedirectedTo: URLRequest(url: target), redirectResponse: redirect)
+            client?.urlProtocol(self, didReceive: redirect, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
         let body = Self.responses[request.url?.path ?? ""]
         let response = HTTPURLResponse(
             url: request.url!, statusCode: body == nil ? 404 : 200, httpVersion: nil, headerFields: nil

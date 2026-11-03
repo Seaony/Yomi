@@ -100,6 +100,49 @@ struct PiSessionUsageTests {
 
         let invalid = PiSessionUsageReader.sessionRoots(homeDirectory: home, environment: ["OMP_PROFILE": "../x"])
         #expect(invalid.count == 1)
+
+        // 显式选 default 只读默认目录，不再把其他 profile 算进来。
+        for key in ["OMP_PROFILE", "PI_PROFILE"] {
+            let explicitDefault = PiSessionUsageReader.sessionRoots(
+                homeDirectory: home, environment: [key: "default", "XDG_DATA_HOME": "/nonexistent"]
+            ).map { $0.path.replacingOccurrences(of: home.path, with: "~") }
+            #expect(explicitDefault == ["~/.pi/agent/sessions", "~/.omp/agent/sessions", "/nonexistent/omp/sessions"])
+        }
+
+        // 配置目录可以就是主目录本身。
+        let homeConfig = PiSessionUsageReader.sessionRoots(
+            homeDirectory: home, environment: ["PI_CONFIG_DIR": ".", "XDG_DATA_HOME": "/nonexistent"]
+        ).map { $0.path.replacingOccurrences(of: home.path, with: "~") }
+        #expect(homeConfig == ["~/.pi/agent/sessions", "~/agent/sessions", "/nonexistent/omp/sessions"])
+    }
+
+    @Test
+    func unreadableOMPProfilesKeepPreviousTotals() async throws {
+        let home = FileManager.default.temporaryDirectory.appending(path: "pi-\(UUID().uuidString)")
+        let profiles = home.appending(path: ".omp/profiles")
+        let directory = profiles.appending(path: "work/sessions")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: profiles.path)
+            try? FileManager.default.removeItem(at: home)
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let now = Date()
+        let session = Self.assistant(
+            id: "m1", provider: "anthropic", model: "claude-sonnet-4-5", at: now.addingTimeInterval(-60),
+            usage: ["input": 10, "output": 5]
+        ) + "\n"
+        try Data(session.utf8).write(to: directory.appending(path: "a.jsonl"))
+        let scanner = LocalDailyUsageScanner()
+        func scan() async -> Int64? {
+            await scanner.scan(
+                providerID: ProviderID(rawValue: "pi"), currentWeekStart: now.addingTimeInterval(-86_400), now: now,
+                homeDirectory: home
+            )?.today?.tokens
+        }
+        #expect(await scan() == 15)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: profiles.path)
+        #expect(await scan() == 15)
     }
 
     @Test
