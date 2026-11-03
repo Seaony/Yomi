@@ -145,6 +145,61 @@ struct LiteLLMUsageTests {
     }
 
     @Test
+    func teamMemberBudgetPrefersUserInfoThenTeamOverrideThenTeamDefault() async {
+        let ownOverride = Data(#"""
+        {"teams":[{"team_id":"team-456","team_memberships":[
+          {"user_id":"someone-else","team_id":"team-456","spend":99,"litellm_budget_table":{"max_budget":1}},
+          {"user_id":"user-123","team_id":"team-456","spend":12,"litellm_budget_table":{"max_budget":50,"budget_reset_at":"2026-06-15T00:00:00Z"}}
+        ]}]}
+        """#.utf8)
+        let own = await LiteLLMUsageFetcher.teamMemberBudget(
+            userInfoData: ownOverride, userID: "user-123", teamID: "team-456",
+            teamInfo: { Issue.record("不应请求 /team/info"); return Data() }
+        )
+        #expect(own?.spend == 12)
+        #expect(own?.limit == 50)
+        #expect(own?.resetAt != nil)
+
+        let noOverride = Data(#"{"teams":[{"team_id":"team-456"}]}"#.utf8)
+        let teamOverride = await LiteLLMUsageFetcher.teamMemberBudget(
+            userInfoData: noOverride, userID: "user-123", teamID: "team-456",
+            teamInfo: {
+                Data(#"""
+                {"team_id":"team-456","team_info":{"team_id":"team-456",
+                  "team_memberships":[{"user_id":"user-123","spend":7,"litellm_budget_table":{"max_budget":20}}],
+                  "team_member_budget_table":{"max_budget":80}}}
+                """#.utf8)
+            }
+        )
+        #expect(teamOverride?.limit == 20)
+        #expect(teamOverride?.spend == 7)
+
+        let teamDefault = await LiteLLMUsageFetcher.teamMemberBudget(
+            userInfoData: noOverride, userID: "user-123", teamID: "team-456",
+            teamInfo: {
+                Data(#"""
+                {"team_info":{"team_id":"team-456",
+                  "team_memberships":[{"user_id":"user-123","spend":7}],
+                  "team_member_budget_table":{"max_budget":80}}}
+                """#.utf8)
+            }
+        )
+        #expect(teamDefault?.limit == 80)
+
+        // 返回的团队不对，或没有团队内的花费时，不显示成员预算。
+        let mismatched = await LiteLLMUsageFetcher.teamMemberBudget(
+            userInfoData: noOverride, userID: "user-123", teamID: "team-456",
+            teamInfo: { Data(#"{"team_info":{"team_id":"team-other","team_member_budget_table":{"max_budget":80}}}"#.utf8) }
+        )
+        #expect(mismatched == nil)
+        let noSpend = await LiteLLMUsageFetcher.teamMemberBudget(
+            userInfoData: noOverride, userID: "user-123", teamID: "team-456",
+            teamInfo: { Data(#"{"team_info":{"team_id":"team-456","team_member_budget_table":{"max_budget":80}}}"#.utf8) }
+        )
+        #expect(noSpend == nil)
+    }
+
+    @Test
     func rejectedVirtualKeySurfacesAPIError() async {
         LiteLLMTestURLProtocol.handler = { _ in (401, Data(#"{"detail":"Unauthorized"}"#.utf8)) }
         defer { LiteLLMTestURLProtocol.handler = nil }

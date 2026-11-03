@@ -185,11 +185,23 @@ nonisolated enum KimiUsageFetcher {
         let session: RatioPool?
         let weekly: RatioPool?
         let monthly: RatioPool?
+        /// 月度总额度里 Kimi Code 用掉的部分，不是单独的额度。
+        let monthlyCode: RatioPool?
 
         private enum CodingKeys: String, CodingKey {
             case session = "limit_5h"
             case weekly = "limit_7d"
             case monthly = "limit_month_total"
+            case monthlyCode = "limit_month_code"
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            session = try container.decodeIfPresent(RatioPool.self, forKey: .session)
+            weekly = try container.decodeIfPresent(RatioPool.self, forKey: .weekly)
+            monthly = try container.decodeIfPresent(RatioPool.self, forKey: .monthly)
+            // 拆分字段格式不对时只丢掉拆分，不影响其他额度。
+            monthlyCode = try? container.decodeIfPresent(RatioPool.self, forKey: .monthlyCode)
         }
     }
 
@@ -219,6 +231,7 @@ nonisolated enum KimiUsageFetcher {
         let amountUsedRatio: Double?
         let kimiCodeUsedRatio: Double?
         let expireTime: String?
+        var displayName: String?
     }
 
     struct SubscriptionRateLimit: Codable, Sendable, Equatable {
@@ -230,6 +243,18 @@ nonisolated enum KimiUsageFetcher {
     struct SubscriptionResponse: Codable, Sendable, Equatable {
         let subscriptionBalance: SubscriptionBalance?
         let ratelimitCode7d: SubscriptionRateLimit?
+        /// 订阅之外赠送的额度（预约奖励、邀请奖励等），到期作废，不会重置。
+        let giftBalances: [SubscriptionBalance]?
+
+        private enum CodingKeys: String, CodingKey { case subscriptionBalance, ratelimitCode7d, giftBalances }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            subscriptionBalance = try container.decodeIfPresent(SubscriptionBalance.self, forKey: .subscriptionBalance)
+            ratelimitCode7d = try container.decodeIfPresent(SubscriptionRateLimit.self, forKey: .ratelimitCode7d)
+            // 赠送额度格式变了也不能连订阅余额一起丢掉。
+            giftBalances = try? container.decodeIfPresent([SubscriptionBalance].self, forKey: .giftBalances)
+        }
     }
 
     private struct MembershipResponse: Decodable {
@@ -434,10 +459,15 @@ nonisolated enum KimiUsageFetcher {
             windows.append(rate)
         }
 
+        var details: [UsageDetail] = []
         if let monthly = ratioWindow(
             pool: snapshot.codeUsagePools?.monthly, id: "kimi-monthly", label: "Total usage"
         ) {
             additional.append(monthly)
+            details += monthlyBreakdown(
+                usedRatio: snapshot.codeUsagePools?.monthly?.usedRatio,
+                codeUsedRatio: snapshot.codeUsagePools?.monthlyCode?.usedRatio
+            )
         } else if let balance = snapshot.subscription?.subscriptionBalance,
            balance.feature == nil || balance.feature == "FEATURE_OMNI",
            balance.type == nil || balance.type == "SUBSCRIPTION",
@@ -449,7 +479,9 @@ nonisolated enum KimiUsageFetcher {
                 resetsAt: date(balance.expireTime),
                 detail: nil
             ))
+            details += monthlyBreakdown(usedRatio: ratio, codeUsedRatio: balance.kimiCodeUsedRatio)
         }
+        details += giftDetails(snapshot.subscription?.giftBalances ?? [], now: now)
         if let limit = snapshot.subscription?.ratelimitCode7d,
            limit.enabled != false,
            let ratio = limit.ratio, ratio.isFinite {
@@ -474,8 +506,48 @@ nonisolated enum KimiUsageFetcher {
         }
         return ProviderUsage(
             id: ProviderID(rawValue: "kimi"), state: .ready, windows: windows,
-            additionalWindows: additional, plan: snapshot.planName, updatedAt: now, message: nil
+            additionalWindows: additional, plan: snapshot.planName, details: details, updatedAt: now, message: nil
         )
+    }
+
+    // 月度总额度由 Kimi Code 和其他功能共用，拆成两行明细，不算作额外的额度窗口。
+    private static func monthlyBreakdown(usedRatio: Double?, codeUsedRatio: Double?) -> [UsageDetail] {
+        guard let usedRatio, usedRatio.isFinite, usedRatio >= 0,
+              let codeUsedRatio, codeUsedRatio.isFinite, codeUsedRatio >= 0 else { return [] }
+        return [
+            UsageDetail(id: "kimi-monthly-code", label: "Kimi Code", value: usedText(codeUsedRatio)),
+            UsageDetail(
+                id: "kimi-monthly-other", label: AppLocalization.text("其他功能", "Other features"),
+                value: usedText(max(0, usedRatio - codeUsedRatio))
+            ),
+        ]
+    }
+
+    // 赠送额度到期作废、不会重置，显示剩余比例和到期时间。
+    private static func giftDetails(_ balances: [SubscriptionBalance], now: Date) -> [UsageDetail] {
+        balances.enumerated().compactMap { index, balance in
+            guard balance.feature == nil || balance.feature == "FEATURE_OMNI",
+                  balance.type == nil || balance.type == "GIFT",
+                  let ratio = balance.amountUsedRatio, ratio.isFinite, ratio >= 0 else { return nil }
+            let expiresAt = date(balance.expireTime)
+            if let expiresAt, expiresAt <= now { return nil }
+            let percent = Int((max(0, 1 - ratio) * 100).rounded())
+            var value = AppLocalization.text("剩余 \(percent)%", "\(percent)% left")
+            if let expiresAt {
+                let day = expiresAt.formatted(date: .abbreviated, time: .omitted)
+                value += AppLocalization.text(" · \(day) 到期", " · expires \(day)")
+            }
+            return UsageDetail(
+                id: "kimi-gift-\(index)",
+                label: cleaned(balance.displayName) ?? AppLocalization.text("赠送额度", "Bonus credits"),
+                value: value
+            )
+        }
+    }
+
+    private static func usedText(_ ratio: Double) -> String {
+        let percent = Int((min(max(ratio, 0), 1) * 100).rounded())
+        return AppLocalization.text("已用 \(percent)%", "\(percent)% used")
     }
 
     static func codeUsageEndpoint(baseURL: URL) throws -> URL {
@@ -657,7 +729,10 @@ nonisolated enum KimiUsageFetcher {
         request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
         request.setValue(webUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("1", forHTTPHeaderField: "connect-protocol-version")
-        request.setValue("en-US", forHTTPHeaderField: "x-language")
+        // 界面是中文时请求中文，赠送额度的名称会跟着返回中文。
+        request.setValue(
+            AppLocalization.currentLanguage == .simplifiedChinese ? "zh-CN" : "en-US", forHTTPHeaderField: "x-language"
+        )
         request.setValue("web", forHTTPHeaderField: "x-msh-platform")
         request.setValue(TimeZone.current.identifier, forHTTPHeaderField: "r-timezone")
         if let info = sessionInfo(token) {

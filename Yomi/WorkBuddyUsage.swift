@@ -75,13 +75,25 @@ nonisolated enum WorkBuddyUsageFetcher {
         }
         guard let summary else { throw WorkBuddyUsageError.invalidSession }
         var usage = try parseSummary(summary, now: now)
-        if !usage.windows.isEmpty {
-            usage.windows[0].resetsAt = try await nextReset(
-                cookie: cookie, agent: acceptedAgent, session: session, now: now
-            )
+        let wantsRewards = usage.additionalWindows.contains { $0.id == rewardsWindowID }
+        guard !usage.windows.isEmpty || wantsRewards else { return usage }
+        let cycle = try await listings(
+            cookie: cookie, agent: acceptedAgent, session: session, now: now, wantsRewards: wantsRewards
+        )
+        if !usage.windows.isEmpty { usage.windows[0].resetsAt = cycle.reset }
+        // 奖励积分按笔到期而不是重置，所以到期时间放在明细里，不当成倒计时。
+        if wantsRewards, let expiry = cycle.rewardExpiry {
+            usage.details.append(UsageDetail(
+                id: "workbuddy-reward-expiry", label: AppLocalization.text("奖励到期", "Reward expiry"),
+                value: expiry.formatted(.dateTime.month().day())
+            ))
         }
         return usage
     }
+
+    private static let rewardsWindowID = "workbuddy-rewards"
+    // 平台奖励积分在汇总里归到这个套餐下，只有赠送套餐列表里有每笔奖励各自的到期时间。
+    private static let benefitPackageCode = "TCACA_code_007_nzdH5h4Nl0"
 
     private static func parseSummary(_ summary: [String: Any], now: Date) throws -> ProviderUsage {
         guard let packages = summary["Packages"] as? [Any] else {
@@ -132,9 +144,33 @@ nonisolated enum WorkBuddyUsageFetcher {
                 id: "workbuddy-reserved", label: AppLocalization.text("冻结积分", "Reserved credits"), value: format(frozen)
             ))
         }
+        // CreditGroups 按来源拆分同一份额度；奖励部分可选，格式不对时跳过，不影响总余额。
+        var rewardTotal = 0.0
+        var rewardRemaining = 0.0
+        for case let group as [String: Any] in summary["CreditGroups"] as? [Any] ?? [] {
+            guard group["Kind"] as? String == "benefit", group["CapacityUnit"] as? String == "credits",
+                  let groupTotal = try? amount(group["CycleTotalCapacity"], field: "CycleTotalCapacity"),
+                  let groupRemaining = try? amount(group["CycleRemainCapacity"], field: "CycleRemainCapacity")
+            else { continue }
+            rewardTotal += groupTotal
+            rewardRemaining += groupRemaining
+        }
+        var additional: [UsageWindow] = []
+        if rewardTotal > 0 {
+            additional.append(UsageWindow(
+                id: rewardsWindowID,
+                label: AppLocalization.text("奖励积分", "Rewards"),
+                usedFraction: min(1, max(0, (rewardTotal - rewardRemaining) / rewardTotal)),
+                resetsAt: nil,
+                detail: AppLocalization.text(
+                    "剩余 \(format(rewardRemaining)) / \(format(rewardTotal)) 积分",
+                    "\(format(rewardRemaining)) / \(format(rewardTotal)) credits left"
+                )
+            ))
+        }
         let plan = (summary["SubscriptionPackageName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return ProviderUsage(
-            id: ProviderID(rawValue: "workbuddy"), state: .ready, windows: windows,
+            id: ProviderID(rawValue: "workbuddy"), state: .ready, windows: windows, additionalWindows: additional,
             plan: plan?.isEmpty == false ? plan : nil, details: details, updatedAt: now, message: nil
         )
     }
@@ -185,17 +221,20 @@ nonisolated enum WorkBuddyUsageFetcher {
         return object
     }
 
-    private static func nextReset(
-        cookie: String, agent: String?, session: URLSession, now: Date
-    ) async throws -> Date? {
+    private static func listings(
+        cookie: String, agent: String?, session: URLSession, now: Date, wantsRewards: Bool
+    ) async throws -> (reset: Date?, rewardExpiry: Date?) {
         let deadline = Date().addingTimeInterval(5)
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 8 * 60 * 60)
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         formatter.isLenient = false
-        var earliest: Date?
-        for listing in packageListings {
+        var paidReset: Date?
+        var freeReset: Date?
+        var rewardExpiry: Date?
+        for (index, listing) in packageListings.enumerated() {
+            let isFree = index > 0
             let budget = deadline.timeIntervalSinceNow
             if budget < 1 { break }
             do {
@@ -211,17 +250,27 @@ nonisolated enum WorkBuddyUsageFetcher {
                           let end = formatter.date(from: raw)?.addingTimeInterval(1),
                           end > now
                     else { continue }
-                    if earliest == nil || end < earliest! { earliest = end }
+                    if !isFree {
+                        if paidReset == nil || end < paidReset! { paidReset = end }
+                    } else if account["PackageCode"] as? String == benefitPackageCode {
+                        // 用完的奖励在周期结束前仍会列出，只有还剩积分的那笔才决定到期时间。
+                        let left = try? amount(account["CycleCapacityRemain"], field: "CycleCapacityRemain")
+                        if let left, left > 0, rewardExpiry == nil || end < rewardExpiry! { rewardExpiry = end }
+                    } else if freeReset == nil || end < freeReset! {
+                        // 奖励积分会过期，不能拿来当总额度的重置时间。
+                        freeReset = end
+                    }
                 }
             } catch is CancellationError {
                 throw CancellationError()
             } catch let error as URLError where error.code == .cancelled {
                 throw CancellationError()
             } catch {}
-            // 付费套餐按周期续额度，试用或赠送额度可能更早到期，不能拿来提前重置时间。
-            if let earliest { return earliest }
+            // 付费套餐按周期续额度，试用或赠送额度可能更早到期，不能拿来提前重置时间；
+            // 有奖励积分时还要读赠送列表拿到期时间。
+            if !isFree, paidReset != nil, !wantsRewards { break }
         }
-        return earliest
+        return (paidReset ?? freeReset, rewardExpiry)
     }
 
     private static func userAgents() -> [String?] {

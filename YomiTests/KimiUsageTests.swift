@@ -43,6 +43,54 @@ struct KimiUsageTests {
         )
         #expect(result.additionalWindows.map(\.id) == ["kimi-monthly", "kimi-code-7d"])
         #expect(result.additionalWindows[0].usedFraction == 0.7)
+        // 月度总额度拆成 Kimi Code 20% 和其他功能 50%。
+        #expect(result.details.map(\.id) == ["kimi-monthly-code", "kimi-monthly-other"])
+        #expect(result.details[0].value.contains("20%"))
+        #expect(result.details[1].value.contains("50%"))
+    }
+
+    @Test func codeAPIMonthlyCodeShareBecomesBreakdown() throws {
+        let data = Data(#"""
+        {"usages":{
+          "limit_month_total":{"used_ratio":0.6,"reset_time":"2030-01-01T00:00:00Z"},
+          "limit_month_code":{"used_ratio":0.45}
+        }}
+        """#.utf8)
+        let usage = KimiUsageFetcher.providerUsage(snapshot: try KimiUsageFetcher.parseCode(data))
+        #expect(usage.additionalWindows.map(\.id) == ["kimi-monthly"])
+        #expect(usage.details.map(\.id) == ["kimi-monthly-code", "kimi-monthly-other"])
+        #expect(usage.details[0].value.contains("45%"))
+        #expect(usage.details[1].value.contains("15%"))
+    }
+
+    @Test func giftBalancesShowRemainingAndSkipExpiredOrMalformed() throws {
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let usageData = Data(#"{"usages":[{"scope":"FEATURE_CODING","detail":{"limit":"100","used":"40"}}]}"#.utf8)
+        let subscription = Data(#"""
+        {
+          "subscriptionBalance":{"feature":"FEATURE_OMNI","type":"SUBSCRIPTION","amountUsedRatio":0.3},
+          "giftBalances":[
+            {"feature":"FEATURE_OMNI","type":"GIFT","amountUsedRatio":0.25,"expireTime":"2030-01-01T00:00:00Z","displayName":"Invite reward"},
+            {"feature":"FEATURE_OMNI","type":"GIFT","amountUsedRatio":0.1,"expireTime":"2020-01-01T00:00:00Z"},
+            {"feature":"FEATURE_OMNI","type":"SUBSCRIPTION","amountUsedRatio":0.5}
+          ]
+        }
+        """#.utf8)
+        let result = KimiUsageFetcher.providerUsage(
+            snapshot: try KimiUsageFetcher.parseWeb(usageData, subscriptionData: subscription), now: now
+        )
+        let gifts = result.details.filter { $0.id.hasPrefix("kimi-gift-") }
+        #expect(gifts.map(\.label) == ["Invite reward"])
+        #expect(gifts.first?.value.contains("75%") == true)
+
+        // 赠送额度格式不对时，订阅余额照常显示。
+        let malformed = Data(#"""
+        {"subscriptionBalance":{"feature":"FEATURE_OMNI","type":"SUBSCRIPTION","amountUsedRatio":0.3},"giftBalances":"oops"}
+        """#.utf8)
+        let kept = KimiUsageFetcher.providerUsage(
+            snapshot: try KimiUsageFetcher.parseWeb(usageData, subscriptionData: malformed), now: now
+        )
+        #expect(kept.additionalWindows.map(\.id) == ["kimi-monthly"])
     }
 
     @Test func duplicateSubscriptionWeeklyIsSuppressed() throws {

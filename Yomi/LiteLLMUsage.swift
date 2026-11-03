@@ -55,9 +55,9 @@ nonisolated struct LiteLLMUsageSnapshot: Codable, Sendable, Equatable {
 
     let userID: String?
     let accountEmail: String?
-    let personalSpendUSD: Double
-    let personalBudgetUSD: Double?
-    let personalResetAt: Date?
+    var personalSpendUSD: Double
+    var personalBudgetUSD: Double?
+    var personalResetAt: Date?
     let teamUsage: TeamUsage?
     let keyName: String?
     let keyExpiresAt: Date?
@@ -263,13 +263,20 @@ nonisolated enum LiteLLMUsageFetcher {
             return try await fetchSpendReport(baseURL, apiKey: apiKey, session: session, updatedAt: updatedAt)
         }
         let keyInfo = try parseKeyInfo(keyInfoData)
-        let snapshot: LiteLLMUsageSnapshot
+        var snapshot: LiteLLMUsageSnapshot
         if let userID = keyInfo.userID {
-            snapshot = try parseUserInfo(
-                try await request(userInfoURL(baseURL, userID: userID), apiKey: apiKey, session: session),
-                keyInfo: keyInfo,
-                updatedAt: updatedAt
-            )
+            let userInfoData = try await request(userInfoURL(baseURL, userID: userID), apiKey: apiKey, session: session)
+            snapshot = try parseUserInfo(userInfoData, keyInfo: keyInfo, updatedAt: updatedAt)
+            // 没有个人预算的团队成员，按团队里给这个成员设的预算显示。
+            if (snapshot.personalBudgetUSD ?? 0) <= 0, let teamID = keyInfo.teamID,
+               let member = await teamMemberBudget(
+                   userInfoData: userInfoData, userID: userID, teamID: teamID,
+                   teamInfo: { try await request(teamInfoURL(baseURL, teamID: teamID), apiKey: apiKey, session: session) }
+               ) {
+                snapshot.personalSpendUSD = member.spend
+                snapshot.personalBudgetUSD = member.limit
+                snapshot.personalResetAt = member.resetAt
+            }
         } else if let teamID = keyInfo.teamID {
             snapshot = try parseTeamInfo(
                 try await request(teamInfoURL(baseURL, teamID: teamID), apiKey: apiKey, session: session),
@@ -398,6 +405,51 @@ nonisolated enum LiteLLMUsageFetcher {
         } catch {
             throw LiteLLMUsageError.parseFailed(error.localizedDescription)
         }
+    }
+
+    // 对齐 CodexBar：/user/info 里成员自己的预算优先，其次 /team/info 里的成员覆盖值，最后是团队默认的成员预算。
+    // 花费只用团队范围内的，不能拿整个用户的花费去比团队成员预算。成员数据是可选的，读不到就保持原样。
+    static func teamMemberBudget(
+        userInfoData: Data,
+        userID: String,
+        teamID: String,
+        teamInfo: () async throws -> Data
+    ) async -> (spend: Double, limit: Double, resetAt: Date?)? {
+        func object(_ value: Any?) -> [String: Any] { value as? [String: Any] ?? [:] }
+        func number(_ value: Any?) -> Double? {
+            guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  number.doubleValue.isFinite else { return nil }
+            return number.doubleValue
+        }
+        func member(_ rows: Any?) -> [String: Any]? {
+            (rows as? [Any])?.lazy.map(object).first { row in
+                let rowTeam = row["team_id"]
+                return nonEmpty(row["user_id"] as? String) == userID
+                    && (rowTeam == nil || rowTeam is NSNull || nonEmpty(rowTeam as? String) == teamID)
+            }
+        }
+        func hasBudget(_ table: [String: Any]) -> Bool { table["max_budget"] != nil && !(table["max_budget"] is NSNull) }
+
+        let root = object(try? JSONSerialization.jsonObject(with: userInfoData))
+        let team = (root["teams"] as? [Any])?.lazy.map(object).first { nonEmpty($0["team_id"] as? String) == teamID }
+        let mine = member(team?["team_memberships"])
+        var table = object(mine?["litellm_budget_table"])
+        var spend = number(mine?["spend"])
+        if number(table["max_budget"]) == nil || spend == nil {
+            guard let data = try? await teamInfo() else { return nil }
+            let response = object(try? JSONSerialization.jsonObject(with: data))
+            let info = object(response["team_info"])
+            if let responseID = firstNonEmpty(info["team_id"] as? String, response["team_id"] as? String),
+               responseID != teamID { return nil }
+            let fallback = member(info["team_memberships"] ?? response["team_memberships"])
+            if !hasBudget(table) {
+                table = object(fallback?["litellm_budget_table"])
+                if !hasBudget(table) { table = object(info["team_member_budget_table"]) }
+            }
+            if spend == nil { spend = number(fallback?["spend"]) }
+        }
+        guard let limit = number(table["max_budget"]), limit > 0, let spend else { return nil }
+        return (spend, limit, date(table["budget_reset_at"] as? String))
     }
 
     private static func fetchSpendReport(

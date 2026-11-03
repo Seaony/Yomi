@@ -40,6 +40,50 @@ struct WorkBuddyUsageTests {
         // 付费周期还没结束时以它为准；已结束才回退到赠送额度。
         #expect(usage.windows.first?.resetsAt == Date(timeIntervalSince1970: expectedReset))
     }
+
+    @Test
+    func rewardCreditsGetTheirOwnWindowAndExpiry() async throws {
+        let summary = #"""
+        {"code":0,"data":{
+          "Packages":[{"CapacityUnit":"credits","CycleTotalCapacity":100,"CycleRemainCapacity":40}],
+          "CreditGroups":[
+            {"Kind":"benefit","CapacityUnit":"credits","CycleTotalCapacity":30,"CycleRemainCapacity":12},
+            {"Kind":"subscription","CapacityUnit":"credits","CycleTotalCapacity":70,"CycleRemainCapacity":28},
+            {"Kind":"benefit","CapacityUnit":"credits","CycleTotalCapacity":"bad","CycleRemainCapacity":1}
+          ]
+        }}
+        """#
+        // 奖励套餐：用完的那笔更早到期但不算；奖励到期不能拿来当总额度的重置时间。
+        let free = #"""
+        {"code":0,"data":{"Accounts":[
+          {"CapacityUnit":"credits","PackageCode":"TCACA_code_007_nzdH5h4Nl0","CycleEndTime":"2026-10-20 23:59:59","CycleCapacityRemain":0},
+          {"CapacityUnit":"credits","PackageCode":"TCACA_code_007_nzdH5h4Nl0","CycleEndTime":"2026-10-25 23:59:59","CycleCapacityRemain":5},
+          {"CapacityUnit":"credits","PackageCode":"TCACA_code_001_PqouKr6QWV","CycleEndTime":"2026-11-11 23:09:21"}
+        ]}}
+        """#
+        WorkBuddyTestURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/billing/meter/get-user-resource-summary": (200, Data(summary.utf8))
+            case "/billing/meter/get-user-resource-paid-packages": (200, Data(#"{"code":0,"data":{"Accounts":[]}}"#.utf8))
+            case "/billing/meter/get-user-resource-free-packages": (200, Data(free.utf8))
+            default: (404, Data())
+            }
+        }
+        defer { WorkBuddyTestURLProtocol.handler = nil }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [WorkBuddyTestURLProtocol.self]
+
+        let usage = try await WorkBuddyUsageFetcher.fetch(
+            credential: "session=fixture", session: URLSession(configuration: configuration), now: Self.now
+        )
+
+        let rewards = try #require(usage.additionalWindows.first { $0.id == "workbuddy-rewards" })
+        #expect(rewards.usedFraction == 0.6)
+        #expect(rewards.resetsAt == nil)
+        #expect(usage.details.contains { $0.id == "workbuddy-reward-expiry" })
+        // 2026-11-11 23:09:21（东八区）+1 秒。
+        #expect(usage.windows.first?.resetsAt == Date(timeIntervalSince1970: 1_794_409_762))
+    }
 }
 
 private nonisolated final class WorkBuddyTestURLProtocol: URLProtocol {
