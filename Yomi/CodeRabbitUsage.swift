@@ -69,6 +69,8 @@ nonisolated enum CodeRabbitUsageFetcher {
         }
         var launchEnvironment = environment
         launchEnvironment["NO_COLOR"] = "1"
+        // 读取额度时不让 CLI 顺带自动更新。
+        launchEnvironment["CODERABBIT_CLI_DISABLE_AUTO_UPDATE"] = "true"
         let output = try await run(binary: binary, environment: launchEnvironment)
         return try parse(output, now: now)
     }

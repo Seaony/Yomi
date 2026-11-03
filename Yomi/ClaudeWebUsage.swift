@@ -66,7 +66,14 @@ enum ClaudeWebUsageFetcher {
             }
         }
         guard parsedUsage != nil || cost != nil || balance != nil else {
-            throw UsageCollectionError.unreadableResponse
+            // 接口正常回了 JSON 只是没有任何额度窗口时，说明账号没有额度数据，而不是解析失败。
+            guard (try? JSONSerialization.jsonObject(with: usageData)) is [String: Any] else {
+                throw UsageCollectionError.unreadableResponse
+            }
+            return ProviderUsage(
+                id: descriptor.id, state: .unavailable, windows: [], updatedAt: Date(),
+                message: AppLocalization.text("当前账号未提供额度数据", "Limits not available")
+            )
         }
         var usage = parsedUsage ?? ProviderUsage(
             id: descriptor.id, state: .ready, windows: [], updatedAt: Date()

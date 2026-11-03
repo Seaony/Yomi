@@ -63,6 +63,27 @@ struct ClaudeUsageTests {
     }
 
     @Test
+    func malformedLimitEntryDoesNotDropValidSiblings() throws {
+        let data = Data("""
+        {
+          "seven_day": {"utilization": 34},
+          "limits": [
+            "unexpected",
+            {"kind": "weekly_scoped", "group": "weekly", "percent": true,
+             "scope": {"model": {"id": "model-flag", "display_name": "Flag"}}},
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 40,
+             "scope": {"model": {"id": "model-fable", "display_name": "Fable"}}}
+          ]
+        }
+        """.utf8)
+
+        let usage = try UsageParser.parse(data, descriptor: descriptor)
+
+        #expect(usage.additionalWindows.map(\.label) == ["Fable"])
+        #expect(usage.additionalWindows.first?.usedFraction == 0.4)
+    }
+
+    @Test
     func labelsOpusSpecificWindowCorrectly() throws {
         let data = Data(#"{"seven_day_opus":{"utilization":25}}"#.utf8)
 
@@ -534,5 +555,23 @@ struct ClaudeUsageTests {
     func ClaudeExplicitOAuthAllowsOnlyOwnerMediatedCLIFallback() {
         #expect(ClaudeUsageSourcePlanner.explicitOAuthAppOrder(hasCLI: true) == [.oauthAPI, .cli])
         #expect(ClaudeUsageSourcePlanner.explicitOAuthAppOrder(hasCLI: false) == [.oauthAPI])
+    }
+
+    @Test
+    func directRunKeepsOutputOfCommandsThatExitQuickly() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "claude-cli-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let script = directory.appending(path: "claude")
+        // 一次性写出 200 KB 后立即退出，模拟输出还在缓冲里进程就结束的情况。
+        try Data("#!/bin/sh\nhead -c 200000 /dev/zero | tr '\\0' x\n".utf8).write(to: script)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+
+        for _ in 0..<5 {
+            let output = try await ClaudeCLIUsageFetcher.run(
+                binary: script.path, arguments: [], mode: .direct, timeout: 10, environment: [:]
+            )
+            #expect(output.count == 200_000)
+        }
     }
 }

@@ -1,5 +1,16 @@
 import Foundation
 
+nonisolated enum CursorUsageError: LocalizedError, Equatable {
+    case appSessionExpired
+
+    var errorDescription: String? {
+        AppLocalization.text(
+            "Cursor 应用的登录已过期，请打开 Cursor 重新登录，或在浏览器登录 cursor.com 后重新填写 Cookie。",
+            "Cursor app session expired. Open Cursor to sign in again, or sign in to cursor.com in your browser and update the cookie."
+        )
+    }
+}
+
 enum CursorUsageFetcher {
     static func fetch(
         credential: String,
@@ -23,7 +34,14 @@ enum CursorUsageFetcher {
             cookie: cookie,
             session: session
         )
-        let summary = try await summaryData
+        let summary: Data
+        do {
+            summary = try await summaryData
+        } catch let UsageCollectionError.requestFailed(status) where [401, 403].contains(status)
+            && isExpiredAppToken(credential, now: now) {
+            // 从 Cursor 应用读到的令牌过期时说明原因，而不是只报 HTTP 401。
+            throw CursorUsageError.appSessionExpired
+        }
         let user = await userData.flatMap { try? JSONDecoder().decode(CursorUser.self, from: $0) }
         let sand = await sandData.flatMap { try? JSONDecoder().decode(CursorSand.self, from: $0) }
         let parsedSummary = try? JSONDecoder().decode(CursorSummary.self, from: summary)
@@ -338,7 +356,15 @@ enum CursorUsageFetcher {
         return try? tokenIdentity(token)
     }
 
-    private static func tokenIdentity(_ token: String) throws -> CursorIdentity {
+    static func isExpiredAppToken(_ credential: String, now: Date) -> Bool {
+        let value = credential.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.contains("WorkosCursorSessionToken="), !value.contains(";"),
+              let expiry = (try? tokenPayload(value))?["exp"] as? Double
+        else { return false }
+        return Date(timeIntervalSince1970: expiry) <= now
+    }
+
+    private static func tokenPayload(_ token: String) throws -> [String: Any] {
         let parts = token.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count >= 2 else { throw UsageCollectionError.missingCredential }
         var payload = String(parts[1]).replacingOccurrences(of: "-", with: "+")
@@ -347,6 +373,11 @@ enum CursorUsageFetcher {
         guard let data = Data(base64Encoded: payload),
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { throw UsageCollectionError.missingCredential }
+        return json
+    }
+
+    private static func tokenIdentity(_ token: String) throws -> CursorIdentity {
+        let json = try tokenPayload(token)
         let subject = (json["sub"] as? String)?
             .split(separator: "|", omittingEmptySubsequences: true).last.map(String.init)
         return CursorIdentity(subject: subject, email: json["email"] as? String)

@@ -73,6 +73,22 @@ struct AntigravityUsageTests {
     }
 
     @Test
+    func versionedGeminiGroupKeepsItsOwnName() throws {
+        let data = Data("""
+        {
+          "groups": [
+            {"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-weekly","displayName":"Weekly","remainingFraction":0.9}]},
+            {"displayName":"Gemini 4 Argon","buckets":[{"bucketId":"argon-weekly","displayName":"Weekly","remainingFraction":0.4}]}
+          ]
+        }
+        """.utf8)
+
+        let labels = try AntigravityUsageFetcher.parseQuotaSummary(data: data).additionalWindows.map(\.label)
+
+        #expect(labels == ["Gemini weekly", "Gemini 4 Argon weekly"])
+    }
+
+    @Test
     func disabledAndMissingFractionsAreNotPublishedAsExhaustedUsage() throws {
         let data = Data("""
         {

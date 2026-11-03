@@ -1,5 +1,13 @@
 import Foundation
 
+nonisolated enum CopilotUsageError: LocalizedError, Equatable {
+    case subscriptionEnded
+
+    var errorDescription: String? {
+        AppLocalization.text("Copilot 订阅已结束。", "Copilot subscription ended.")
+    }
+}
+
 nonisolated enum CopilotUsageFetcher {
     private struct AnyKey: CodingKey {
         let stringValue: String
@@ -161,12 +169,14 @@ nonisolated enum CopilotUsageFetcher {
         var plan: String
         var tokenBasedBilling: Bool
         var reset: String?
+        var accessTypeSKU: String?
 
         enum CodingKeys: String, CodingKey {
             case quotas = "quota_snapshots"
             case plan = "copilot_plan"
             case tokenBasedBilling = "token_based_billing"
             case reset = "quota_reset_date"
+            case accessTypeSKU = "access_type_sku"
             case monthly = "monthly_quotas"
             case limited = "limited_user_quotas"
         }
@@ -187,6 +197,7 @@ nonisolated enum CopilotUsageFetcher {
             plan = (try values.decodeIfPresent(String.self, forKey: .plan)) ?? "unknown"
             tokenBasedBilling = (try values.decodeIfPresent(Bool.self, forKey: .tokenBasedBilling)) ?? false
             reset = try values.decodeIfPresent(String.self, forKey: .reset)
+            accessTypeSKU = try? values.decodeIfPresent(String.self, forKey: .accessTypeSKU)
         }
 
         private static func quota(total: Double?, remaining: Double?, id: String) -> Quota? {
@@ -237,6 +248,8 @@ nonisolated enum CopilotUsageFetcher {
         guard let response = try? JSONDecoder().decode(Response.self, from: data) else {
             throw UsageCollectionError.unreadableResponse
         }
+        // 订阅结束的账号接口照常返回，但没有额度，直接说明原因，免得显示成“无法识别”。
+        if response.accessTypeSKU == "subscription_ended" { throw CopilotUsageError.subscriptionEnded }
         let reset = resetDate(response.reset)
         var windows: [UsageWindow] = []
         if let premium = response.quotas.premium, premium.usable {

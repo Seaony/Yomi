@@ -421,7 +421,7 @@ nonisolated enum ClaudeCLIUsageFetcher {
         return false
     }
 
-    private static func run(
+    static func run(
         binary: String,
         arguments: [String],
         mode: InvocationMode,
@@ -539,6 +539,8 @@ nonisolated enum ClaudeCLIUsageFetcher {
         process.waitUntilExit()
         usleep(20_000)
         readHandle.readabilityHandler = nil
+        // 命令很快退出时最后一段输出可能还没被回调读走，这里非阻塞地读到底，避免丢掉结果。
+        capture.append(drainRemainingOutput(readHandle.fileDescriptor))
         let (data, overflowed) = capture.snapshot()
         try? readHandle.close()
         if overflowed { throw ClaudeCLIUsageError.outputTooLarge }
@@ -548,6 +550,20 @@ nonisolated enum ClaudeCLIUsageFetcher {
             throw ClaudeCLIUsageError.timedOut
         }
         return output
+    }
+
+    // 伪终端的另一端还开着时直接读会卡住，所以改成非阻塞，读到没有数据为止。
+    private static func drainRemainingOutput(_ descriptor: Int32) -> Data {
+        let flags = fcntl(descriptor, F_GETFL)
+        guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else { return Data() }
+        var result = Data()
+        var buffer = [UInt8](repeating: 0, count: 16_384)
+        while result.count <= 1_048_576 {
+            let count = read(descriptor, &buffer, buffer.count)
+            guard count > 0 else { break }
+            result.append(buffer, count: count)
+        }
+        return result
     }
 
     private static func terminate(_ process: Process) {

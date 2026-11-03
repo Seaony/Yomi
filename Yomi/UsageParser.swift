@@ -141,7 +141,8 @@ nonisolated enum UsageParser {
         if let routine = routineKeys.lazy.compactMap({ window($0, label: "Daily Routines") }).first {
             additional.append(routine)
         }
-        if let limits = response["limits"] as? [[String: Any]] {
+        // 逐项读取，数组里混进一个不是对象的元素时不能把其他有效限额一起丢掉。
+        if let limits = (response["limits"] as? [Any])?.compactMap({ $0 as? [String: Any] }) {
             var seen = Set<String>()
             for limit in limits {
                 guard limit["group"] as? String == "weekly",

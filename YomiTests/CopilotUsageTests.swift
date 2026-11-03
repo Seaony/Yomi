@@ -15,6 +15,12 @@ struct CopilotUsageTests {
     }
 
     @Test
+    func endedSubscriptionExplainsItself() {
+        let data = Data(#"{"copilot_plan":"individual","access_type_sku":"subscription_ended","quota_snapshots":{}}"#.utf8)
+        #expect(throws: CopilotUsageError.subscriptionEnded) { try CopilotUsageFetcher.parse(data: data) }
+    }
+
+    @Test
     func derivesPercentFromEntitlementAndRemaining() throws {
         let data = Data(#"{"copilot_plan":"free","quota_snapshots":{"chat":{"entitlement":"200","remaining":"75","quota_id":"chat"}}}"#.utf8)
         let usage = try CopilotUsageFetcher.parse(data: data)

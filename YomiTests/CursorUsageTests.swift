@@ -130,4 +130,20 @@ struct CursorUsageTests {
         #expect(stale.providerCost?.used == 1)
         #expect(stale.providerCost?.limit == 20)
     }
+
+    @Test
+    func detectsExpiredAppTokenOnly() {
+        func jwt(_ payload: String) -> String {
+            let encoded = Data(payload.utf8).base64EncodedString()
+                .replacingOccurrences(of: "=", with: "").replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+            return "eyJhbGciOiJIUzI1NiJ9.\(encoded).sig"
+        }
+        let now = Date(timeIntervalSince1970: 2_000)
+        #expect(CursorUsageFetcher.isExpiredAppToken(jwt(#"{"sub":"auth0|u1","exp":1000}"#), now: now))
+        #expect(!CursorUsageFetcher.isExpiredAppToken(jwt(#"{"sub":"auth0|u1","exp":3000}"#), now: now))
+        #expect(!CursorUsageFetcher.isExpiredAppToken(jwt(#"{"sub":"auth0|u1"}"#), now: now))
+        // 手动填写的 Cookie 不按应用令牌判断。
+        #expect(!CursorUsageFetcher.isExpiredAppToken("WorkosCursorSessionToken=" + jwt(#"{"exp":1000}"#), now: now))
+    }
 }

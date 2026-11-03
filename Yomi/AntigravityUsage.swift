@@ -385,7 +385,9 @@ nonisolated enum AntigravityUsageFetcher {
             let rawGroupName = clean(group["displayName"] as? String)
                 ?? clean(group["name"] as? String) ?? "Quota"
             let family = quotaFamily(rawGroupName)
-            let groupName = family.title ?? rawGroupName
+            // 带版本号的分组（如 Gemini 4 Argon）是单独的额度，保留原名，不并成 Gemini。
+            let isVersionedGemini = family.title == "Gemini" && rawGroupName.contains(where: \.isNumber)
+            let groupName = isVersionedGemini ? rawGroupName : family.title ?? rawGroupName
             let buckets = group["buckets"] as? [Any] ?? []
             for (bucketOrder, rawBucket) in buckets.enumerated() {
                 guard let bucket = dictionary(rawBucket),
@@ -1170,7 +1172,10 @@ nonisolated enum AntigravityUsageFetcher {
         let secondary = FileHandle(fileDescriptor: secondaryDescriptor, closeOnDealloc: true)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
-        process.environment = environment
+        var launchEnvironment = environment
+        // 后台读取额度时不让 agy 顺带自动更新；agy 只认 "true"，不认 "1"。
+        launchEnvironment["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true"
+        process.environment = launchEnvironment
         process.standardInput = secondary
         process.standardOutput = secondary
         process.standardError = secondary
