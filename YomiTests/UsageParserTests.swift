@@ -193,7 +193,9 @@ final class UsageParserTests: XCTestCase {
             updatedAt: nil,
             message: nil
         )
-        defaults.set(try JSONEncoder().encode([cachedUsage]), forKey: "usage-cache.v2")
+        // 缓存从 v3 起每条带凭据版本，旧的 v2 缓存按设计不再读取。
+        let cachedJSON = try XCTUnwrap(String(data: JSONEncoder().encode(cachedUsage), encoding: .utf8))
+        defaults.set(Data(#"[{"usage":\#(cachedJSON),"revision":0}]"#.utf8), forKey: "usage-cache.v3")
 
         let store = UsageStore(
             preferences: ProviderPreferences(defaults: defaults),
@@ -355,8 +357,9 @@ final class UsageParserTests: XCTestCase {
         let suiteName = "UsageParserTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        let legacy = Data(#"[{"id":"opencodego","state":"ready","windows":[],"balance":"$12","today":{"tokens":2,"valueUSD":1},"last30Days":{"tokens":3,"valueUSD":2}}]"#.utf8)
-        defaults.set(legacy, forKey: "usage-cache.v2")
+        // 旧版 OpenCode Go 把请求数存在 Token 字段里；缓存格式本身用当前的 v3。
+        let legacy = Data(#"[{"usage":{"id":"opencodego","state":"ready","windows":[],"balance":"$12","today":{"tokens":2,"valueUSD":1},"last30Days":{"tokens":3,"valueUSD":2}},"revision":0}]"#.utf8)
+        defaults.set(legacy, forKey: "usage-cache.v3")
         let store = UsageStore(preferences: ProviderPreferences(defaults: defaults), defaults: defaults)
         let usage = store.usage(for: ProviderID(rawValue: "opencodego"))
         XCTAssertNil(usage.today)
