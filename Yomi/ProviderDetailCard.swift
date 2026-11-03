@@ -81,8 +81,23 @@ struct ProviderDetailCard: View {
     }
 
     private var headlineCaption: String {
-        let cost = usage.todayRequests?.valueUSD ?? usage.today?.valueUSD
-        return cost.map { "≈ " + compactDollarValue($0) } ?? "$—"
+        if let cost = usage.todayRequests?.valueUSD { return "≈ " + compactDollarValue(cost) }
+        return costText(usage.today)
+    }
+
+    // 部分 Token 没有价格时只显示已计价部分，用“≥”表示实际至少这么多。
+    private func costText(_ usage: DailyTokenUsage?) -> String {
+        if let value = usage?.valueUSD { return "≈ " + compactDollarValue(value) }
+        if let value = usage?.partialValueUSD { return "≥ " + compactDollarValue(value) }
+        return "$—"
+    }
+
+    private func partialCostHelp(_ usage: DailyTokenUsage?) -> String {
+        guard usage?.valueUSD == nil, usage?.partialValueUSD != nil else { return "" }
+        return copy.text(
+            "部分模型没有价格，金额只包含已计价的部分。",
+            "Some models have no price; the amount only covers priced usage."
+        )
     }
 
     private var displayedBalance: String? {
@@ -95,7 +110,7 @@ struct ProviderDetailCard: View {
     }
 
     private var overviewCaption: String {
-        let cost = usage.last30Days?.valueUSD.map { "≈ " + compactDollarValue($0) } ?? "$—"
+        let cost = costText(usage.last30Days)
         let tokens = usage.last30Days.map {
             compactTokenCount($0.tokens, language: language)
         } ?? "—"
@@ -115,8 +130,10 @@ struct ProviderDetailCard: View {
     }
 
     private var last30DaysCostValue: String {
-        (usage.last30DaysRequests?.valueUSD ?? usage.last30Days?.valueUSD)
-            .map { String(format: "$%.2f", $0) } ?? "$—"
+        if let value = usage.last30DaysRequests?.valueUSD ?? usage.last30Days?.valueUSD {
+            return String(format: "$%.2f", value)
+        }
+        return usage.last30Days?.partialValueUSD.map { "≥ " + String(format: "$%.2f", $0) } ?? "$—"
     }
 
     private var weeklyEstimateValue: String {
@@ -228,7 +245,7 @@ struct ProviderDetailCard: View {
         let layout = isOverview
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 7))
-        let todayCost = usage.today?.valueUSD.map { "≈ " + compactDollarValue($0) } ?? "$—"
+        let todayCost = costText(usage.today)
         let todayCostText = Text(todayCost)
             .font(.system(size: 11.5, weight: .semibold, design: .rounded))
             .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.48))
@@ -249,8 +266,10 @@ struct ProviderDetailCard: View {
                 .lineLimit(isOverview ? 1 : nil)
                 .minimumScaleFactor(isOverview ? 0.75 : 1)
                 .contentTransition(.numericText(value: Double(usage.todayRequests?.requests ?? usage.today?.tokens ?? 0)))
+                .help(isOverview ? partialCostHelp(usage.today) : "")
 
             Text(isOverview ? overviewCaption : headlineCaption)
+                .help(partialCostHelp(isOverview ? usage.last30Days : usage.today))
                 .font(.system(size: 11.5, weight: .semibold, design: .rounded))
                 .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.48))
                 .monospacedDigit()
@@ -435,6 +454,7 @@ struct ProviderDetailCard: View {
     private var footer: some View {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
             Text("\(last30DaysValue) · \(last30DaysCostValue)")
+                .help(partialCostHelp(usage.last30DaysRequests == nil ? usage.last30Days : nil))
                 .monospacedDigit()
                 .lineLimit(1)
                 .contentTransition(

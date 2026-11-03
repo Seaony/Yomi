@@ -326,12 +326,14 @@ actor LocalDailyUsageScanner {
         var tokens: Int64 = 0
         var valueUSD = 0.0
         var hasUnpricedTokens = false
+        var hasPricedTokens = false
 
         mutating func add(tokens: Int, valueUSD: Double?) {
             guard tokens > 0 else { return }
             self.tokens += Int64(tokens)
             if let valueUSD {
                 self.valueUSD += valueUSD
+                hasPricedTokens = true
             } else {
                 hasUnpricedTokens = true
             }
@@ -341,7 +343,8 @@ actor LocalDailyUsageScanner {
             guard tokens > 0 else { return nil }
             return DailyTokenUsage(
                 tokens: tokens,
-                valueUSD: hasUnpricedTokens ? nil : valueUSD
+                valueUSD: hasUnpricedTokens ? nil : valueUSD,
+                partialValueUSD: hasUnpricedTokens && hasPricedTokens ? valueUSD : nil
             )
         }
     }

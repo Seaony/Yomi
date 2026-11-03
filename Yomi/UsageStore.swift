@@ -325,7 +325,10 @@ final class UsageStore: ObservableObject {
         let valueUSD = hasUnpricedTokens
             ? nil
             : usages.reduce(0.0) { $0 + ($1.valueUSD ?? 0) }
-        return DailyTokenUsage(tokens: tokens, valueUSD: valueUSD)
+        // 有未计价的部分时，把各项已计价的金额加起来，供界面显示“至少多少”。
+        let pricedValues = usages.compactMap { $0.valueUSD ?? $0.partialValueUSD }
+        let partialValueUSD = hasUnpricedTokens && !pricedValues.isEmpty ? pricedValues.reduce(0, +) : nil
+        return DailyTokenUsage(tokens: tokens, valueUSD: valueUSD, partialValueUSD: partialValueUSD)
     }
 
     nonisolated static func combinedLast30DaysUsage(

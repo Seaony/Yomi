@@ -88,6 +88,8 @@ nonisolated struct UsageWindow: Codable, Hashable, Sendable, Identifiable {
 nonisolated struct DailyTokenUsage: Codable, Hashable, Sendable {
     var tokens: Int64
     var valueUSD: Double?
+    /// 部分 Token 没有价格时已计价部分的金额，只用来显示“至少多少”；这时 valueUSD 仍为 nil，估算不受影响。
+    var partialValueUSD: Double? = nil
 }
 
 nonisolated struct DailyRequestUsage: Codable, Hashable, Sendable {

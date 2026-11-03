@@ -241,5 +241,8 @@ struct PiSessionUsageTests {
         )
         #expect(mixed?.today?.tokens == 3510)
         #expect(mixed?.today?.valueUSD == nil)
+        // 已计价部分单独保留，界面显示为“至少多少”。
+        #expect(abs((mixed?.today?.partialValueUSD ?? 0) - 0.0066) < 0.000_000_1)
+        #expect(priced?.today?.partialValueUSD == nil)
     }
 }

@@ -257,6 +257,25 @@ final class UsageParserTests: XCTestCase {
         let combined = try XCTUnwrap(UsageStore.combinedLast30DaysUsage([aggregate, daily]))
         XCTAssertEqual(combined.tokens, 150)
         XCTAssertEqual(combined.valueUSD, 3)
+        XCTAssertNil(combined.partialValueUSD)
+    }
+
+    func testCombinedUsageKeepsPricedPartWhenSomeTokensAreUnpriced() throws {
+        func usage(_ id: String, _ last30Days: DailyTokenUsage) -> ProviderUsage {
+            ProviderUsage(id: ProviderID(rawValue: id), state: .ready, windows: [], last30Days: last30Days)
+        }
+        let priced = usage("priced", DailyTokenUsage(tokens: 100, valueUSD: 2))
+        let partial = usage("partial", DailyTokenUsage(tokens: 50, valueUSD: nil, partialValueUSD: 1))
+        let unpriced = usage("unpriced", DailyTokenUsage(tokens: 30, valueUSD: nil))
+
+        let combined = try XCTUnwrap(UsageStore.combinedLast30DaysUsage([priced, partial, unpriced]))
+        XCTAssertEqual(combined.tokens, 180)
+        XCTAssertNil(combined.valueUSD)
+        XCTAssertEqual(combined.partialValueUSD, 3)
+
+        let nothingPriced = try XCTUnwrap(UsageStore.combinedLast30DaysUsage([unpriced]))
+        XCTAssertNil(nothingPriced.valueUSD)
+        XCTAssertNil(nothingPriced.partialValueUSD)
     }
 
     func testOverviewDailyUsageKeepsProviderBreakdownAndUsesAuthoritativeToday() throws {
