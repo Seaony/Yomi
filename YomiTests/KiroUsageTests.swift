@@ -35,6 +35,23 @@ struct KiroUsageTests {
         #expect(report.resetsAt == Self.date("2026-01-15T00:00:00Z"))
     }
 
+    @Test(arguments: [
+        "| KIRO PRO+                                          |",
+        "┃ | KIRO PRO+ ┃",
+        "Estimated Usage | resets on 2026-12-01 | KIRO PRO+",
+        "Plan: KIRO PRO+",
+        "Plan: KIRO PRO+ | 1 usage breakdowns",
+        "\u{001B}[1mEstimated Usage\u{001B}[0m | resets on 2026-12-01 | \u{001B}[32mKIRO PRO+\u{001B}[0m",
+    ])
+    func planNamesKeepThePlusSign(header: String) throws {
+        let report = try KiroUsageFetcher.parseCLI("""
+        \(header)
+        Credits (500 of 2000 covered in plan)
+        """)
+        #expect(report.planName == "KIRO PRO+")
+        #expect(report.displayPlanName == "Kiro Pro+")
+    }
+
     @Test
     func parsesCurrentFormatBonusOverageAndIdentity() throws {
         let report = try KiroUsageFetcher.parseCLI(
@@ -339,6 +356,52 @@ struct KiroUsageTests {
     }
 
     @Test
+    func missingProfileSendsEmptyBodyToDefaultRegion() throws {
+        let (root, databaseURL) = try Self.makeStateDatabase(profileSQL: nil)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = try Data(contentsOf: databaseURL)
+
+        // Builder ID 登录可能没有 profile 行，仍可用默认美东端点读取用量。
+        let identity = try KiroUsageFetcher.readIdentity(databaseURL: databaseURL)
+        #expect(identity.accessToken == "local-token")
+        #expect(identity.profileARN == nil)
+        let request = try KiroUsageFetcher.makeUsageLimitsRequest(
+            identity: identity,
+            endpoint: KiroUsageFetcher.usageLimitsEndpoint
+        )
+        let body = try JSONSerialization.jsonObject(with: #require(request.httpBody)) as? [String: String]
+        #expect(body == [:])
+        #expect(try Data(contentsOf: databaseURL) == original)
+    }
+
+    @Test(arguments: [
+        "INSERT INTO state VALUES ('api.codewhisperer.profile', '{');",
+        "INSERT INTO state VALUES ('api.codewhisperer.profile', 'null');",
+        "INSERT INTO state VALUES ('api.codewhisperer.profile', '[]');",
+        "INSERT INTO state VALUES ('api.codewhisperer.profile', '{}');",
+        "INSERT INTO state VALUES ('api.codewhisperer.profile', '{\"arn\":null}');",
+        "INSERT INTO state VALUES ('api.codewhisperer.profile', '{\"arn\":7}');",
+        "INSERT INTO state VALUES ('api.codewhisperer.profile', NULL);",
+        "DROP TABLE state;",
+    ])
+    func presentOrUnreadableProfileDoesNotFallBackToDefaultRegion(profileSQL: String) throws {
+        let (root, databaseURL) = try Self.makeStateDatabase(profileSQL: profileSQL)
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(throws: KiroUsageError.self) {
+            _ = try KiroUsageFetcher.readIdentity(databaseURL: databaseURL)
+        }
+    }
+
+    @Test
+    func missingProfileDoesNotBypassMissingToken() throws {
+        let (root, databaseURL) = try Self.makeStateDatabase(profileSQL: nil, token: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(throws: KiroUsageError.self) {
+            _ = try KiroUsageFetcher.readIdentity(databaseURL: databaseURL)
+        }
+    }
+
+    @Test
     func fetchUsesOfficialCLIAndKeepsCLIUsageWhenEnrichmentIsUnavailable() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -516,6 +579,27 @@ struct KiroUsageTests {
         }
         // 断网时连 whoami 都不跑，避免 CLI 打开登录页。
         #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    private static func makeStateDatabase(profileSQL: String?, token: Bool = true) throws -> (URL, URL) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let databaseURL = root.appendingPathComponent("data.sqlite3")
+        var database: OpaquePointer?
+        #expect(sqlite3_open(databaseURL.path, &database) == SQLITE_OK)
+        defer { sqlite3_close(database) }
+        var statements = [
+            "CREATE TABLE auth_kv (key TEXT, value TEXT);",
+            "CREATE TABLE state (key TEXT, value TEXT);",
+        ]
+        if token {
+            statements.append("INSERT INTO auth_kv VALUES ('kirocli:odic:token', '{\"access_token\":\"local-token\"}');")
+        }
+        if let profileSQL { statements.append(profileSQL) }
+        for sql in statements {
+            #expect(sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK)
+        }
+        return (root, databaseURL)
     }
 
     private static func utcCalendar() -> Calendar {

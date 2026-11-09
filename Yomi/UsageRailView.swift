@@ -610,6 +610,7 @@ enum ProviderBrandColors {
         "qwencloud": 0x615CED,
         "raycast": 0xFF6363,
         "sakana": 0x2975DB,
+        "siliconflow": 0x6E29F5,
         "sailresearch": 0x2C4681,
         "sofya": 0xB0B820,
         "soniox": 0x253772,
@@ -620,6 +621,7 @@ enum ProviderBrandColors {
         "tavily": 0x78B0A1,
         "tinyapi": 0xF97316,
         "traecn": 0x4D7CFE,
+        "tripo": 0xF8CF00,
         "venice": 0x3399FF,
         "vertexai": 0x4285F4,
         "warp": 0x938BB4,
@@ -711,6 +713,12 @@ private struct ProviderRailItem: View {
                 return blocked
             }
             return session ?? weekly ?? monthly
+        }
+        // Claude 没有会话和周额度、只有按模型的周额度时，显示最紧的那一项，对齐 CodexBar 菜单栏。
+        if descriptor.id.rawValue == "claude", usage.windows.isEmpty {
+            return usage.additionalWindows
+                .filter { $0.id.hasPrefix("claude-weekly-scoped-") }
+                .max { $0.clampedFraction < $1.clampedFraction }
         }
         if descriptor.id.rawValue == "doubao" {
             return usage.windows.first

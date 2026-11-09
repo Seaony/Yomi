@@ -122,16 +122,8 @@ nonisolated enum UsageParser {
         let oauthApps = window("seven_day_oauth_apps", label: "OAuth apps")
         let sonnet = window("seven_day_sonnet", label: "Sonnet")
         let opus = window("seven_day_opus", label: "Opus")
-        var windows: [UsageWindow] = []
-        if let primary = fiveHour ?? sevenDay ?? oauthApps ?? sonnet ?? opus {
-            windows.append(primary)
-        }
-        if let sevenDay, sevenDay.id != windows.first?.id {
-            windows.append(sevenDay)
-        }
-        if let modelSpecific = sonnet ?? opus, !windows.contains(where: { $0.id == modelSpecific.id }) {
-            windows.append(modelSpecific)
-        }
+        // 没有五小时窗口时会话行保持缺席，周额度和模型额度各占自己的位置，对齐 CodexBar。
+        var windows = [fiveHour, sevenDay ?? oauthApps, sonnet ?? opus].compactMap { $0 }
 
         var additional: [UsageWindow] = []
         let routineKeys = [
@@ -191,7 +183,9 @@ nonisolated enum UsageParser {
                 balance: nil
             )
         }()
-        if windows.isEmpty, let providerCost, providerCost.limit > 0 {
+        // 有按模型的周额度时它才是真实额度，消费上限不再顶替成主窗口。
+        let hasScopedWeekly = additional.contains { $0.id.hasPrefix("claude-weekly-scoped-") }
+        if windows.isEmpty, !hasScopedWeekly, let providerCost, providerCost.limit > 0 {
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = TimeZone(secondsFromGMT: 0)!
             windows = [UsageWindow(

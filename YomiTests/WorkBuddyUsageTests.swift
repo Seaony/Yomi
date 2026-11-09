@@ -84,6 +84,67 @@ struct WorkBuddyUsageTests {
         // 2026-11-11 23:09:21（东八区）+1 秒。
         #expect(usage.windows.first?.resetsAt == Date(timeIntervalSince1970: 1_794_409_762))
     }
+
+    @Test
+    func manualUserAgentIsSentToEveryBillingEndpoint() async throws {
+        let recorder = WorkBuddyRequestRecorder()
+        WorkBuddyTestURLProtocol.handler = { request in
+            recorder.append(request)
+            switch request.url?.path {
+            case "/billing/meter/get-user-resource-summary": return (200, Data(Self.summary.utf8))
+            case "/billing/meter/get-user-resource-paid-packages": return (200, Data(#"{"code":0,"data":{"Accounts":[]}}"#.utf8))
+            case "/billing/meter/get-user-resource-free-packages": return (200, Data(Self.free.utf8))
+            default: return (404, Data())
+            }
+        }
+        defer { WorkBuddyTestURLProtocol.handler = nil }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [WorkBuddyTestURLProtocol.self]
+
+        _ = try await WorkBuddyUsageFetcher.fetch(
+            credential: "session=fixture", userAgent: " Mozilla/5.0 Edge fixture ",
+            session: URLSession(configuration: configuration), now: Self.now
+        )
+
+        let requests = recorder.requests
+        #expect(Set(requests.compactMap { $0.url?.path }) == [
+            "/billing/meter/get-user-resource-summary",
+            "/billing/meter/get-user-resource-paid-packages",
+            "/billing/meter/get-user-resource-free-packages",
+        ])
+        #expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "User-Agent") == "Mozilla/5.0 Edge fixture" })
+    }
+
+    @Test(arguments: ["fixture\nInjected: yes", "fixture\r\nInjected: yes", "fixture\u{7F}", "fixture\tUA"])
+    func manualUserAgentWithInvalidHeaderCharactersFailsBeforeNetwork(userAgent: String) async {
+        let recorder = WorkBuddyRequestRecorder()
+        WorkBuddyTestURLProtocol.handler = { request in
+            recorder.append(request)
+            return (500, Data())
+        }
+        defer { WorkBuddyTestURLProtocol.handler = nil }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [WorkBuddyTestURLProtocol.self]
+
+        await #expect(throws: WorkBuddyUsageError.invalidUserAgent) {
+            _ = try await WorkBuddyUsageFetcher.fetch(
+                credential: "session=fixture", userAgent: userAgent,
+                session: URLSession(configuration: configuration), now: Self.now
+            )
+        }
+        #expect(recorder.requests.isEmpty)
+    }
+}
+
+private nonisolated final class WorkBuddyRequestRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [URLRequest] = []
+
+    var requests: [URLRequest] { lock.withLock { storage } }
+
+    func append(_ request: URLRequest) {
+        lock.withLock { storage.append(request) }
+    }
 }
 
 private nonisolated final class WorkBuddyTestURLProtocol: URLProtocol {

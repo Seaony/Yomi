@@ -787,7 +787,7 @@ nonisolated enum GrokUsageFetcher {
         return nil
     }
 
-    private static func scanLocalUsage(environment: [String: String], now: Date) -> (today: Int64?, last30: Int64?) {
+    static func scanLocalUsage(environment: [String: String], now: Date) -> (today: Int64?, last30: Int64?) {
         let root = GrokCredentialsStore.authURL(environment: environment).deletingLastPathComponent()
             .appendingPathComponent("sessions")
         guard let iterator = FileManager.default.enumerator(
@@ -802,6 +802,14 @@ nonisolated enum GrokUsageFetcher {
             guard iterator.level == 2 else { continue }
             iterator.skipDescendants()
             guard (try? sessionURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
+            // usage.json 记录了每一轮，按轮次的结束时间计入；signals.json 压缩后会丢掉大部分 Token，只作兜底。
+            if let turns = usageTurns(in: sessionURL, notBefore: cutoff) {
+                for turn in turns where turn.endedAt >= cutoff && turn.endedAt < end {
+                    total += turn.tokens; any = true
+                    if calendar.startOfDay(for: turn.endedAt) == today { todayTokens += turn.tokens }
+                }
+                continue
+            }
             let url = sessionURL.appendingPathComponent("signals.json")
             let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
             guard date >= cutoff, date < end, let data = try? Data(contentsOf: url),
@@ -812,6 +820,26 @@ nonisolated enum GrokUsageFetcher {
             if calendar.startOfDay(for: date) == today { todayTokens += tokens }
         }
         return (any && todayTokens > 0 ? todayTokens : nil, any ? total : nil)
+    }
+
+    // usage.json 不存在、早于统计窗口或没有可读的轮次时返回 nil，改用 signals.json。
+    private static func usageTurns(in session: URL, notBefore cutoff: Date) -> [(endedAt: Date, tokens: Int64)]? {
+        let url = session.appendingPathComponent("usage.json")
+        guard let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+              modified >= cutoff,
+              let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let records = root["turns"] as? [[String: Any]] else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        let turns = records.compactMap { record -> (endedAt: Date, tokens: Int64)? in
+            guard let text = record["endedAt"] as? String,
+                  let endedAt = fractional.date(from: text) ?? plain.date(from: text),
+                  let tokens = record["totalTokens"] as? Int, tokens >= 0 else { return nil }
+            return (endedAt, Int64(tokens))
+        }
+        return turns.isEmpty ? nil : turns
     }
 
     private static func frames(_ data: Data) -> [Data] {

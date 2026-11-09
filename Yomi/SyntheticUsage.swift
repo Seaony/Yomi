@@ -45,7 +45,7 @@ nonisolated enum SyntheticUsageFetcher {
         let updatedAt: Date
 
         func toProviderUsage() -> ProviderUsage {
-            let knownLabels = ["Five-hour quota", "Weekly tokens", "Search hourly"]
+            let knownLabels = ["Five-hour quota", "Weekly quota", "Search hourly"]
             let windows = slots.prefix(3).enumerated().compactMap { index, quota -> UsageWindow? in
                 guard let quota else { return nil }
                 let label = usesKnownSlots
@@ -150,10 +150,12 @@ nonisolated enum SyntheticUsageFetcher {
             throw SyntheticUsageError.parseFailed("Expected an object or array.")
         }
         let dataObject = root["data"] as? [String: Any]
+        let planWeekly = knownQuota(root["planWeeklyLimit"]) ?? knownQuota(dataObject?["planWeeklyLimit"])
+        // 新套餐只有每周额度，有它时不再显示 5 小时额度
         let known: [[String: Any]?] = [
-            knownQuota(root["rollingFiveHourLimit"])
+            planWeekly != nil ? nil : knownQuota(root["rollingFiveHourLimit"])
                 ?? knownQuota(dataObject?["rollingFiveHourLimit"]),
-            knownQuota(root["weeklyTokenLimit"])
+            planWeekly ?? knownQuota(root["weeklyTokenLimit"])
                 ?? knownQuota(dataObject?["weeklyTokenLimit"]),
             knownQuota((root["search"] as? [String: Any])?["hourly"])
                 ?? knownQuota((dataObject?["search"] as? [String: Any])?["hourly"]),
@@ -163,8 +165,10 @@ nonisolated enum SyntheticUsageFetcher {
         if usesKnownSlots {
             slots = known.enumerated().map { index, candidate in
                 guard let candidate, isQuota(candidate) else { return nil }
-                let label = ["Rolling five-hour limit", "Weekly token limit", "Search hourly"][index]
-                return parseQuota(candidate, fallbackLabel: label)
+                let isPlanWeekly = index == 1 && planWeekly != nil
+                let label = isPlanWeekly ? "Weekly plan limit"
+                    : ["Rolling five-hour limit", "Weekly token limit", "Search hourly"][index]
+                return parseQuota(candidate, fallbackLabel: label, percentagePoints: isPlanWeekly)
             }
         } else {
             let candidates: [Any?] = [
@@ -190,10 +194,14 @@ nonisolated enum SyntheticUsageFetcher {
         )
     }
 
-    private static func parseQuota(_ object: [String: Any], fallbackLabel: String?) -> Quota? {
-        var usedPercent = firstNumber(object, keys: percentUsedKeys).map(normalizedPercent)
+    private static func parseQuota(_ object: [String: Any], fallbackLabel: String?, percentagePoints: Bool = false) -> Quota? {
+        // planWeeklyLimit 的百分比固定是 0–100，剩余不足 1% 时也不能当成小数放大
+        func normalize(_ value: Double) -> Double {
+            percentagePoints ? value : normalizedPercent(value)
+        }
+        var usedPercent = firstNumber(object, keys: percentUsedKeys).map(normalize)
         if usedPercent == nil, let remaining = firstNumber(object, keys: percentRemainingKeys) {
-            usedPercent = 100 - normalizedPercent(remaining)
+            usedPercent = 100 - normalize(remaining)
         }
         if usedPercent == nil {
             var limit = firstNumber(object, keys: limitKeys)
@@ -208,10 +216,11 @@ nonisolated enum SyntheticUsageFetcher {
         let fraction = min(1, max(0, usedPercent / 100))
         let minutes = windowMinutes(object)
         let reset = firstDate(object, keys: resetKeys)
-        let regenFraction = firstNumber(
-            object,
-            keys: ["tickPercent", "tick_percent", "nextTickPercent", "next_tick_percent"]
-        ).map { normalizedPercent($0) / 100 }
+        let regenFraction = firstNumber(object, keys: ["nextRegenPercent", "next_regen_percent"]).map { $0 / 100 }
+            ?? firstNumber(
+                object,
+                keys: ["tickPercent", "tick_percent", "nextTickPercent", "next_tick_percent"]
+            ).map { normalizedPercent($0) / 100 }
         let maximumCredits = firstCurrency(object, keys: ["maxCredits", "max_credits"])
         let cost: Cost?
         if let maximumCredits {

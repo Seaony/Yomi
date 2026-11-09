@@ -408,6 +408,34 @@ nonisolated struct BedrockUsageSnapshot: Codable, Sendable, Equatable {
     }
 }
 
+// 内存里只存一份月度花费，按凭据、区域、接口地址和 UTC 月份区分，6 小时后失效；报错和不可用不缓存。
+nonisolated final class BedrockCostExplorerCache: @unchecked Sendable {
+    struct Key: Equatable {
+        let accessKeyID: String
+        let region: String
+        let endpoint: String?
+        let start: String
+        let end: String
+    }
+
+    static let shared = BedrockCostExplorerCache()
+    private let ttl: TimeInterval = 6 * 60 * 60
+    private let lock = NSLock()
+    private var monthly: (key: Key, amount: Double, updatedAt: Date)?
+
+    func monthlySpend(for key: Key, now: Date) -> (amount: Double, updatedAt: Date)? {
+        lock.withLock {
+            guard let monthly, monthly.key == key, monthly.updatedAt <= now,
+                  now.timeIntervalSince(monthly.updatedAt) < ttl else { return nil }
+            return (monthly.amount, monthly.updatedAt)
+        }
+    }
+
+    func storeMonthlySpend(_ amount: Double, for key: Key, at now: Date) {
+        lock.withLock { monthly = (key, amount, now) }
+    }
+}
+
 nonisolated enum BedrockUsageFetcher {
     private static let costExplorerRegion = "us-east-1"
     private static let timeout: TimeInterval = 15
@@ -421,6 +449,7 @@ nonisolated enum BedrockUsageFetcher {
         session: URLSession,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         now: Date = Date(),
+        forceRefresh: Bool = false,
         resolveAWSBinary: ([String: String]) -> String? = BedrockCredentialResolver.resolveAWSBinary,
         cliRunner: @escaping BedrockCredentialResolver.CLIRunner
     ) async throws -> ProviderUsage {
@@ -440,7 +469,10 @@ nonisolated enum BedrockUsageFetcher {
             budget: budget(environment),
             session: session,
             environment: environment,
-            now: now
+            now: now,
+            forceRefresh: forceRefresh,
+            // 自定义接口地址时不共用缓存。
+            cache: environment["CODEXBAR_BEDROCK_API_URL"] == nil ? .shared : nil
         ).toProviderUsage()
     }
 
@@ -452,7 +484,8 @@ nonisolated enum BedrockUsageFetcher {
         authMode: BedrockAuthMode?,
         session: URLSession,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        now: Date = Date()
+        now: Date = Date(),
+        forceRefresh: Bool = false
     ) async throws -> ProviderUsage {
         try await fetch(
             accessKeyID: accessKeyID,
@@ -463,6 +496,7 @@ nonisolated enum BedrockUsageFetcher {
             session: session,
             environment: environment,
             now: now,
+            forceRefresh: forceRefresh,
             resolveAWSBinary: BedrockCredentialResolver.resolveAWSBinary,
             cliRunner: { binary, arguments, environment in
                 try await BedrockCredentialResolver.liveCLIRunner(
@@ -480,14 +514,33 @@ nonisolated enum BedrockUsageFetcher {
         budget: Double?,
         session: URLSession,
         environment: [String: String],
-        now: Date
+        now: Date,
+        forceRefresh: Bool = false,
+        cache: BedrockCostExplorerCache? = nil
     ) async throws -> BedrockUsageSnapshot {
-        let monthlySpend = try await fetchMonthlyCost(
-            credentials: credentials,
-            session: session,
-            environment: environment,
-            now: now
+        // Cost Explorer 每次调用收费 0.01 美元，自动刷新复用缓存，手动刷新才重新请求。
+        let range = currentMonthRange(now: now)
+        let key = BedrockCostExplorerCache.Key(
+            accessKeyID: credentials.accessKeyID,
+            region: region,
+            endpoint: environment["CODEXBAR_BEDROCK_API_URL"],
+            start: range.start,
+            end: range.end
         )
+        let monthly: (amount: Double, updatedAt: Date)
+        if !forceRefresh, let cached = cache?.monthlySpend(for: key, now: now) {
+            monthly = cached
+        } else {
+            let amount = try await fetchMonthlyCost(
+                credentials: credentials,
+                session: session,
+                environment: environment,
+                now: now
+            )
+            guard amount.isFinite else { throw BedrockUsageError.parseFailed("Invalid Cost Explorer response") }
+            cache?.storeMonthlySpend(amount, for: key, at: now)
+            monthly = (amount, now)
+        }
         var activity: BedrockClaudeActivity?
         let cloudWatchOverride = environment["CODEXBAR_BEDROCK_CLOUDWATCH_API_URL"]
         let shouldFetchCloudWatch = environment["CODEXBAR_BEDROCK_API_URL"] == nil || cloudWatchOverride != nil
@@ -504,14 +557,15 @@ nonisolated enum BedrockUsageFetcher {
                 if Task.isCancelled { throw error }
             }
         }
+        // 用缓存时保留原来的时间，避免把旧数据显示成刚刷新的。
         return BedrockUsageSnapshot(
-            monthlySpend: monthlySpend,
+            monthlySpend: monthly.amount,
             monthlyBudget: budget,
             inputTokens: activity?.inputTokens,
             outputTokens: activity?.outputTokens,
             requestCount: activity?.requestCount,
             region: region,
-            updatedAt: now
+            updatedAt: monthly.updatedAt
         )
     }
 
@@ -559,7 +613,8 @@ nonisolated enum BedrockUsageFetcher {
         )
         var totals: [String: Double] = [:]
         for page in pages {
-            for item in try parseGroupedResults(page) where !item.date.isEmpty && item.cost > 0 {
+            // 明确测得为 0 的日子也保留，只丢掉没有日期或负数的行。
+            for item in try parseGroupedResults(page) where !item.date.isEmpty && item.cost >= 0 {
                 totals[item.date, default: 0] += item.cost
             }
         }

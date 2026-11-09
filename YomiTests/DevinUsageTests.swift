@@ -1,4 +1,6 @@
+import CommonCrypto
 import Foundation
+import SQLite3
 import Testing
 @testable import Yomi
 
@@ -325,6 +327,194 @@ struct DevinUsageTests {
 
         #expect(candidates.map(\.label) == ["Chrome Default", "Brave Default"])
         #expect(candidates.map { $0.url.resolvingSymlinksInPath() } == [chrome, brave].map { $0.resolvingSymlinksInPath() })
+    }
+
+    @Test
+    func appImporterReadsEncryptedDesktopSessionFromDatabaseCopy() throws {
+        let home = try Self.makeDevinAppHome(rows: [
+            (Self.sessionsKey, try Self.encryptedSessions([["accessToken": "app-token"], ["accessToken": "app-token"]])),
+            ("devin.desktopShell.lastOrg.org-ABCDEFGH12", "{}"),
+        ])
+        defer { try? FileManager.default.removeItem(at: home) }
+        let database = home.appending(path: "Library/Application Support/Devin/User/globalStorage/state.vscdb")
+        let original = try Data(contentsOf: database)
+        let directory = database.deletingLastPathComponent()
+        let filesBefore = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+
+        let sessions = DevinAppSessionImporter(home: home, password: { "pw" })
+            .importSessions(organizationOverride: nil)
+
+        #expect(sessions == [DevinSessionImporter.SessionInfo(
+            accessToken: "app-token",
+            organization: "organizations/org-ABCDEFGH12",
+            internalOrganizationID: "org-ABCDEFGH12",
+            sourceLabel: "Devin app"
+        )])
+        // 只读临时副本，应用自己的数据库和目录保持原样。
+        #expect(try Data(contentsOf: database) == original)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted() == filesBefore)
+    }
+
+    @Test
+    func appImporterSkipsKeychainWithoutValidEncryptedSession() throws {
+        let home = try Self.makeDevinAppHome(rows: [
+            (Self.sessionsKey, #"{"type":"Buffer","data":[1,2,3]}"#),
+            (#"secret://{"key":"other"}"#, try Self.encryptedSessions([["accessToken": "other-token"]])),
+        ])
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let sessions = DevinAppSessionImporter(home: home, password: {
+            Issue.record("没有合格的加密会话时不应读取钥匙串")
+            return "pw"
+        }).importSessions(organizationOverride: nil)
+
+        #expect(sessions.isEmpty)
+    }
+
+    @Test
+    func appSessionPayloadAndBufferValidation() {
+        #expect(DevinAppSessionImporter.accessTokens(fromSessionsPayload: #"[{"accessToken":" a "},{"accessToken":"a"},{"id":1}]"#) == ["a"])
+        #expect(DevinAppSessionImporter.bufferData(fromSecretValue: #"{"type":"Buffer","data":[true,false,true]}"#) == nil)
+        #expect(DevinAppSessionImporter.isSessionKey(Self.sessionsKey))
+        #expect(!DevinAppSessionImporter.isSessionKey("windsurf_auth.sessions"))
+    }
+
+    @Test
+    func workingBrowserSessionNeverReadsDesktopKeychain() async throws {
+        DevinURLProtocolStub.handler = { request in
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer browser-token")
+            return (200, #"{"daily_percentage":10}"#)
+        }
+        defer { DevinURLProtocolStub.handler = nil }
+
+        let usage = try await DevinUsageFetcher.fetch(
+            credential: "",
+            source: .automatic,
+            organization: "org_GQ6LhcfkW1TSinM6",
+            session: makeSession(),
+            environment: [:],
+            browserSessions: { _ in [Self.browserSession] },
+            appImporter: DevinAppSessionImporter(home: URL(fileURLWithPath: "/nonexistent"), password: {
+                Issue.record("浏览器会话可用时不应读取 Devin 应用的钥匙串")
+                return nil
+            })
+        )
+
+        #expect(usage.windows.first?.usedFraction == 0.1)
+    }
+
+    @Test
+    func rejectedBrowserSessionFallsBackToDesktopSession() async throws {
+        let home = try Self.makeDevinAppHome(rows: [
+            (Self.sessionsKey, try Self.encryptedSessions([["accessToken": "app-token"]])),
+        ])
+        defer { try? FileManager.default.removeItem(at: home) }
+        DevinURLProtocolStub.handler = { request in
+            request.value(forHTTPHeaderField: "Authorization") == "Bearer app-token"
+                ? (200, #"{"daily_percentage":20}"#)
+                : (401, "{}")
+        }
+        defer { DevinURLProtocolStub.handler = nil }
+
+        let usage = try await DevinUsageFetcher.fetch(
+            credential: "",
+            source: .automatic,
+            organization: "org_GQ6LhcfkW1TSinM6",
+            session: makeSession(),
+            environment: [:],
+            browserSessions: { _ in [Self.browserSession] },
+            appImporter: DevinAppSessionImporter(home: home, password: { "pw" })
+        )
+
+        #expect(usage.windows.first?.usedFraction == 0.2)
+    }
+
+    @Test
+    func browserServiceErrorDoesNotReadDesktopSession() async throws {
+        DevinURLProtocolStub.handler = { _ in (500, "{}") }
+        defer { DevinURLProtocolStub.handler = nil }
+
+        await #expect(throws: DevinUsageError.apiError("HTTP 500")) {
+            _ = try await DevinUsageFetcher.fetch(
+                credential: "",
+                source: .automatic,
+                organization: "org_GQ6LhcfkW1TSinM6",
+                session: makeSession(),
+                environment: [:],
+                browserSessions: { _ in [Self.browserSession] },
+                appImporter: DevinAppSessionImporter(home: URL(fileURLWithPath: "/nonexistent"), password: {
+                    Issue.record("服务端错误时不应读取 Devin 应用的钥匙串")
+                    return nil
+                })
+            )
+        }
+    }
+
+    @Test
+    func unreadableBrowserStorageSurfacesWhenDesktopHasNoSession() async {
+        await #expect(throws: DevinUsageError.browserStorageUnreadable) {
+            _ = try await DevinUsageFetcher.fetch(
+                credential: "",
+                source: .automatic,
+                organization: nil,
+                session: makeSession(),
+                environment: [:],
+                browserSessions: { _ in throw DevinUsageError.browserStorageUnreadable },
+                appImporter: DevinAppSessionImporter(home: URL(fileURLWithPath: "/nonexistent"), password: { nil })
+            )
+        }
+    }
+
+    private static let sessionsKey = #"secret://{"extensionId":"devin.devin","key":"windsurf_auth.sessions"}"#
+
+    private static let browserSession = DevinSessionImporter.SessionInfo(
+        accessToken: "browser-token",
+        organization: nil,
+        internalOrganizationID: nil,
+        sourceLabel: "Chrome Default"
+    )
+
+    private static func makeDevinAppHome(rows: [(String, String)]) throws -> URL {
+        let home = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let directory = home.appending(path: "Library/Application Support/Devin/User/globalStorage")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var database: OpaquePointer?
+        #expect(sqlite3_open(directory.appending(path: "state.vscdb").path, &database) == SQLITE_OK)
+        defer { sqlite3_close(database) }
+        #expect(sqlite3_exec(database, "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);", nil, nil, nil) == SQLITE_OK)
+        for (key, value) in rows {
+            let sql = "INSERT INTO ItemTable VALUES ('\(key.replacingOccurrences(of: "'", with: "''"))', '\(value.replacingOccurrences(of: "'", with: "''"))');"
+            #expect(sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK)
+        }
+        return home
+    }
+
+    // 按 Electron Buffer 的 JSON 格式存放 v10 加密后的会话列表。
+    private static func encryptedSessions(_ sessions: [[String: String]]) throws -> String {
+        let plaintext = try JSONSerialization.data(withJSONObject: sessions)
+        let key = ChromiumSafeStorage.deriveKey(from: "pw")
+        let iv = Data(repeating: 0x20, count: kCCBlockSizeAES128)
+        var out = Data(count: plaintext.count + kCCBlockSizeAES128)
+        let capacity = out.count
+        var length = 0
+        let status = out.withUnsafeMutableBytes { outBytes in
+            plaintext.withUnsafeBytes { inBytes in
+                key.withUnsafeBytes { keyBytes in
+                    iv.withUnsafeBytes { ivBytes in
+                        CCCrypt(
+                            CCOperation(kCCEncrypt), CCAlgorithm(kCCAlgorithmAES), CCOptions(kCCOptionPKCS7Padding),
+                            keyBytes.baseAddress, key.count, ivBytes.baseAddress,
+                            inBytes.baseAddress, plaintext.count, outBytes.baseAddress, capacity, &length
+                        )
+                    }
+                }
+            }
+        }
+        try #require(status == kCCSuccess)
+        out.count = length
+        let bytes = Array(Data("v10".utf8) + out)
+        let buffer = try JSONSerialization.data(withJSONObject: ["type": "Buffer", "data": bytes.map(Int.init)])
+        return String(decoding: buffer, as: UTF8.self)
     }
 
     private func makeSession() -> URLSession {

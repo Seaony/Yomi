@@ -213,7 +213,9 @@ actor UsageCollector {
                 profile: stored.profile.isEmpty ? nil : stored.profile,
                 region: stored.region.isEmpty ? nil : stored.region,
                 authMode: BedrockAuthMode(rawValue: stored.authMode),
-                session: session
+                session: session,
+                // 手动刷新时绕过 Cost Explorer 缓存。
+                forceRefresh: allowBrowserCookieImport
             )
         }
         if descriptor.id.rawValue == "sub2api" {
@@ -324,6 +326,10 @@ actor UsageCollector {
                 configuration: configuration,
                 secret: secret
             )
+        }
+        if descriptor.id.rawValue == "cursor", configuration.source == .cookie {
+            // 手动 Cookie 指定了账号，留空时直接报缺凭据，不改用 Cursor 应用里登录的账号。
+            return try await CursorUsageFetcher.fetch(credential: secret, session: session)
         }
 
         let environmentValue = environmentSecret(for: descriptor)
@@ -980,15 +986,17 @@ actor UsageCollector {
             )
         }
         if descriptor.id.rawValue == "typesafe" {
+            // 旧缓存是按 /settings/billing 路径挑的 Cookie，新接口用单独的缓存，不复用旧值。
+            let cacheKey = "imported-cookie-billing-overview"
             let cachedCookie = await MainActor.run {
-                ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: "imported-cookie")
+                ProviderPreferences.shared.auxiliarySecret(for: descriptor.id, key: cacheKey)
             }
             return try await TypeSafeUsageFetcher.fetch(
                 credential: secret, source: configuration.source,
                 cachedCookieHeader: cachedCookie.isEmpty ? nil : cachedCookie,
                 cacheUpdate: { value in
                     await MainActor.run {
-                        try? ProviderPreferences.shared.setAuxiliarySecret(value ?? "", for: descriptor.id, key: "imported-cookie", invalidatesUsage: false, expectedRevision: usageRevision)
+                        try? ProviderPreferences.shared.setAuxiliarySecret(value ?? "", for: descriptor.id, key: cacheKey, invalidatesUsage: false, expectedRevision: usageRevision)
                     }
                 },
                 allowBrowserImport: allowBrowserCookieImport
@@ -1022,7 +1030,7 @@ actor UsageCollector {
         }
         if descriptor.id.rawValue == "workbuddy" {
             return try await WorkBuddyUsageFetcher.fetch(
-                credential: secret.isEmpty ? nil : secret, session: session
+                credential: secret.isEmpty ? nil : secret, userAgent: configuration.account, session: session
             )
         }
         if descriptor.id.rawValue == "exa" {
@@ -1063,6 +1071,16 @@ actor UsageCollector {
         }
         if descriptor.id.rawValue == "abliteration" {
             return try await AbliterationUsageFetcher.fetch(apiKey: secret.isEmpty ? nil : secret, session: session)
+        }
+        if descriptor.id.rawValue == "siliconflow" {
+            return try await SiliconFlowUsageFetcher.fetch(
+                apiKey: secret.isEmpty ? nil : secret,
+                origin: configuration.endpoint.isEmpty ? nil : configuration.endpoint,
+                session: session
+            )
+        }
+        if descriptor.id.rawValue == "tripo" {
+            return try await TripoUsageFetcher.fetch(apiKey: secret.isEmpty ? nil : secret, session: session)
         }
         if descriptor.id.rawValue == "chatbox" {
             return try await ChatboxUsageFetcher.fetch(licenseKey: secret.isEmpty ? nil : secret, session: session)
@@ -1351,12 +1369,25 @@ actor UsageCollector {
         guard token.hasPrefix(prefix) else { return token }
         guard let encrypted = Data(base64Encoded: String(token.dropFirst(prefix.count))),
               encrypted.count > 3, encrypted.starts(with: Data("v10".utf8)),
-              (encrypted.count - 3).isMultiple(of: 16),
-              let password = ChromiumSafeStorage.password(service: "Cursor Safe Storage", account: "Cursor"),
-              let plaintext = ChromiumSafeStorage.decrypt(encrypted, key: ChromiumSafeStorage.deriveKey(from: password)),
-              let decoded = String(data: plaintext, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !decoded.isEmpty else { return nil }
-        return decoded
+              (encrypted.count - 3).isMultiple(of: 16) else { return nil }
+        // Electron 把密钥存在账户 Cursor Key 下，旧版本用 Cursor，依次尝试；同一次刷新最多弹一次授权框。
+        // 两个账户分开记授权，后台刷新不会拿旧账户的授权去读没授权过的 Cursor Key。
+        let accounts: [(name: String, grantKey: String?)] = [
+            ("Cursor Key", "Cursor Safe Storage (Cursor Key)"),
+            ("Cursor", nil),
+        ]
+        for account in accounts {
+            guard let password = ChromiumSafeStorage.password(
+                    service: "Cursor Safe Storage",
+                    account: account.name,
+                    grantKey: account.grantKey
+                  ),
+                  let plaintext = ChromiumSafeStorage.decrypt(encrypted, key: ChromiumSafeStorage.deriveKey(from: password)),
+                  let decoded = String(data: plaintext, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !decoded.isEmpty else { continue }
+            return decoded
+        }
+        return nil
     }
 
     func claudeKeychainCredentialData(

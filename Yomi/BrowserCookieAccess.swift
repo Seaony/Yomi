@@ -84,20 +84,23 @@ nonisolated enum BrowserCookieAccess {
 
     // 读取其他应用的钥匙串条目：后台只在之前授权成功过时静默读取，
     // 需要授权时只在手动刷新时弹一次，拒绝后 6 小时内不再弹。
+    /// grantKey 只区分授权记录；拒绝后的冷却按服务名共用，同一服务下换账户也不会再弹框。
     static func readForeignKeychainItem(
         service: String,
+        grantKey: String? = nil,
         read: (_ allowPrompt: Bool) -> (OSStatus, Data?),
         exists: () -> Bool
     ) -> (OSStatus, Data?) {
         let manual = scope?.allowInteraction == true
-        let granted = denialLock.withLock { UserDefaults.standard.bool(forKey: credentialGrantKey(service)) }
+        let grantService = grantKey ?? service
+        let granted = denialLock.withLock { UserDefaults.standard.bool(forKey: credentialGrantKey(grantService)) }
         // 旧式 ACL 的条目即使设置了不弹窗也可能弹，后台没授权记录时不碰密码，只查条目是否存在。
         if !manual, !granted {
             return (exists() ? errSecInteractionNotAllowed : errSecItemNotFound, nil)
         }
         var (status, data) = read(false)
         if status == errSecInteractionNotAllowed || status == errSecAuthFailed {
-            setCredentialGrant(false, service: service)
+            setCredentialGrant(false, service: grantService)
             guard claimCredentialPrompt(service: service) else { return (status, nil) }
             (status, data) = read(true)
             if [errSecUserCanceled, errSecAuthFailed, errSecNoAccessForItem].contains(status) {
@@ -106,7 +109,7 @@ nonisolated enum BrowserCookieAccess {
                 }
             }
         }
-        if status == errSecSuccess { setCredentialGrant(true, service: service) }
+        if status == errSecSuccess { setCredentialGrant(true, service: grantService) }
         return (status, data)
     }
 

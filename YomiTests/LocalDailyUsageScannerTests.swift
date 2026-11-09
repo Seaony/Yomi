@@ -271,6 +271,56 @@ struct LocalDailyUsageScannerTests {
     }
 
     @Test
+    func symlinkedClaudeProjectsRootIsScannedOnceWithoutNestedLinks() async throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let now = Date()
+        let fileManager = FileManager.default
+        let physical = home.appending(path: "physical-projects")
+        try fileManager.moveItem(at: home.appending(path: ".claude/projects"), to: physical)
+        try writeLines(
+            [claudeEntry(model: "claude-sonnet-4-5", input: 100, output: 10, now: now)],
+            to: physical.appending(path: "sample/usage.jsonl")
+        )
+        // 子目录里指向外部的链接不跟随。
+        let outside = home.appending(path: "outside")
+        try fileManager.createDirectory(at: outside, withIntermediateDirectories: true)
+        var external = claudeEntry(model: "claude-sonnet-4-5", input: 900, output: 90, now: now)
+        external["requestId"] = "outside-request"
+        external["message"] = ["id": "outside-message", "model": "claude-sonnet-4-5",
+                               "usage": ["input_tokens": 900, "output_tokens": 90]]
+        try writeLines([external], to: outside.appending(path: "outside.jsonl"))
+        try fileManager.createSymbolicLink(at: physical.appending(path: "nested-link"), withDestinationURL: outside)
+        // 两个默认目录都链接到同一个真实目录时只算一次。
+        try fileManager.createSymbolicLink(at: home.appending(path: ".claude/projects"), withDestinationURL: physical)
+        try fileManager.createDirectory(at: home.appending(path: ".config/claude"), withIntermediateDirectories: true)
+        try fileManager.createSymbolicLink(
+            at: home.appending(path: ".config/claude/projects"), withDestinationURL: physical
+        )
+
+        let usage = await scan(LocalDailyUsageScanner(), provider: "claude", home: home, now: now)
+        #expect(usage?.today?.tokens == 110)
+    }
+
+    @Test
+    func symlinkedCodexSessionRootsAreScannedOnce() async throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let now = Date()
+        let fileManager = FileManager.default
+        try writeSession(id: "linked", count: 2, now: now, home: home)
+        let physical = home.appending(path: "physical-sessions")
+        try fileManager.moveItem(at: home.appending(path: ".codex/sessions"), to: physical)
+        try fileManager.createSymbolicLink(at: home.appending(path: ".codex/sessions"), withDestinationURL: physical)
+        try fileManager.createSymbolicLink(
+            at: home.appending(path: ".codex/archived_sessions"), withDestinationURL: physical
+        )
+
+        let usage = await scan(LocalDailyUsageScanner(), provider: "codex", home: home, now: now)
+        #expect(usage?.today?.tokens == 220)
+    }
+
+    @Test
     func coworkAuditAndTranscriptCountOnce() async throws {
         let home = try temporaryHome()
         defer { try? FileManager.default.removeItem(at: home) }

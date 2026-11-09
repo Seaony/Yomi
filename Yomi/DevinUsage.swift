@@ -1,5 +1,6 @@
 import CoreFoundation
 import Foundation
+import SQLite3
 import SweetCookieKit
 
 nonisolated enum DevinUsageError: LocalizedError, Equatable {
@@ -331,7 +332,11 @@ nonisolated enum DevinUsageFetcher {
         organization rawOrganization: String?,
         session: URLSession,
         now: Date = Date(),
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        browserSessions: (String?) throws -> [DevinSessionImporter.SessionInfo] = {
+            try DevinSessionImporter.importSessions(organizationOverride: $0)
+        },
+        appImporter: DevinAppSessionImporter = DevinAppSessionImporter()
     ) async throws -> ProviderUsage {
         let organization = normalizedOrganization(
             cleaned(environment["DEVIN_ORGANIZATION"])
@@ -341,38 +346,58 @@ nonisolated enum DevinUsageFetcher {
         let credential = cleaned(environment["DEVIN_BEARER_TOKEN"])
             ?? cleaned(environment["DEVIN_AUTHORIZATION"])
             ?? rawCredential.trimmingCharacters(in: .whitespacesAndNewlines)
-        let auths: [RequestAuth]
+        var lastError: Error?
+        let stages: [() -> [RequestAuth]]
         if let manual = manualAuth(from: credential, organization: organization) {
-            auths = [manual]
+            stages = [{ [manual] }]
         } else {
             if source == .token || source == .cookie { throw DevinUsageError.noSession }
-            auths = try DevinSessionImporter.importSessions(organizationOverride: organization).map {
-                RequestAuth(
-                    bearerToken: $0.accessToken,
-                    organization: organization ?? normalizedOrganization($0.organization),
-                    internalOrganizationID: $0.internalOrganizationID,
-                    sourceLabel: $0.sourceLabel
-                )
+            let browserAuths: [RequestAuth]
+            do {
+                browserAuths = try browserSessions(organization).map { requestAuth($0, organization: organization) }
+            } catch {
+                // 浏览器存储读不了时先记下，Devin 应用里也没有会话再报出来。
+                browserAuths = []
+                lastError = error
             }
-            guard !auths.isEmpty else { throw DevinUsageError.noSession }
+            // 浏览器会话都试完才读 Devin 应用的会话，能用浏览器时不碰它的钥匙串条目。
+            stages = [
+                { browserAuths },
+                { appImporter.importSessions(organizationOverride: organization).map { requestAuth($0, organization: organization) } },
+            ]
         }
 
-        var lastError: Error?
-        for auth in auths {
-            do {
-                let snapshot = try await fetchQuotaUsage(
-                    auth: auth,
-                    organizationOverride: organization,
-                    session: session,
-                    now: now
-                )
-                return snapshot.toProviderUsage()
-            } catch {
-                lastError = error
-                if auth.sourceLabel == "manual" || !shouldTryNextSession(after: error) { throw error }
+        for (index, stage) in stages.enumerated() {
+            let auths = stage()
+            for auth in auths {
+                do {
+                    let snapshot = try await fetchQuotaUsage(
+                        auth: auth,
+                        organizationOverride: organization,
+                        session: session,
+                        now: now
+                    )
+                    return snapshot.toProviderUsage()
+                } catch {
+                    lastError = error
+                    if auth.sourceLabel == "manual" || !shouldTryNextSession(after: error) { throw error }
+                }
+            }
+            // 服务端错误换凭据也解决不了，直接报出，不再读 Devin 应用的会话。
+            if index < stages.count - 1, !auths.isEmpty, let lastError, !shouldTryAppSession(after: lastError) {
+                throw lastError
             }
         }
         throw lastError ?? DevinUsageError.noSession
+    }
+
+    private static func requestAuth(_ session: DevinSessionImporter.SessionInfo, organization: String?) -> RequestAuth {
+        RequestAuth(
+            bearerToken: session.accessToken,
+            organization: organization ?? normalizedOrganization(session.organization),
+            internalOrganizationID: session.internalOrganizationID,
+            sourceLabel: session.sourceLabel
+        )
     }
 
     static func fetchQuotaUsage(
@@ -466,6 +491,16 @@ nonisolated enum DevinUsageFetcher {
     static func shouldTryNextSession(after error: Error) -> Bool {
         switch error {
         case DevinUsageError.invalidCredentials, DevinUsageError.apiError, DevinUsageError.missingOrganization:
+            true
+        default:
+            false
+        }
+    }
+
+    // 只有换一个凭据可能解决的失败，才值得去读 Devin 应用的会话。
+    static func shouldTryAppSession(after error: Error) -> Bool {
+        switch error {
+        case DevinUsageError.invalidCredentials, DevinUsageError.missingOrganization:
             true
         default:
             false
@@ -680,7 +715,7 @@ nonisolated enum DevinSessionImporter {
         }
     }
 
-    private static func readLocalStorage(from levelDBURL: URL) throws -> [String: String] {
+    static func readLocalStorage(from levelDBURL: URL) throws -> [String: String] {
         // SweetCookieKit 0.5.9 起按站点流式读取，不用再整库扫描文本，大的 Local Storage 也不会占满内存。
         var storage: [String: String] = [:]
         for entry in ChromiumLocalStorageReader.readEntries(for: storageOrigin, in: levelDBURL) {
@@ -852,5 +887,191 @@ nonisolated enum DevinSessionImporter {
     private static func orgID(fromNormalizedOrganization organization: String) -> String? {
         guard organization.hasPrefix("organizations/") else { return nil }
         return String(organization.dropFirst("organizations/".count))
+    }
+}
+
+// Devin 桌面应用不写浏览器的 auth1_session，登录信息存在自己的密钥存储里：
+// User/globalStorage/state.vscdb 的 windsurf_auth.sessions，用钥匙串 Devin Safe Storage 的密码按 Chromium v10 加密。
+// 只读数据库的临时副本，不动应用自己的文件；钥匙串只做静默读取，永不弹授权框。
+nonisolated struct DevinAppSessionImporter: Sendable {
+    static let sourceLabel = "Devin app"
+    private static let safeStorageService = "Devin Safe Storage"
+    private static let safeStorageAccount = "Devin Key"
+    private static let sessionsSecretName = "windsurf_auth.sessions"
+
+    let databaseURL: URL
+    let localStorageURL: URL
+    let password: @Sendable () -> String?
+
+    init(
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        password: (@Sendable () -> String?)? = nil
+    ) {
+        let root = home.appending(path: "Library/Application Support/Devin")
+        databaseURL = root.appending(path: "User/globalStorage/state.vscdb")
+        localStorageURL = root.appending(path: "Local Storage/leveldb")
+        self.password = password ?? {
+            ChromiumSafeStorage.silentPassword(service: Self.safeStorageService, account: Self.safeStorageAccount)
+        }
+    }
+
+    func importSessions(organizationOverride: String?) -> [DevinSessionImporter.SessionInfo] {
+        let rows = (try? itemTableRows()) ?? []
+        let blobs = rows.filter { Self.isSessionKey($0.key) }.compactMap { Self.bufferData(fromSecretValue: $0.value) }
+        // 先确认有格式正确的加密会话，再去读钥匙串。
+        guard !blobs.isEmpty, let password = password() else { return [] }
+        let key = ChromiumSafeStorage.deriveKey(from: password)
+        var tokens: [String] = []
+        for blob in blobs {
+            guard let data = ChromiumSafeStorage.decrypt(blob, key: key),
+                  let payload = String(data: data, encoding: .utf8) else { continue }
+            for token in Self.accessTokens(fromSessionsPayload: payload) where !tokens.contains(token) {
+                tokens.append(token)
+            }
+        }
+        guard !tokens.isEmpty else { return [] }
+        let organization = organizationInfo(organizationOverride: organizationOverride, itemTableKeys: rows.map(\.key))
+        return tokens.map {
+            DevinSessionImporter.SessionInfo(
+                accessToken: $0,
+                organization: organization.organization,
+                internalOrganizationID: organization.internalOrganizationID,
+                sourceLabel: Self.sourceLabel
+            )
+        }
+    }
+
+    static func isSessionKey(_ key: String) -> Bool {
+        guard key.hasPrefix("secret://"),
+              let data = String(key.dropFirst("secret://".count)).data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+        return object["key"] as? String == sessionsSecretName
+    }
+
+    // 值是 Electron Buffer 的 JSON，先校验 v10 加密格式，不合格的不值得去读钥匙串。
+    static func bufferData(fromSecretValue raw: String) -> Data? {
+        guard let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["type"] as? String == "Buffer",
+              let numbers = object["data"] as? [NSNumber],
+              numbers.allSatisfy({ CFGetTypeID($0) != CFBooleanGetTypeID() })
+        else { return nil }
+        let bytes = numbers.compactMap { UInt8(exactly: $0.doubleValue) }
+        guard bytes.count == numbers.count, bytes.count > 3,
+              (bytes.count - 3).isMultiple(of: 16), bytes.starts(with: "v10".utf8)
+        else { return nil }
+        return Data(bytes)
+    }
+
+    // VS Code 的登录会话格式：[{id, accessToken, account, scopes}]。
+    static func accessTokens(fromSessionsPayload payload: String) -> [String] {
+        guard let data = payload.data(using: .utf8),
+              let sessions = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return [] }
+        var tokens: [String] = []
+        for session in sessions {
+            guard let value = (session["accessToken"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty, !tokens.contains(value) else { continue }
+            tokens.append(value)
+        }
+        return tokens
+    }
+
+    static func internalOrganizationID(in text: String) -> String? {
+        guard let range = text.range(of: #"org[-_][A-Za-z0-9]{8,}"#, options: .regularExpression) else { return nil }
+        let value = String(text[range])
+        return DevinUsageFetcher.isInternalOrganizationID(value) ? value : nil
+    }
+
+    private func organizationInfo(
+        organizationOverride: String?,
+        itemTableKeys: [String]
+    ) -> (organization: String?, internalOrganizationID: String?) {
+        // Devin 应用的 Local Storage 和浏览器用同样的组织信息键。
+        if let storage = try? DevinSessionImporter.readLocalStorage(from: localStorageURL), !storage.isEmpty {
+            let info = DevinSessionImporter.organizationInfo(from: storage, organizationOverride: organizationOverride)
+            if info.organization != nil || info.internalOrganizationID != nil { return info }
+        }
+        // 明确指定的组织优先，不能借用数据库里别的组织的内部 ID。
+        if let override = DevinUsageFetcher.normalizedOrganization(organizationOverride) {
+            guard override.hasPrefix("organizations/") else { return (override, nil) }
+            return (override, String(override.dropFirst("organizations/".count)))
+        }
+        // 数据库里只出现一个内部组织 ID 时才用它，多个就无法判断。
+        let ids = Set(itemTableKeys.compactMap(Self.internalOrganizationID(in:)))
+        if ids.count == 1, let id = ids.first { return ("organizations/\(id)", id) }
+        return (nil, nil)
+    }
+
+    private struct ItemRow {
+        let key: String
+        let value: String
+    }
+
+    // 复制数据库和 WAL 到临时目录再读，避免 SQLite 在应用目录里生成附属文件。
+    private func itemTableRows() throws -> [ItemRow] {
+        let source = databaseURL.resolvingSymlinksInPath()
+        guard FileManager.default.fileExists(atPath: source.path) else { return [] }
+        let directory = FileManager.default.temporaryDirectory.appending(path: "yomi-devin-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let copy = directory.appending(path: "state.vscdb")
+        try FileManager.default.copyItem(at: source, to: copy)
+        let wal = URL(fileURLWithPath: source.path + "-wal")
+        if FileManager.default.fileExists(atPath: wal.path) {
+            try FileManager.default.copyItem(at: wal, to: URL(fileURLWithPath: copy.path + "-wal"))
+        }
+
+        var database: OpaquePointer?
+        guard sqlite3_open_v2(copy.path, &database, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+            sqlite3_close(database)
+            throw DevinUsageError.parseFailed("Devin app database unreadable")
+        }
+        defer { sqlite3_close(database) }
+        sqlite3_busy_timeout(database, 250)
+        var statement: OpaquePointer?
+        let sql = "SELECT key, value FROM ItemTable WHERE key LIKE 'secret://%' OR key LIKE 'devin.desktopShell.%';"
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+            sqlite3_finalize(statement)
+            throw DevinUsageError.parseFailed("Devin app database unreadable")
+        }
+        defer { sqlite3_finalize(statement) }
+        var rows: [ItemRow] = []
+        while true {
+            let step = sqlite3_step(statement)
+            if step == SQLITE_DONE { break }
+            guard step == SQLITE_ROW else { throw DevinUsageError.parseFailed("Devin app database unreadable") }
+            guard let key = Self.text(statement, column: 0) else { continue }
+            if Self.isSessionKey(key), let value = Self.text(statement, column: 1) {
+                rows.append(ItemRow(key: key, value: value))
+            } else if key.hasPrefix("devin.desktopShell.") {
+                rows.append(ItemRow(key: key, value: ""))
+            }
+        }
+        return rows
+    }
+
+    private static func text(_ statement: OpaquePointer?, column: Int32) -> String? {
+        switch sqlite3_column_type(statement, column) {
+        case SQLITE_TEXT:
+            return sqlite3_column_text(statement, column).map { String(cString: $0) }
+        case SQLITE_BLOB:
+            guard let bytes = sqlite3_column_blob(statement, column) else { return nil }
+            let data = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, column)))
+            // 纯 ASCII 的 UTF-16LE 也是带 NUL 的合法 UTF-8，先按更严格的 UTF-16LE 判断。
+            if data.count.isMultiple(of: 2),
+               stride(from: 0, to: data.count, by: 2).allSatisfy({ (1..<128).contains(data[$0]) && data[$0 + 1] == 0 }),
+               let decoded = String(data: data, encoding: .utf16LittleEndian) {
+                return decoded
+            }
+            return String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16LittleEndian)
+        default:
+            return nil
+        }
     }
 }

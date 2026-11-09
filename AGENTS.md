@@ -14,7 +14,7 @@ Yomi 是使用 SwiftUI 与 AppKit 构建的原生 macOS 应用，用悬浮侧边
 - 应用入口：`Yomi/YomiApp.swift`
 - 窗口与悬浮面板：`Yomi/AppDelegate.swift`
 - 参考仓库：
-  - 本机 `/Users/seaony/code/CodexBar`，上游为 [steipete/CodexBar](https://github.com/steipete/CodexBar)。Provider 数据逻辑以它为准；最近一次同步对应 CodexBar 0.83.0（2026-10-30），只有 Vercel 个人 AI Gateway 预算未同步。
+  - 本机 `/Users/seaony/code/CodexBar`，上游为 [steipete/CodexBar](https://github.com/steipete/CodexBar)。Provider 数据逻辑以它为准；最近一次同步对应 CodexBar 0.84.0 之后的 main（7447bc77c，2026-11-07），只有 Vercel 个人 AI Gateway 预算未同步。
   - [vinzdg/codenotch](https://github.com/vinzdg/codenotch)（MIT，本机未克隆）：同样把 Claude Code、Cursor、Codex、Antigravity 的额度固定在屏幕边缘，可参考其界面与交互。
 
 ## 代码位置

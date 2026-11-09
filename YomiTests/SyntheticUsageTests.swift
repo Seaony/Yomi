@@ -19,7 +19,7 @@ struct SyntheticUsageTests {
 
         let usage = try SyntheticUsageFetcher.parse(data, now: now).toProviderUsage()
 
-        #expect(usage.windows.map(\.label) == ["Five-hour quota", "Weekly tokens"])
+        #expect(usage.windows.map(\.label) == ["Five-hour quota", "Weekly quota"])
         #expect(usage.windows.map(\.usedFraction) == [0.25, 0.75])
         #expect(usage.windows[0].resetsAt == Date(timeIntervalSince1970: 1_735_689_600))
         #expect(usage.windows[1].detail == "1 day window")
@@ -49,7 +49,7 @@ struct SyntheticUsageTests {
         let snapshot = try SyntheticUsageFetcher.parse(data)
         let usage = snapshot.toProviderUsage()
 
-        #expect(usage.windows.map(\.label) == ["Weekly tokens", "Search hourly"])
+        #expect(usage.windows.map(\.label) == ["Weekly quota", "Search hourly"])
         #expect(usage.windows.map(\.usedFraction) == [0.02, 0.008])
         #expect(snapshot.slots[1]?.cost?.limit == 36)
         #expect(abs((snapshot.slots[1]?.cost?.used ?? 0) - 0.7) < 0.000_000_1)
@@ -74,7 +74,7 @@ struct SyntheticUsageTests {
         let snapshot = try SyntheticUsageFetcher.parse(data)
         let usage = snapshot.toProviderUsage()
 
-        #expect(usage.windows.map(\.label) == ["Five-hour quota", "Weekly tokens", "Search hourly"])
+        #expect(usage.windows.map(\.label) == ["Five-hour quota", "Weekly quota", "Search hourly"])
         #expect(usage.windows.map(\.usedFraction) == [0.4, 0.3, 0.75])
         #expect(usage.windows[0].detail == "5 hours window")
         #expect(snapshot.slots[1]?.nextRegenFraction == 0.05)
@@ -118,6 +118,94 @@ struct SyntheticUsageTests {
 
         #expect(usage.windows.map(\.usedFraction) == [0.5, 0.25])
         #expect(usage.windows[0].detail == "1 hour window")
+    }
+
+    @Test
+    func searchDoesNotReviveLegacySubscriptionCounter() throws {
+        let data = Data(#"""
+        {
+          "subscription": { "limit": 500, "requests": 0 },
+          "search": { "hourly": { "limit": 250, "requests": 5 } }
+        }
+        """#.utf8)
+
+        let snapshot = try SyntheticUsageFetcher.parse(data)
+
+        #expect(snapshot.slots[0] == nil)
+        #expect(snapshot.slots[1] == nil)
+        #expect(snapshot.slots[2]?.usedFraction == 0.02)
+    }
+
+    @Test
+    func subscriptionOnlyResponsesRetainLegacyCounter() throws {
+        let snapshot = try SyntheticUsageFetcher.parse(Data(#"{ "subscription": { "limit": 500, "requests": 10 } }"#.utf8))
+
+        #expect(snapshot.slots.count == 1)
+        #expect(snapshot.slots[0]?.usedFraction == 0.02)
+    }
+
+    @Test(arguments: [false, true])
+    func planWeeklyQuotaIgnoresRetiredSubscriptionAndPreservesSearch(wrapped: Bool) throws {
+        let body = #"""
+        {
+          "subscription": { "limit": 500, "requests": 0, "renewsAt": "2026-10-31T15:15:05.743Z" },
+          "rollingFiveHourLimit": { "percentRemaining": 50 },
+          "search": {
+            "hourly": { "limit": 250, "requests": 0, "renewsAt": "2026-10-31T11:15:05.743Z" }
+          },
+          "planWeeklyLimit": {
+            "nextRegenAt": "2026-10-31T12:14:13.000Z",
+            "percentRemaining": 99.47981765714286,
+            "nextRegenPercent": 2
+          }
+        }
+        """#
+        let snapshot = try SyntheticUsageFetcher.parse(Data((wrapped ? "{\"data\":\(body)}" : body).utf8))
+        let usage = snapshot.toProviderUsage()
+
+        #expect(snapshot.slots[0] == nil)
+        let weekly = try #require(snapshot.slots[1])
+        #expect(abs(weekly.usedFraction - 0.0052018234285714) < 0.000_000_01)
+        #expect(weekly.resetsAt == ISO8601DateFormatter().date(from: "2026-10-31T12:14:13Z"))
+        #expect(weekly.nextRegenFraction == 0.02)
+        #expect(snapshot.slots[2]?.usedFraction == 0)
+        #expect(usage.providerCost == nil)
+        #expect(usage.windows.map(\.label) == ["Weekly quota", "Search hourly"])
+        #expect(usage.windows[0].detail == AppLocalization.text(
+            "下次恢复后剩余 100%", "100% left after next regen"
+        ))
+    }
+
+    @Test(arguments: [0.0, 0.5, 1.0, 100.0])
+    func planWeeklyPercentagesUsePercentagePointsNearExhaustion(remaining: Double) throws {
+        let data = Data(#"""
+        { "planWeeklyLimit": { "percentRemaining": \#(remaining), "nextRegenPercent": 0.5 } }
+        """#.utf8)
+
+        let snapshot = try SyntheticUsageFetcher.parse(data)
+
+        #expect(snapshot.slots[0] == nil)
+        #expect(abs((snapshot.slots[1]?.usedFraction ?? -1) - (100 - remaining) / 100) < 0.000_000_1)
+        #expect(snapshot.slots[1]?.nextRegenFraction == 0.005)
+        #expect(snapshot.slots[2] == nil)
+    }
+
+    @Test
+    func legacyRollingAndWeeklyQuotasRetainFractionalPercentages() throws {
+        let data = Data(#"""
+        {
+          "rollingFiveHourLimit": { "percentRemaining": 0.75, "tickPercent": 0.02 },
+          "weeklyTokenLimit": { "percentRemaining": 0.98 },
+          "search": { "hourly": { "limit": 250, "requests": 5 } }
+        }
+        """#.utf8)
+
+        let snapshot = try SyntheticUsageFetcher.parse(data)
+
+        #expect(snapshot.slots[0]?.usedFraction == 0.25)
+        #expect(snapshot.slots[0]?.nextRegenFraction == 0.02)
+        #expect(abs((snapshot.slots[1]?.usedFraction ?? -1) - 0.02) < 0.000_000_1)
+        #expect(snapshot.slots[2]?.usedFraction == 0.02)
     }
 
     @Test

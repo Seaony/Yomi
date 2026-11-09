@@ -309,13 +309,43 @@ nonisolated enum OllamaUsageFetcher {
         var details: [UsageDetail] = []
         var monthlyPercent: Double?
         var resetsAt: Date?
+        var sessionPercent: Double?
+        var sessionResetsAt: Date?
+        var weeklyPercent: Double?
+        var weeklyResetsAt: Date?
+        func resetDate(_ value: Any?) throws -> Date? {
+            guard let value, !(value is NSNull) else { return nil }
+            guard let raw = value as? String,
+                  raw.range(of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"#,
+                            options: .regularExpression) != nil,
+                  let date = isoDate(raw), validCalendarDate(raw) else { throw invalid }
+            return date
+        }
+        // 旧版接口返回剩余百分比，转成已用百分比
+        func legacyWindow(_ value: Any?) throws -> (Double, Date?)? {
+            guard let value, !(value is NSNull) else { return nil }
+            guard let entry = value as? [String: Any],
+                  let remaining = amount(entry["remaining_percent"]), (0...100).contains(remaining) else { throw invalid }
+            return (100 - remaining, try resetDate(entry["resets_at"]))
+        }
         if let purchased = root["purchased"], !(purchased is NSNull) {
             guard let wallet = purchased as? [String: Any], let balance = amount(wallet["balance_usd"]) else {
                 throw invalid
             }
             details.append(UsageDetail(id: "ollama-credit-balance", label: "Credit balance", value: usd(balance)))
         }
-        if let included = root["included"], !(included is NSNull) {
+        // 同时出现两种结构时以旧版 session/weekly 为准，月度结构作为兜底
+        let legacy = root["included"] as? [String: Any]
+        if let legacy, [legacy["session"], legacy["weekly"]].contains(where: { $0 != nil && !($0 is NSNull) }) {
+            if let session = try legacyWindow(legacy["session"]) {
+                sessionPercent = session.0
+                sessionResetsAt = session.1
+            }
+            if let weekly = try legacyWindow(legacy["weekly"]) {
+                weeklyPercent = weekly.0
+                weeklyResetsAt = weekly.1
+            }
+        } else if let included = root["included"], !(included is NSNull) {
             guard let wallet = included as? [String: Any],
                   let allowance = amount(wallet["allowance_usd"]), allowance >= 0,
                   let balance = amount(wallet["balance_usd"]) else { throw invalid }
@@ -325,19 +355,14 @@ nonisolated enum OllamaUsageFetcher {
             if allowance > 0 { monthlyPercent = min(100, used / allowance * 100) }
             if let period = wallet["period"], !(period is NSNull) {
                 guard let period = period as? [String: Any] else { throw invalid }
-                if let until = period["until"], !(until is NSNull) {
-                    guard let raw = until as? String,
-                          raw.range(of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"#,
-                                    options: .regularExpression) != nil,
-                          let date = isoDate(raw), validCalendarDate(raw) else { throw invalid }
-                    resetsAt = date
-                }
+                resetsAt = try resetDate(period["until"])
             }
         }
-        guard !details.isEmpty else { throw invalid }
+        guard !details.isEmpty || sessionPercent != nil || weeklyPercent != nil else { throw invalid }
         return providerUsage(Snapshot(
             plan: nil, email: nil, monthlyUsedPercent: monthlyPercent, monthlyResetsAt: resetsAt,
-            sessionUsedPercent: nil, weeklyUsedPercent: nil, sessionResetsAt: nil, weeklyResetsAt: nil,
+            sessionUsedPercent: sessionPercent, weeklyUsedPercent: weeklyPercent,
+            sessionResetsAt: sessionResetsAt, weeklyResetsAt: weeklyResetsAt,
             details: details
         ), now: now)
     }

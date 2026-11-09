@@ -196,6 +196,49 @@ struct OllamaUsageTests {
         #expect(recorder.requests.first?.httpMethod == "GET")
     }
 
+    @Test func legacyAPIRemainingPercentagesBecomeSessionAndWeeklyWindows() throws {
+        let data = Data(#"""
+        {"included":{
+          "session":{"remaining_percent":100,"resets_at":"2026-11-06T18:00:00Z"},
+          "weekly":{"remaining_percent":84.96,"resets_at":"2026-11-09T00:00:00Z"}},
+         "purchased":{"balance_usd":0}}
+        """#.utf8)
+
+        let usage = try OllamaUsageFetcher.parseAPIBalance(data)
+
+        #expect(usage.windows.map(\.id) == ["ollama-session", "ollama-weekly"])
+        #expect(usage.windows[0].usedFraction == 0)
+        #expect(usage.windows[0].resetsAt == ISO8601DateFormatter().date(from: "2026-11-06T18:00:00Z"))
+        #expect(abs(usage.windows[1].usedFraction - 0.1504) < 0.000_01)
+        #expect(usage.windows[1].resetsAt == ISO8601DateFormatter().date(from: "2026-11-09T00:00:00Z"))
+        #expect(usage.details.map(\.id) == ["ollama-credit-balance"])
+        #expect(usage.balance == "$0.00")
+    }
+
+    @Test func weeklyOnlyLegacyAPIBalanceDoesNotInventSessionOrCreditRow() throws {
+        let usage = try OllamaUsageFetcher.parseAPIBalance(Data(#"{"included":{"weekly":{"remaining_percent":58}}}"#.utf8))
+
+        #expect(usage.windows.map(\.id) == ["ollama-weekly"])
+        #expect(usage.windows[0].usedFraction == 0.42)
+        #expect(usage.windows[0].resetsAt == nil)
+        #expect(usage.details.isEmpty)
+    }
+
+    @Test(arguments: [
+        #"{"included":{"session":{"remaining_percent":-1,"resets_at":"2026-11-06T18:00:00Z"}}}"#,
+        #"{"included":{"session":{"remaining_percent":101,"resets_at":"2026-11-06T18:00:00Z"}}}"#,
+        #"{"included":{"session":{"remaining_percent":"NaN","resets_at":"2026-11-06T18:00:00Z"}}}"#,
+        #"{"included":{"session":{"remaining_percent":null,"resets_at":"2026-11-06T18:00:00Z"}}}"#,
+        #"{"included":{"session":{"remaining_percent":true,"resets_at":"2026-11-06T18:00:00Z"}}}"#,
+        #"{"included":{"session":{"remaining_percent":50,"resets_at":"2026-02-31T00:00:00Z"}}}"#,
+        #"{"included":{"session":[]}}"#,
+    ])
+    func malformedLegacyAPIPercentagesFailSafely(body: String) {
+        #expect(throws: OllamaUsageError.self) {
+            _ = try OllamaUsageFetcher.parseAPIBalance(Data(body.utf8))
+        }
+    }
+
     @Test(arguments: [401, 403])
     func rejectedAPIKeyNeverFallsThroughToCatalog(status: Int) async {
         let recorder = OllamaRequestRecorder()

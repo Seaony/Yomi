@@ -84,7 +84,7 @@ nonisolated struct ClaudeCLIUsageSnapshot: Sendable, Equatable {
         let resetDescription: String?
     }
 
-    let sessionPercentLeft: Int
+    let sessionPercentLeft: Int?
     let weeklyPercentLeft: Int?
     let modelName: String?
     let modelPercentLeft: Int?
@@ -305,13 +305,12 @@ nonisolated enum ClaudeCLIUsageFetcher {
         let context = LabelContext(panel)
         let sessionLeft = extractPercent(label: "Current session", context: context)
         let weeklyLeft = extractPercent(label: "Current week (all models)", context: context)
-        let modelLabels = [
-            "Current week (Opus)",
-            "Current week (Sonnet only)",
-            "Current week (Sonnet)",
-        ]
         let modelLabel = modelLabels.first { extractPercent(label: $0, context: context) != nil }
-        guard let sessionLeft else {
+        let modelLeft = modelLabel.flatMap { extractPercent(label: $0, context: context) }
+        let scoped = scopedWeekly(context)
+        // 只有周额度的套餐没有会话行；有会话标签却没有数值时说明面板不完整，仍按失败处理。
+        if sessionLeft == nil,
+           hasSessionLabel(context) || (weeklyLeft == nil && modelLeft == nil && scoped.isEmpty) {
             throw ClaudeCLIUsageError.parseFailed("Missing Current session.")
         }
 
@@ -324,8 +323,8 @@ nonisolated enum ClaudeCLIUsageFetcher {
             sessionPercentLeft: sessionLeft,
             weeklyPercentLeft: weeklyLeft,
             modelName: modelLabel.flatMap(weeklyModelName).map { $0 == "Sonnet only" ? "Sonnet" : $0 },
-            modelPercentLeft: modelLabel.flatMap { extractPercent(label: $0, context: context) },
-            scopedWeekly: scopedWeekly(context),
+            modelPercentLeft: modelLeft,
+            scopedWeekly: scoped,
             sessionResetDescription: extractReset(label: "Current session", context: context),
             weeklyResetDescription: hasWeekly
                 ? extractReset(label: "Current week (all models)", context: context)
@@ -355,13 +354,16 @@ nonisolated enum ClaudeCLIUsageFetcher {
             )
         }
 
-        var windows = [window(
-            id: "claude-session",
-            label: "Session",
-            percentLeft: snapshot.sessionPercentLeft,
-            reset: snapshot.sessionResetDescription,
-            expectedWindow: 5 * 60 * 60
-        )]
+        var windows: [UsageWindow] = []
+        if let left = snapshot.sessionPercentLeft {
+            windows.append(window(
+                id: "claude-session",
+                label: "Session",
+                percentLeft: left,
+                reset: snapshot.sessionResetDescription,
+                expectedWindow: 5 * 60 * 60
+            ))
+        }
         if let left = snapshot.weeklyPercentLeft {
             windows.append(window(
                 id: "claude-weekly",
@@ -513,6 +515,7 @@ nonisolated enum ClaudeCLIUsageFetcher {
         }
         let deadline = Date().addingTimeInterval(timeout)
         var completionSeenAt: Date?
+        var usageSeenAt: Date?
         var lastEnterAt = Date()
         while process.isRunning, Date() < deadline {
             if cancellation.isCancelled() {
@@ -527,20 +530,28 @@ nonisolated enum ClaudeCLIUsageFetcher {
             if mode == .pty {
                 let text = stripANSI(String(decoding: data, as: UTF8.self))
                 let normalized = normalizeLabel(text)
-                if normalized.contains("doyoutrustthefilesinthisfolder") {
-                    try? inputHandle?.write(contentsOf: Data("y\r".utf8))
-                } else if normalized.contains("quickcheck")
-                    || normalized.contains("readytocodehere")
-                    || normalized.contains("pressentertocontinue")
-                    || normalized.contains("showplanusagelimits") {
-                    try? inputHandle?.write(contentsOf: Data("\r".utf8))
+                if usageSeenAt == nil, usageComplete(text) { usageSeenAt = Date() }
+                // 额度面板打开后不再发按键，避免打断它刷新按模型的周额度。
+                if usageSeenAt == nil {
+                    if normalized.contains("doyoutrustthefilesinthisfolder") {
+                        try? inputHandle?.write(contentsOf: Data("y\r".utf8))
+                    } else if normalized.contains("quickcheck")
+                        || normalized.contains("readytocodehere")
+                        || normalized.contains("pressentertocontinue")
+                        || normalized.contains("showplanusagelimits") {
+                        try? inputHandle?.write(contentsOf: Data("\r".utf8))
+                    }
                 }
-                if usageComplete(text) || normalized.contains("failedtoloadusagedata")
+                // 底部还是 "Refreshing… Esc to cancel" 时周额度还在重绘，等它消失再收尾，最长等到探测超时。
+                let refreshing = usageSeenAt != nil && isRefreshingUsage(normalized)
+                if (usageSeenAt != nil && !refreshing) || normalized.contains("failedtoloadusagedata")
                     || isSubscriptionNoticeOnly(text) {
                     completionSeenAt = completionSeenAt ?? Date()
                     if Date().timeIntervalSince(completionSeenAt!) >= 2 { break }
+                } else {
+                    completionSeenAt = nil
                 }
-                if Date().timeIntervalSince(lastEnterAt) >= 0.8 {
+                if usageSeenAt == nil, Date().timeIntervalSince(lastEnterAt) >= 0.8 {
                     try? inputHandle?.write(contentsOf: Data("\r".utf8))
                     lastEnterAt = Date()
                 }
@@ -601,6 +612,12 @@ nonisolated enum ClaudeCLIUsageFetcher {
     private static func usageComplete(_ text: String) -> Bool {
         let context = LabelContext(quotaPanel(latestUsagePanel(text) ?? text))
         return extractPercent(label: "Current session", context: context) != nil
+    }
+
+    // 传入已归一化（只剩小写字母和数字）的输出，最后一个 "Esc to cancel" 前紧跟 "Refreshing" 就表示还在刷新。
+    static func isRefreshingUsage(_ normalized: String) -> Bool {
+        guard let footer = normalized.range(of: "esctocancel", options: .backwards) else { return false }
+        return normalized[..<footer.lowerBound].hasSuffix("refreshing")
     }
 
     private static func quotaPanel(_ text: String) -> String {
@@ -670,9 +687,27 @@ nonisolated enum ClaudeCLIUsageFetcher {
         return String(text[range])
     }
 
+    private static let modelLabels = [
+        "Current week (Opus)",
+        "Current week (Sonnet only)",
+        "Current week (Sonnet)",
+    ]
+
+    // 允许一个字符的乱码，例如终端重绘出的 "Curretsession"。
+    private static func hasSessionLabel(_ context: LabelContext) -> Bool {
+        context.normalizedLines.contains {
+            $0.contains("currentsession") || editDistance($0, "currentsession") <= 1
+        }
+    }
+
     private static func isStillLoading(_ text: String) -> Bool {
         let normalized = normalizeLabel(text)
-        return normalized.contains("loadingusage") && !usageComplete(text)
+        guard normalized.contains("loadingusage"), !usageComplete(text) else { return false }
+        // 只有周额度的套餐没有会话行，已经出现周额度数值就不算还在加载。
+        let context = LabelContext(text)
+        return extractPercent(label: "Current week (all models)", context: context) == nil
+            && !modelLabels.contains { extractPercent(label: $0, context: context) != nil }
+            && scopedWeekly(context).isEmpty
     }
 
     private static func isSubscriptionNoticeOnly(_ text: String) -> Bool {

@@ -267,14 +267,128 @@ nonisolated enum AlibabaTokenPlanFetcher {
         return value
     }
 
-    static func cliArguments(region: Region) -> [String] {
-        let command = region.isPersonal
-            ? ["console", "call", "--api", personalUsageAPI, "--data", "{}"]
-            : ["usage", "token-plan"]
-        return command + [
+    static let teamPageSize = 10
+    static let maxTeamSeats = 1000
+
+    static func cliArguments(region: Region, pageNo: Int = 1) -> [String] {
+        // Team 额度按席位分页读取，区域由 BAILIAN_BASE_URL 决定，不认 console-region/site
+        guard region.isPersonal else {
+            return [
+                "token-plan", "list-seats", "--page-no", String(pageNo),
+                "--page-size", String(teamPageSize), "--output", "json",
+            ]
+        }
+        return [
+            "console", "call", "--api", personalUsageAPI, "--data", "{}",
             "--console-region", region.currentRegionID,
             "--console-site", region.cliConsoleSite, "--output", "json",
         ]
+    }
+
+    static func teamBaseURL(region: Region) -> String {
+        region == .international ? "https://dashscope-intl.aliyuncs.com" : "https://dashscope.aliyuncs.com"
+    }
+
+    struct TeamSeatPage: Decodable {
+        let success: Bool
+        let data: SeatPage
+
+        enum CodingKeys: String, CodingKey {
+            case success = "Success", data = "Data"
+        }
+
+        struct SeatPage: Decodable {
+            let items: [Seat]
+            let total: Int
+            let pageNo: Int
+            let pageSize: Int
+
+            enum CodingKeys: String, CodingKey {
+                case items = "Items", total = "Total", pageNo = "PageNo", pageSize = "PageSize"
+            }
+        }
+
+        struct Seat: Decodable {
+            let seatID: String
+            let status: String
+            let startTime: Double?
+            let endTime: Double?
+            let equityList: [Equity]?
+
+            enum CodingKeys: String, CodingKey {
+                case seatID = "SeatId", status = "Status", startTime = "StartTime", endTime = "EndTime"
+                case equityList = "EquityList"
+            }
+        }
+
+        struct Equity: Decodable {
+            let type: String
+            let startTime: Double?
+            let endTime: Double?
+            let total: Double?
+            let remaining: Double?
+
+            enum CodingKeys: String, CodingKey {
+                case type = "EquityType", startTime = "CycleStartTime", endTime = "CycleEndTime"
+                case total = "CycleTotalValue", remaining = "CycleSurplusValue"
+            }
+        }
+    }
+
+    static func parseTeamSeatPage(_ data: Data, pageNo: Int) throws -> TeamSeatPage {
+        guard let page = try? JSONDecoder().decode(TeamSeatPage.self, from: data),
+              page.success, page.data.pageNo == pageNo, page.data.pageSize == teamPageSize,
+              (0...maxTeamSeats).contains(page.data.total),
+              page.data.items.count <= page.data.pageSize
+        else { throw UsageCollectionError.unreadableResponse }
+        return page
+    }
+
+    static func parseTeamSeats(_ pages: [TeamSeatPage], now: Date = Date()) throws -> ProviderUsage {
+        guard let totalSeats = pages.first?.data.total,
+              pages.allSatisfy({ $0.data.total == totalSeats }),
+              pages.reduce(0, { $0 + $1.data.items.count }) == totalSeats
+        else { throw UsageCollectionError.unreadableResponse }
+
+        var seenSeats = Set<String>()
+        var total = 0.0
+        var remaining = 0.0
+        var cycleEnds = Set<Double>()
+        let milliseconds = now.timeIntervalSince1970 * 1000
+        for seat in pages.flatMap(\.data.items) {
+            guard !seat.seatID.isEmpty, seenSeats.insert(seat.seatID).inserted else {
+                throw UsageCollectionError.unreadableResponse
+            }
+            guard seat.status == "NORMAL" else { continue }
+            guard let start = seat.startTime, let end = seat.endTime,
+                  start.isFinite, end.isFinite, start > 0, end > start
+            else { throw UsageCollectionError.unreadableResponse }
+            guard start <= milliseconds, milliseconds < end else { continue }
+            // 每个席位只有一份当前周期的点数，不合并资源包或历史周期
+            let credits = (seat.equityList ?? []).filter { $0.type == "CREDITS" }
+            guard credits.count == 1, let equity = credits.first,
+                  let cycleStart = equity.startTime, let cycleEnd = equity.endTime,
+                  cycleStart.isFinite, cycleEnd.isFinite, cycleStart > 0,
+                  cycleStart <= milliseconds, milliseconds < cycleEnd,
+                  let seatTotal = equity.total, let seatRemaining = equity.remaining,
+                  seatTotal.isFinite, seatRemaining.isFinite, seatTotal >= 0,
+                  seatRemaining >= 0, seatRemaining <= seatTotal
+            else { throw UsageCollectionError.unreadableResponse }
+            total += seatTotal
+            remaining += seatRemaining
+            cycleEnds.insert(cycleEnd)
+        }
+        guard total > 0, total.isFinite, remaining.isFinite else { throw UsageCollectionError.unreadableResponse }
+        let used = total - remaining
+        // 各席位周期不同时没有统一的重置时间
+        let resetsAt = cycleEnds.count == 1 ? cycleEnds.first.map { Date(timeIntervalSince1970: $0 / 1000) } : nil
+        return usage(windows: [UsageWindow(
+            id: "alibaba-token-plan-monthly", label: "Credits",
+            usedFraction: used / total, resetsAt: resetsAt,
+            detail: AppLocalization.text(
+                "已用 \(format(used)) / \(format(total)) 点数", "\(format(used)) / \(format(total)) credits used"
+            )
+        )], plan: "Token Plan", now: now)
     }
 
     static func extractSECToken(_ html: String) -> String? {
@@ -307,38 +421,68 @@ nonisolated enum AlibabaTokenPlanFetcher {
                 .first(where: FileManager.default.isExecutableFile(atPath:))
             else { throw UsageCollectionError.missingCredential }
 
-            let process = Process()
-            let output = Pipe()
-            let errors = Pipe()
-            process.executableURL = URL(fileURLWithPath: binary)
-            process.arguments = cliArguments(region: region)
             let allowed = Set([
                 "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ",
                 "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
                 "http_proxy", "https_proxy", "all_proxy", "no_proxy",
             ])
-            process.environment = environment.filter { allowed.contains($0.key) }
-            process.environment?["PATH"] = directories.joined(separator: ":")
-            process.standardOutput = output
-            process.standardError = errors
-            try process.run()
-            try? output.fileHandleForWriting.close()
-            try? errors.fileHandleForWriting.close()
-            let outputTask = Task.detached {
-                output.fileHandleForReading.readDataToEndOfFile()
+            var childEnvironment = environment.filter { allowed.contains($0.key) }
+            childEnvironment["PATH"] = directories.joined(separator: ":")
+            guard !region.isPersonal else {
+                let data = try await runCLI(binary: binary, arguments: cliArguments(region: region), environment: childEnvironment)
+                return try parseCLI(data: data, now: now)
             }
-            let errorTask = Task.detached {
-                errors.fileHandleForReading.readDataToEndOfFile()
-            }
-            let data = await outputTask.value
-            let errorData = await errorTask.value
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else {
-                let message = String(data: errorData, encoding: .utf8) ?? "bl"
-                throw UsageCollectionError.commandFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
-            }
-            return try parseCLI(data: data, now: now)
+            // Team 的接口地址由我们按区域固定写入，不继承外部环境里的地址或凭据
+            childEnvironment["BAILIAN_BASE_URL"] = teamBaseURL(region: region)
+            childEnvironment["DASHSCOPE_BASE_URL"] = teamBaseURL(region: region)
+            var pages: [TeamSeatPage] = []
+            var received = 0
+            repeat {
+                try Task.checkCancellation()
+                let pageNo = pages.count + 1
+                let data = try await runCLI(
+                    binary: binary, arguments: cliArguments(region: region, pageNo: pageNo), environment: childEnvironment
+                )
+                let page = try parseTeamSeatPage(data, pageNo: pageNo)
+                received += page.data.items.count
+                // 页数据前后不一致或中途截断时直接失败，不展示不完整的额度
+                guard received <= page.data.total,
+                      pages.first.map({ $0.data.total == page.data.total }) ?? true,
+                      received == page.data.total || page.data.items.count == teamPageSize
+                else { throw UsageCollectionError.unreadableResponse }
+                pages.append(page)
+                if received == page.data.total { break }
+            } while pages.count < maxTeamSeats / teamPageSize
+            return try parseTeamSeats(pages, now: now)
         }.value
+    }
+
+    private static func runCLI(binary: String, arguments: [String], environment: [String: String]) async throws -> Data {
+        let process = Process()
+        let output = Pipe()
+        let errors = Pipe()
+        process.executableURL = URL(fileURLWithPath: binary)
+        process.arguments = arguments
+        process.environment = environment
+        process.standardOutput = output
+        process.standardError = errors
+        try process.run()
+        try? output.fileHandleForWriting.close()
+        try? errors.fileHandleForWriting.close()
+        let outputTask = Task.detached {
+            output.fileHandleForReading.readDataToEndOfFile()
+        }
+        let errorTask = Task.detached {
+            errors.fileHandleForReading.readDataToEndOfFile()
+        }
+        let data = await outputTask.value
+        let errorData = await errorTask.value
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let message = String(data: errorData, encoding: .utf8) ?? "bl"
+            throw UsageCollectionError.commandFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return data
     }
 
     private static func fetchTeam(

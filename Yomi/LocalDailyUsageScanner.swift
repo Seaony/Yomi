@@ -1421,8 +1421,9 @@ actor LocalDailyUsageScanner {
         guard root.path.withCString({ fstatat(AT_FDCWD, $0, &status, 0) }) == 0 else { return errno == ENOENT || errno == ENOTDIR ? [] : nil }
         guard access(root.path, R_OK | X_OK) == 0 else { return nil }
         var unreadable = false
+        // 入口目录本身是符号链接时系统不会进去遍历，先解析成真实目录；子目录里的链接仍然不跟随。
         guard let enumerator = FileManager.default.enumerator(
-            at: root,
+            at: root.resolvingSymlinksInPath(),
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles, .skipsPackageDescendants],
             errorHandler: { _, error in

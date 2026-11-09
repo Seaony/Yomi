@@ -596,15 +596,34 @@ nonisolated enum MistralUsageFetcher {
     }
 
     private static func responseData(for request: URLRequest, session: URLSession) async throws -> Data {
-        let (data, response) = try await session.data(for: request)
+        // 不跟随跨域跳转：会话过期时 Mistral 会跳到 auth.mistral.ai 登录页，跟过去拿不到数据还会带出 Cookie
+        let requestSession = URLSession(
+            configuration: session.configuration,
+            delegate: MistralRedirectGuard(),
+            delegateQueue: nil
+        )
+        defer { requestSession.finishTasksAndInvalidate() }
+        let (data, response) = try await requestSession.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw MistralUsageError.apiError("Invalid response")
         }
         switch http.statusCode {
         case 200: return data
         case 401, 403: throw MistralUsageError.invalidCredentials
+        // 跳到登录流程说明会话已失效，按 401 处理，自动模式会清掉缓存换浏览器会话重试
+        case 300...399 where isLoginRedirect(http): throw MistralUsageError.invalidCredentials
         default: throw MistralUsageError.apiError("HTTP \(http.statusCode)")
         }
+    }
+
+    private static func isLoginRedirect(_ response: HTTPURLResponse) -> Bool {
+        guard let location = response.value(forHTTPHeaderField: "Location"),
+              let target = URL(string: location, relativeTo: response.url)?.absoluteURL
+        else { return false }
+        let loginPath = "/self-service/login"
+        return target.scheme?.lowercased() == "https"
+            && target.host?.lowercased() == "auth.mistral.ai"
+            && (target.path == loginPath || target.path.hasPrefix(loginPath + "/"))
     }
 
     private static func validatedCSRFToken(_ raw: String) throws -> String {
@@ -934,5 +953,19 @@ nonisolated enum MistralUsageFetcher {
                 }
             }
         }
+    }
+}
+
+private nonisolated final class MistralRedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        let sameOrigin = request.url?.scheme?.lowercased() == "https"
+            && request.url?.host?.lowercased() == response.url?.host?.lowercased()
+        completionHandler(sameOrigin ? request : nil)
     }
 }

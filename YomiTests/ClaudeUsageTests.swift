@@ -103,6 +103,81 @@ struct ClaudeUsageTests {
     }
 
     @Test
+    func weeklyOnlyPlanKeepsSessionAbsent() throws {
+        // 按 CodexBar 抓到的 Max 20x 返回：没有五小时窗口时只显示周额度，不复制一份当会话。
+        let data = Data("""
+        {
+          "five_hour": null,
+          "seven_day": {"utilization": 0.0, "resets_at": "2026-11-09T16:59:59.902585+00:00"},
+          "seven_day_oauth_apps": null,
+          "seven_day_opus": null,
+          "seven_day_sonnet": null,
+          "extra_usage": {"is_enabled": false, "monthly_limit": null, "used_credits": null}
+        }
+        """.utf8)
+
+        let usage = try UsageParser.parse(data, descriptor: descriptor)
+
+        #expect(usage.windows.map(\.id) == ["claude-seven_day"])
+        #expect(usage.windows.map(\.label) == ["Weekly"])
+    }
+
+    @Test
+    func sonnetWithoutUtilizationDoesNotHideOpus() throws {
+        let data = Data("""
+        {
+          "five_hour": null,
+          "seven_day": null,
+          "seven_day_sonnet": {"resets_at": "2026-11-09T16:59:59Z"},
+          "seven_day_opus": {"utilization": 17, "resets_at": "2026-11-09T16:59:59Z"}
+        }
+        """.utf8)
+
+        let usage = try UsageParser.parse(data, descriptor: descriptor)
+
+        #expect(usage.windows.map(\.label) == ["Opus"])
+        #expect(usage.windows.first?.usedFraction == 0.17)
+    }
+
+    @Test
+    func oauthAppsFillsWeeklyLaneNextToSession() throws {
+        let data = Data("""
+        {
+          "five_hour": {"utilization": 12},
+          "seven_day_oauth_apps": {"utilization": 40}
+        }
+        """.utf8)
+
+        let usage = try UsageParser.parse(data, descriptor: descriptor)
+
+        #expect(usage.windows.map(\.label) == ["Session", "OAuth apps"])
+    }
+
+    @Test(arguments: [false, true])
+    func scopedWeeklyQuotaIsNotReplacedBySpendLimit(isWeb: Bool) throws {
+        let data = Data("""
+        {
+          "five_hour": null,
+          "seven_day": null,
+          "extra_usage": {"is_enabled": true, "monthly_limit": 10000, "used_credits": 2000},
+          "limits": [
+            {"kind": "weekly_scoped", "group": "weekly", "percent": 17, "is_active": true,
+             "resets_at": "2026-11-09T16:59:59Z",
+             "scope": {"model": {"display_name": "Fable"}}}
+          ]
+        }
+        """.utf8)
+
+        let usage = try UsageParser.parse(data, descriptor: descriptor, claudeWeb: isWeb)
+
+        #expect(usage.windows.isEmpty)
+        #expect(usage.additionalWindows.map(\.id) == ["claude-weekly-scoped-fable"])
+        #expect(usage.additionalWindows.first?.usedFraction == 0.17)
+        #expect(usage.providerCost?.period == "Monthly cap")
+        #expect(usage.providerCost?.limit == 100)
+    }
+
+    @Test
     func labelsOpusSpecificWindowCorrectly() throws {
         let data = Data(#"{"seven_day_opus":{"utilization":25}}"#.utf8)
 
@@ -314,6 +389,94 @@ struct ClaudeUsageTests {
         #expect(throws: (any Error).self) {
             try ClaudeCLIUsageFetcher.parse(prefix + "Current session\nCurrent week (all models)\n62% used")
         }
+    }
+
+    @Test
+    func CLIWeeklyOnlyPlanHasNoSession() throws {
+        // 没有 "Current session" 行时，不能把周额度挪进会话位置。
+        let snapshot = try ClaudeCLIUsageFetcher.parse("""
+        Settings:  Status   Config   Usage
+        Account: session@example.test
+        Current week (all models)
+        █████                                              10% used
+        Resets Nov 9 at 9am (America/New_York)
+        Current week (Sonnet only)
+        ▌                                                  1% used
+        Resets Nov 9 at 9am (America/New_York)
+        """)
+
+        #expect(snapshot.sessionPercentLeft == nil)
+        #expect(snapshot.sessionResetDescription == nil)
+        #expect(snapshot.weeklyPercentLeft == 90)
+        #expect(snapshot.modelPercentLeft == 99)
+
+        let usage = ClaudeCLIUsageFetcher.providerUsage(snapshot: snapshot, now: Date())
+        #expect(usage.windows.map(\.id) == ["claude-weekly", "claude-sonnet"])
+    }
+
+    @Test(arguments: ["Sonnet only", "Fable only"])
+    func CLIModelOnlyQuotaStaysUsableWithoutSessionOrWeekly(label: String) throws {
+        let snapshot = try ClaudeCLIUsageFetcher.parse("""
+        Settings: Status Config Usage
+        Current week (\(label))
+        █████ 17% used
+        Resets Nov 9 at 9am (America/New_York)
+        """)
+        let usage = ClaudeCLIUsageFetcher.providerUsage(snapshot: snapshot, now: Date())
+
+        #expect(snapshot.sessionPercentLeft == nil)
+        #expect(snapshot.weeklyPercentLeft == nil)
+        let window = label == "Sonnet only" ? usage.windows.first : usage.additionalWindows.first
+        #expect(window?.usedFraction == 0.17)
+        #expect(label == "Sonnet only" ? usage.additionalWindows.isEmpty : usage.windows.isEmpty)
+    }
+
+    @Test
+    func CLIWeeklyOnlyPanelAfterLoadingIsNotStillLoading() throws {
+        let snapshot = try ClaudeCLIUsageFetcher.parse("""
+        Settings: Status Config Usage
+        Loading usage data…
+        Current week (all models)
+        30% used
+        """)
+
+        #expect(snapshot.sessionPercentLeft == nil)
+        #expect(snapshot.weeklyPercentLeft == 70)
+    }
+
+    @Test
+    func CLIUsageCaptureWaitsForRefreshingFooterToClear() {
+        func normalized(_ text: String) -> String {
+            String(text.lowercased().unicodeScalars.filter(CharacterSet.alphanumerics.contains))
+        }
+        let refreshing = """
+        Current session
+        9% used
+        Current week (all models)
+        67% used
+        What's contributing to your limits usage?
+        Scanning local sessions…
+        Refreshing…
+        Esc to cancel
+        """
+        let finished = """
+        Current session
+        9% used
+        Current week (all models)
+        67% used
+        Current week (Example Model)
+        42% used
+        What's contributing to your limits usage?
+        Scanning local sessions…
+        Esc to cancel
+        """
+
+        #expect(ClaudeCLIUsageFetcher.isRefreshingUsage(normalized(refreshing)))
+        #expect(ClaudeCLIUsageFetcher.isRefreshingUsage(
+            normalized(refreshing.replacingOccurrences(of: "Refreshing…", with: "Refreshing..."))
+        ))
+        #expect(!ClaudeCLIUsageFetcher.isRefreshingUsage(normalized(refreshing + "\n" + finished)))
+        #expect(!ClaudeCLIUsageFetcher.isRefreshingUsage(normalized("Current session\n9% used")))
     }
 
     @Test

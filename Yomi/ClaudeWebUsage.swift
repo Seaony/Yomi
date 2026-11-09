@@ -80,7 +80,10 @@ enum ClaudeWebUsageFetcher {
         )
         usage.providerCost = cost
         usage.balance = balance
-        if usage.windows.isEmpty, let cost, cost.limit > 0 {
+        // 有按模型的周额度时不拿消费上限顶替主窗口。
+        if usage.windows.isEmpty,
+           !usage.additionalWindows.contains(where: { $0.id.hasPrefix("claude-weekly-scoped-") }),
+           let cost, cost.limit > 0 {
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = TimeZone(secondsFromGMT: 0)!
             usage.windows = [UsageWindow(

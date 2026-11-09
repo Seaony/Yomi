@@ -2,6 +2,7 @@ import Foundation
 
 nonisolated enum WorkBuddyUsageError: LocalizedError, Equatable {
     case missingCookies
+    case invalidUserAgent
     case invalidSession
     case requestFailed(Int)
     case apiError(String)
@@ -13,6 +14,11 @@ nonisolated enum WorkBuddyUsageError: LocalizedError, Equatable {
             AppLocalization.text(
                 "缺少 WorkBuddy Cookie，请粘贴 www.workbuddy.cn 的 Cookie 标头",
                 "Missing WorkBuddy cookies. Paste a Cookie header from www.workbuddy.cn."
+            )
+        case .invalidUserAgent:
+            AppLocalization.text(
+                "请把 WorkBuddy 的 User-Agent 作为单个请求标头值粘贴",
+                "Paste the WorkBuddy User-Agent as a single request header value."
             )
         case .invalidSession:
             AppLocalization.text(
@@ -50,9 +56,16 @@ nonisolated enum WorkBuddyUsageFetcher {
 
     static func fetch(
         credential: String?,
+        userAgent: String? = nil,
         session: URLSession,
         now: Date = Date()
     ) async throws -> ProviderUsage {
+        // 手动 User-Agent 只能是单行可见 ASCII，避免拼出额外请求头
+        let manualAgent = userAgent ?? ""
+        guard manualAgent.unicodeScalars.allSatisfy({ (0x20...0x7E).contains($0.value) }) else {
+            throw WorkBuddyUsageError.invalidUserAgent
+        }
+        let overrideAgent = manualAgent.trimmingCharacters(in: .whitespaces)
         var cookie = credential?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if cookie.lowercased().hasPrefix("cookie:") {
             cookie = String(cookie.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -61,7 +74,8 @@ nonisolated enum WorkBuddyUsageFetcher {
 
         var summary: [String: Any]?
         var acceptedAgent: String?
-        for agent in userAgents() {
+        // 会话绑定签发它的浏览器，填了 User-Agent 就只用它，留空时按本机 Chrome 版本猜
+        for agent in overrideAgent.isEmpty ? userAgents() : [Optional(overrideAgent)] {
             do {
                 summary = try await post(
                     path: "/billing/meter/get-user-resource-summary", body: [:],

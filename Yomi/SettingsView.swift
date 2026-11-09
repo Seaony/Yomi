@@ -809,6 +809,7 @@ private struct ProviderConfigurationView: View {
                         || descriptor.id.rawValue == "azureopenai"
                         || descriptor.id.rawValue == "deepgram"
                         || descriptor.id.rawValue == "chutes"
+                        || descriptor.id.rawValue == "siliconflow"
                         || descriptor.id.rawValue == "clawrouter"
                         || descriptor.id.rawValue == "sub2api"
                         || descriptor.id.rawValue == "wayfinder"
@@ -824,6 +825,8 @@ private struct ProviderConfigurationView: View {
                                 ? copy.text("Deepgram API URL（可选）", "Deepgram API URL (optional)")
                                 : descriptor.id.rawValue == "chutes"
                                 ? copy.text("Chutes API URL（可选）", "Chutes API URL (optional)")
+                                : descriptor.id.rawValue == "siliconflow"
+                                ? copy.text("SiliconFlow API URL（可选）", "SiliconFlow API URL (optional)")
                                 : descriptor.id.rawValue == "clawrouter"
                                 ? copy.text("ClawRouter Base URL（可选）", "ClawRouter Base URL (optional)")
                                 : descriptor.id.rawValue == "sub2api"
@@ -846,6 +849,14 @@ private struct ProviderConfigurationView: View {
                                 : copy.text("接口地址", "Endpoint URL"),
                             text: $configuration.endpoint
                         )
+                        if descriptor.id.rawValue == "siliconflow" {
+                            Text(copy.text(
+                                "默认中国区 https://api.siliconflow.cn（人民币）；国际账号填 https://api.siliconflow.com（美元）。留空时也会读取 SILICONFLOW_BASE_URL。",
+                                "China https://api.siliconflow.cn (CNY) is the default. International accounts use https://api.siliconflow.com (USD). When blank, SILICONFLOW_BASE_URL is also read."
+                            ))
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(SettingsPalette.tertiary)
+                        }
                     }
                     if configuration.source == .command {
                         SettingsTextField(
@@ -903,6 +914,18 @@ private struct ProviderConfigurationView: View {
                         Text(copy.text(
                             "留空时优先选择首个 Business 或 Enterprise workspace。",
                             "When left blank, the first Business or Enterprise workspace is preferred."
+                        ))
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(SettingsPalette.tertiary)
+                    }
+                    if descriptor.id.rawValue == "workbuddy" {
+                        SettingsTextField(
+                            title: copy.text("User-Agent（可选）", "User-Agent (optional)"),
+                            text: $configuration.account
+                        )
+                        Text(copy.text(
+                            "粘贴与 Cookie 来自同一请求的 User-Agent 值。",
+                            "Paste the User-Agent value from the same request as the Cookie."
                         ))
                             .font(.system(size: 10.5))
                             .foregroundStyle(SettingsPalette.tertiary)
@@ -1154,6 +1177,12 @@ private struct ProviderConfigurationView: View {
         }
         if descriptor.id.rawValue == "abliteration" {
             return "abliteration.ai API Key"
+        }
+        if descriptor.id.rawValue == "siliconflow" {
+            return "SiliconFlow API Key"
+        }
+        if descriptor.id.rawValue == "tripo" {
+            return "Tripo API Key"
         }
         if descriptor.id.rawValue == "chatbox" {
             return "Chatbox AI License Key"

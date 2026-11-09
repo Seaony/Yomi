@@ -502,13 +502,13 @@ nonisolated enum KiroUsageFetcher {
         )
     }
 
-    static func makeUsageLimitsRequest(identity: (accessToken: String, profileARN: String), endpoint: URL) throws -> URLRequest {
+    static func makeUsageLimitsRequest(identity: (accessToken: String, profileARN: String?), endpoint: URL) throws -> URLRequest {
         var request = URLRequest(url: endpoint, timeoutInterval: 10)
         request.httpMethod = "POST"
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         request.setValue(target, forHTTPHeaderField: "X-Amz-Target")
         request.setValue("Bearer \(identity.accessToken)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["profileArn": identity.profileARN])
+        request.httpBody = try JSONSerialization.data(withJSONObject: identity.profileARN.map { ["profileArn": $0] } ?? [:])
         return request
     }
 
@@ -730,7 +730,9 @@ nonisolated enum KiroUsageFetcher {
         _ = try await session.data(for: request)
     }
 
-    private static func usageEndpoint(profileARN: String) throws -> URL {
+    private static func usageEndpoint(profileARN: String?) throws -> URL {
+        // Builder ID 登录可能只有令牌没有 profile，走默认的美东端点；有 profile 但无效时仍然报错，不把凭据发到别的区域。
+        guard let profileARN else { return usageLimitsEndpoint }
         let arn = profileARN.split(separator: ":", maxSplits: 5, omittingEmptySubsequences: false)
         guard arn.count == 6, arn[0] == "arn", arn[1] == "aws", arn[2] == "codewhisperer",
               arn[5].hasPrefix("profile/"), arn[5].count > "profile/".count,
@@ -741,7 +743,7 @@ nonisolated enum KiroUsageFetcher {
         return endpoint
     }
 
-    static func readIdentity(databaseURL: URL) throws -> (accessToken: String, profileARN: String) {
+    static func readIdentity(databaseURL: URL) throws -> (accessToken: String, profileARN: String?) {
         guard FileManager.default.isReadableFile(atPath: databaseURL.path) else {
             throw KiroUsageError.credentialsUnavailable("state database is not readable")
         }
@@ -759,27 +761,41 @@ nonisolated enum KiroUsageFetcher {
             sql: "SELECT value FROM auth_kv WHERE key = 'kirocli:odic:token'",
             field: "token"
         )
-        let profileJSON = try queryValue(
+        guard let accessToken = jsonString(tokenJSON, key: "access_token") else {
+            throw KiroUsageError.credentialsUnavailable("token has no access_token")
+        }
+        // 没有 profile 这一行时允许继续；有这一行但内容不对仍然报错。
+        let profileJSON = try queryOptionalValue(
             database: database,
             sql: "SELECT value FROM state WHERE key = 'api.codewhisperer.profile'",
             field: "profile"
         )
-        guard let accessToken = jsonString(tokenJSON, key: "access_token") else {
-            throw KiroUsageError.credentialsUnavailable("token has no access_token")
-        }
-        guard let profileARN = jsonString(profileJSON, key: "arn") else {
-            throw KiroUsageError.credentialsUnavailable("profile has no arn")
+        var profileARN: String?
+        if let profileJSON {
+            guard let arn = jsonString(profileJSON, key: "arn") else {
+                throw KiroUsageError.credentialsUnavailable("profile has no arn")
+            }
+            profileARN = arn
         }
         return (accessToken, profileARN)
     }
 
     private static func queryValue(database: OpaquePointer?, sql: String, field: String) throws -> String {
+        guard let value = try queryOptionalValue(database: database, sql: sql, field: field) else {
+            throw KiroUsageError.credentialsUnavailable("\(field) was not found")
+        }
+        return value
+    }
+
+    private static func queryOptionalValue(database: OpaquePointer?, sql: String, field: String) throws -> String? {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
             throw KiroUsageError.credentialsUnavailable("could not read \(field)")
         }
         defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW, let value = sqlite3_column_text(statement, 0) else {
+        let result = sqlite3_step(statement)
+        if result == SQLITE_DONE { return nil }
+        guard result == SQLITE_ROW, let value = sqlite3_column_text(statement, 0) else {
             throw KiroUsageError.credentialsUnavailable("\(field) was not found")
         }
         return String(cString: value)
@@ -1061,12 +1077,12 @@ nonisolated enum KiroUsageFetcher {
         }
         var name = "Kiro"
         var newFormat = false
-        if let match = firstCapture(in: text, pattern: #"\|[ \t]*(KIRO[ \t]+\w+)"#) {
+        if let match = firstCapture(in: text, pattern: #"\|[ \t]*(KIRO[ \t]+[\w+]+)"#) {
             name = match
         }
         if let match = firstCapture(
             in: text,
-            pattern: #"Estimated Usage[ \t]*\|[^\n|]*\|[ \t]*([A-Z][A-Z0-9 ]+)"#
+            pattern: #"Estimated Usage[ \t]*\|[^\n|]*\|[ \t]*([A-Z][A-Z0-9 +]+)"#
         ) {
             name = match
         }

@@ -287,6 +287,107 @@ struct MistralUsageTests {
     }
 
     @Test
+    func loginRedirectRotatesToLaterBrowserSessionAndClearsCache() async throws {
+        let recorder = MistralRequestRecorder()
+        let cache = MistralCacheRecorder()
+        MistralTestURLProtocol.location = Self.loginLocation
+        MistralTestURLProtocol.handler = { request in
+            recorder.append(request)
+            let cookie = request.value(forHTTPHeaderField: "Cookie") ?? ""
+            return cookie == "ory_session_firefox=valid"
+                ? (200, Data(Self.billingJSON.utf8))
+                : (302, Data())
+        }
+        defer {
+            MistralTestURLProtocol.handler = nil
+            MistralTestURLProtocol.location = nil
+        }
+
+        let usage = try await MistralUsageFetcher.fetchFromSessions(
+            [
+                .init(cookieHeader: "ory_session_cached=expired", sourceLabel: "cache"),
+                .init(cookieHeader: "ory_session_firefox=valid", sourceLabel: "Firefox"),
+            ],
+            session: Self.session(),
+            cacheUpdate: { cache.append($0) },
+            now: Self.now
+        )
+
+        #expect(usage.state == .ready)
+        #expect(recorder.requests
+            .filter { $0.url?.path == "/api/billing/v2/usage" }
+            .map { $0.value(forHTTPHeaderField: "Cookie") ?? "" } == [
+            "ory_session_cached=expired", "ory_session_firefox=valid",
+        ])
+        #expect(cache.values == [nil, "ory_session_firefox=valid"])
+    }
+
+    @Test(arguments: [301, 302, 303, 307, 308])
+    func loginRedirectFromBillingOrVibeIsInvalidCredentials(status: Int) async {
+        MistralTestURLProtocol.location = Self.loginLocation
+        MistralTestURLProtocol.handler = { _ in (status, Data()) }
+        defer {
+            MistralTestURLProtocol.handler = nil
+            MistralTestURLProtocol.location = nil
+        }
+
+        await #expect(throws: MistralUsageError.invalidCredentials) {
+            _ = try await MistralUsageFetcher.fetchUsage(
+                cookieHeader: "ory_session_x=expired", csrfToken: nil, session: Self.session(), now: Self.now
+            )
+        }
+        await #expect(throws: MistralUsageError.invalidCredentials) {
+            _ = try await MistralUsageFetcher.fetchVibeUsage(
+                csrfToken: "csrf-value", cookieHeader: "ory_session_x=expired", session: Self.session()
+            )
+        }
+    }
+
+    @Test(arguments: [
+        nil,
+        "",
+        "/organization/usage",
+        "https://admin.mistral.ai/self-service/login/browser",
+        "https://auth.mistral.ai/self-service/registration/browser",
+        "https://auth.mistral.ai/self-service/loginx",
+        "http://auth.mistral.ai/self-service/login/browser",
+        "https://auth.mistral.ai.example.com/self-service/login/browser",
+    ])
+    func otherRedirectsStayAPIErrors(location: String?) async {
+        MistralTestURLProtocol.location = location
+        MistralTestURLProtocol.handler = { _ in (302, Data()) }
+        defer {
+            MistralTestURLProtocol.handler = nil
+            MistralTestURLProtocol.location = nil
+        }
+
+        await #expect(throws: MistralUsageError.apiError("HTTP 302")) {
+            _ = try await MistralUsageFetcher.fetchUsage(
+                cookieHeader: "ory_session_x=expired", csrfToken: nil, session: Self.session(), now: Self.now
+            )
+        }
+    }
+
+    @Test
+    func optionalCreditsStayBestEffortAfterLoginRedirect() async throws {
+        MistralTestURLProtocol.location = Self.loginLocation
+        MistralTestURLProtocol.handler = { _ in (302, Data()) }
+        defer {
+            MistralTestURLProtocol.handler = nil
+            MistralTestURLProtocol.location = nil
+        }
+
+        let credits = try await MistralUsageFetcher.fetchOptionalCredits(
+            cookieHeader: "ory_session_x=expired", csrfToken: nil, session: Self.session(), timeout: 2
+        )
+
+        #expect(credits == nil)
+    }
+
+    private nonisolated static let loginLocation =
+        "https://auth.mistral.ai/self-service/login/browser?return_to=https%3A%2F%2Fadmin.mistral.ai%2Fapi"
+
+    @Test
     func mapsBalanceSpendMonthlyPlanAndTokenDataWithoutInventingQuota() throws {
         let primary = try MistralUsageFetcher.parseUsage(data: Data(Self.billingJSON.utf8), updatedAt: Self.now)
         let snapshot = MistralUsageSnapshot(
@@ -377,12 +478,14 @@ private nonisolated final class MistralCacheRecorder: @unchecked Sendable {
 private nonisolated final class MistralTestURLProtocol: URLProtocol {
     private static let lock = NSLock()
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data))?
+    nonisolated(unsafe) static var location: String?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
         let handler = Self.lock.withLock { Self.handler }
+        let location = Self.lock.withLock { Self.location }
         guard let handler else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
@@ -393,7 +496,7 @@ private nonisolated final class MistralTestURLProtocol: URLProtocol {
                 url: request.url!,
                 statusCode: status,
                 httpVersion: nil,
-                headerFields: nil
+                headerFields: location.map { ["Location": $0] }
             )!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: data)

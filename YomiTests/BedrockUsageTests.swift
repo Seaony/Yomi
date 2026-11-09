@@ -441,7 +441,7 @@ struct BedrockUsageTests {
     }
 
     @Test
-    func dailyCostsUseDailyGranularityInclusiveUntilAndPositiveBedrockEntries() async throws {
+    func dailyCostsUseDailyGranularityInclusiveUntilAndKeepMeasuredZeroDays() async throws {
         BedrockTestURLProtocol.handler = { request in
             let body = try Self.jsonObject(request)
             #expect(body["Granularity"] as? String == "DAILY")
@@ -460,9 +460,12 @@ struct BedrockUsageTests {
             environment: ["CODEXBAR_BEDROCK_API_URL": "https://ce.test"],
             signingDate: Self.now
         )
-        #expect(values.count == 1)
+        // 测得为 0 的日子保留，非 Bedrock 服务不计入。
+        #expect(values.count == 2)
         #expect(values[0].date == "2025-12-10")
         #expect(values[0].cost == 7.25)
+        #expect(values[1].date == "2025-12-11")
+        #expect(values[1].cost == 0)
     }
 
     @Test
@@ -682,6 +685,67 @@ struct BedrockUsageTests {
         #expect(snapshot.inputTokens == nil)
     }
 
+    @Test
+    func costExplorerResultIsReusedUntilManualRefreshOrExpiry() async throws {
+        let calls = BedrockCallCounter()
+        BedrockTestURLProtocol.handler = { _ in
+            let amount = calls.increment()
+            return (200, Data(#"{"ResultsByTime":[{"Groups":[{"Keys":["Amazon Bedrock"],"Metrics":{"UnblendedCost":{"Amount":"\#(amount)"}}}]}]}"#.utf8))
+        }
+        defer { BedrockTestURLProtocol.handler = nil }
+        let cache = BedrockCostExplorerCache()
+        func fetch(at date: Date, region: String = "us-east-1", forceRefresh: Bool = false) async throws -> BedrockUsageSnapshot {
+            try await BedrockUsageFetcher.fetch(
+                credentials: Self.credentials,
+                region: region,
+                budget: nil,
+                session: Self.session(),
+                environment: ["CODEXBAR_BEDROCK_API_URL": "https://ce.test"],
+                now: date,
+                forceRefresh: forceRefresh,
+                cache: cache
+            )
+        }
+
+        let first = try await fetch(at: Self.now)
+        let reused = try await fetch(at: Self.now.addingTimeInterval(60 * 60))
+        #expect(first.monthlySpend == 1)
+        #expect(reused.monthlySpend == 1)
+        // 复用时保留原来的更新时间。
+        #expect(reused.updatedAt == Self.now)
+        #expect(calls.value == 1)
+
+        let otherRegion = try await fetch(at: Self.now.addingTimeInterval(60 * 60), region: "us-west-2")
+        #expect(otherRegion.monthlySpend == 2)
+        let manual = try await fetch(at: Self.now.addingTimeInterval(2 * 60 * 60), region: "us-west-2", forceRefresh: true)
+        #expect(manual.monthlySpend == 3)
+        let expired = try await fetch(at: Self.now.addingTimeInterval(9 * 60 * 60), region: "us-west-2")
+        #expect(expired.monthlySpend == 4)
+        #expect(calls.value == 4)
+    }
+
+    @Test
+    func unavailableSpendIsNotCached() async throws {
+        let cache = BedrockCostExplorerCache()
+        BedrockTestURLProtocol.handler = { _ in (400, Data(#"{"__type":"DataUnavailableException"}"#.utf8)) }
+        await #expect(throws: BedrockUsageError.spendUnavailable) {
+            _ = try await BedrockUsageFetcher.fetch(
+                credentials: Self.credentials, region: "us-east-1", budget: nil, session: Self.session(),
+                environment: ["CODEXBAR_BEDROCK_API_URL": "https://ce.test"], now: Self.now, cache: cache
+            )
+        }
+        BedrockTestURLProtocol.handler = { _ in
+            (200, Data(#"{"ResultsByTime":[{"Groups":[{"Keys":["Amazon Bedrock"],"Metrics":{"UnblendedCost":{"Amount":"0"}}}]}]}"#.utf8))
+        }
+        defer { BedrockTestURLProtocol.handler = nil }
+        let snapshot = try await BedrockUsageFetcher.fetch(
+            credentials: Self.credentials, region: "us-east-1", budget: nil, session: Self.session(),
+            environment: ["CODEXBAR_BEDROCK_API_URL": "https://ce.test"], now: Self.now, cache: cache
+        )
+        // 测得为 0 是有效结果。
+        #expect(snapshot.monthlySpend == 0)
+    }
+
     private static func session() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [BedrockTestURLProtocol.self]
@@ -783,4 +847,18 @@ private final class BedrockTestURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+}
+
+private nonisolated final class BedrockCallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int { lock.withLock { count } }
+
+    func increment() -> Int {
+        lock.withLock {
+            count += 1
+            return count
+        }
+    }
 }

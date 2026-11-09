@@ -535,6 +535,97 @@ struct GrokUsageTests {
         #expect(usage.message == GrokUsageError.teamUsageUnsupported.errorDescription)
     }
 
+    @Test
+    func localUsageFileCountsTurnsThatSignalsCompactedAway() throws {
+        let (home, session) = try Self.makeGrokSession()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let now = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_787_079_600)).addingTimeInterval(12 * 3600)
+        try Self.writeSignals(in: session, tokens: 100, modified: now)
+        try Self.writeUsageTurns(in: session, turns: [(now, 4000), (now, 1000)], modified: now)
+
+        let local = GrokUsageFetcher.scanLocalUsage(environment: ["GROK_HOME": home.path], now: now)
+
+        #expect(local.today == 5000)
+        #expect(local.last30 == 5000)
+    }
+
+    @Test
+    func localUsageTurnsLandOnTheirOwnDayInsideTheWindow() throws {
+        let (home, session) = try Self.makeGrokSession()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let calendar = Calendar.current
+        let now = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_787_079_600)).addingTimeInterval(12 * 3600)
+        let yesterday = try #require(calendar.date(byAdding: .day, value: -1, to: now))
+        let outside = try #require(calendar.date(byAdding: .day, value: -30, to: now))
+        try Self.writeUsageTurns(in: session, turns: [(outside, 9000), (yesterday, 300), (now, 200)], modified: now)
+
+        let local = GrokUsageFetcher.scanLocalUsage(environment: ["GROK_HOME": home.path], now: now)
+
+        #expect(local.today == 200)
+        #expect(local.last30 == 500)
+    }
+
+    @Test
+    func turnsOutsideTheWindowDoNotFallBackToFreshSignals() throws {
+        let (home, session) = try Self.makeGrokSession()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let now = Date(timeIntervalSince1970: 1_787_079_600)
+        let outside = try #require(Calendar.current.date(byAdding: .day, value: -30, to: now))
+        try Self.writeSignals(in: session, tokens: 100, modified: now)
+        try Self.writeUsageTurns(in: session, turns: [(outside, 5000)], modified: now)
+
+        let local = GrokUsageFetcher.scanLocalUsage(environment: ["GROK_HOME": home.path], now: now)
+
+        #expect(local.today == nil)
+        #expect(local.last30 == nil)
+    }
+
+    @Test(arguments: ["not json", #"{"session":{}}"#, #"{"turns":[]}"#, #"{"turns":[{"totalTokens":5}]}"#])
+    func unusableUsageFileFallsBackToSignals(contents: String) throws {
+        let (home, session) = try Self.makeGrokSession()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let now = Date(timeIntervalSince1970: 1_787_079_600)
+        try Self.writeSignals(in: session, tokens: 100, modified: now)
+        try contents.write(to: session.appendingPathComponent("usage.json"), atomically: true, encoding: .utf8)
+
+        let local = GrokUsageFetcher.scanLocalUsage(environment: ["GROK_HOME": home.path], now: now)
+
+        #expect(local.last30 == 100)
+    }
+
+    private static func makeGrokSession() throws -> (URL, URL) {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("grok-local-\(UUID().uuidString)")
+        let session = home.appendingPathComponent("sessions/project/session-a")
+        try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+        return (home, session)
+    }
+
+    private static func writeSignals(in session: URL, tokens: Int, modified: Date) throws {
+        let url = session.appendingPathComponent("signals.json")
+        try JSONSerialization.data(withJSONObject: ["totalTokensBeforeCompaction": tokens]).write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
+    }
+
+    // 与 grok CLI 实际写出的 usage.json 一致，endedAt 带微秒。
+    private static func writeUsageTurns(in session: URL, turns: [(Date, Int)], modified: Date) throws {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'176+00:00'"
+        let records: [[String: Any]] = turns.enumerated().map { index, turn in
+            [
+                "turnNumber": index + 1,
+                "endedAt": formatter.string(from: turn.0),
+                "totalTokens": turn.1,
+                "costUsdTicks": 10_000_000_000,
+                "primaryModelId": "grok-test",
+            ]
+        }
+        let url = session.appendingPathComponent("usage.json")
+        try JSONSerialization.data(withJSONObject: ["sessionId": "session-a", "turns": records]).write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
+    }
+
     private static func session() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [GrokTestURLProtocol.self]
