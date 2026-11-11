@@ -219,7 +219,7 @@ final class UsageStore: ObservableObject {
                             date: Date(), duration: Date().timeIntervalSince(started),
                             outcome: usage.state == .ready ? .success : .failed,
                             errorKind: usage.state == .ready ? nil : "Provider.\(usage.state.rawValue)",
-                            httpStatus: trace.httpStatus
+                            httpStatus: usage.state == .ready ? nil : trace.httpStatus
                         ))
                     } catch {
                         let summary = DiagnosticsErrorSummary(error: error)
@@ -232,7 +232,7 @@ final class UsageStore: ObservableObject {
                             updatedAt: Date(),
                             message: error.localizedDescription
                         ), revision, ProviderDiagnosticResult(
-                            providerID: descriptor.id, source: trace.source,
+                            providerID: descriptor.id, source: trace.failureSource,
                             date: Date(), duration: Date().timeIntervalSince(started), outcome: .failed,
                             errorKind: summary.kind, httpStatus: summary.httpStatus ?? trace.httpStatus
                         ))

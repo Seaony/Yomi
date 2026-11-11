@@ -82,7 +82,12 @@ actor UsageCollector {
                     }
                 }
             }
-            usage.diagnosticSource = trace.source == "None" ? "Local" : trace.source
+            if usage.state == .ready {
+                trace.finishSuccess(source: usage.diagnosticSource)
+                usage.diagnosticSource = trace.source
+            } else {
+                usage.diagnosticSource = trace.failureSource
+            }
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as URLError where error.code == .cancelled {
@@ -1236,7 +1241,16 @@ actor UsageCollector {
         var lastError: Error?
         for source in sources {
             do {
-                FetchDiagnostics.current?.note(source == .cli ? "CLI" : source == .webAPI ? "Cookie" : source == .oauthAPI ? "OAuth" : "API")
+                let diagnosticSource = source == .cli ? "CLI" : source == .webAPI ? "Cookie" : source == .oauthAPI ? "OAuth" : "API"
+                FetchDiagnostics.current?.beginStrategy(diagnosticSource)
+                func completed(_ result: ProviderUsage) -> ProviderUsage {
+                    var result = result
+                    result.diagnosticSource = diagnosticSource
+                    if result.state == .ready {
+                        FetchDiagnostics.current?.finishSuccess(source: diagnosticSource)
+                    }
+                    return result
+                }
                 switch source {
                 case .oauthAPI:
                     let credential = configuration.source == .token
@@ -1247,11 +1261,11 @@ actor UsageCollector {
                         throw UsageCollectionError.missingEndpoint
                     }
                     do {
-                        return try await remoteUsage(
+                        return completed(try await remoteUsage(
                             descriptor: descriptor,
                             recipe: recipe,
                             secret: credential
-                        )
+                        ))
                     } catch UsageCollectionError.requestFailed(401) {
                         guard credential == local,
                               invalidateClaudeKeychainCredential(rejectedToken: credential)
@@ -1260,30 +1274,30 @@ actor UsageCollector {
                         guard !renewed.isEmpty, renewed != credential else {
                             throw UsageCollectionError.requestFailed(401)
                         }
-                        return try await remoteUsage(
+                        return completed(try await remoteUsage(
                             descriptor: descriptor,
                             recipe: recipe,
                             secret: renewed
-                        )
+                        ))
                     }
                 case .adminAPI:
                     let credential = [configured, environmentCredential]
                         .first { $0.lowercased().hasPrefix("sk-ant-admin") }
                     guard let credential else { throw UsageCollectionError.missingCredential }
-                    return try await ClaudeAdminAPIUsageFetcher.fetch(apiKey: credential, session: session)
+                    return completed(try await ClaudeAdminAPIUsageFetcher.fetch(apiKey: credential, session: session))
                 case .webAPI:
                     guard let webCredential else { throw UsageCollectionError.missingCredential }
-                    return try await ClaudeWebUsageFetcher.fetch(
+                    return completed(try await ClaudeWebUsageFetcher.fetch(
                         cookie: webCredential,
                         organizationID: configuration.account,
                         descriptor: descriptor,
                         session: session
-                    )
+                    ))
                 case .cli:
-                    return try await ClaudeCLIUsageFetcher.fetch(
+                    return completed(try await ClaudeCLIUsageFetcher.fetch(
                         configuredBinary: configuredBinary.isEmpty ? nil : configuredBinary,
                         environment: environment
-                    )
+                    ))
                 case .automatic:
                     throw UsageCollectionError.missingCredential
                 }

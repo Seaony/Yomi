@@ -239,7 +239,7 @@ nonisolated enum AntigravityUsageFetcher {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) async throws -> ProviderUsage {
-        FetchDiagnostics.current?.note("OAuth")
+        FetchDiagnostics.current?.beginStrategy("OAuth")
         var credentials = try resolvedCredentials(
             rawCredential: rawCredential,
             environment: environment,
@@ -1085,7 +1085,7 @@ nonisolated enum AntigravityUsageFetcher {
         body: [String: Any],
         endpoint: LocalEndpoint
     ) async throws -> Data {
-        FetchDiagnostics.current?.note("Local API")
+        FetchDiagnostics.current?.beginStrategy("Local API")
         guard let url = URL(string: "\(endpoint.scheme)://127.0.0.1:\(endpoint.port)\(path)") else {
             throw AntigravityUsageError.localServiceUnavailable
         }

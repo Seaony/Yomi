@@ -1847,25 +1847,18 @@ private struct AboutSettingsView: View {
                 SettingsCard(copy.text("诊断", "Diagnostics")) {
                     VStack(alignment: .leading, spacing: 12) {
                         ForEach(store.enabledProviders) { descriptor in
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(spacing: 8) {
-                                    Text(descriptor.name).fontWeight(.medium)
-                                    Spacer()
-                                    if let result = DiagnosticLog.shared.latestResult(for: descriptor.id) {
-                                        Text(result.date, style: .time)
-                                            .foregroundStyle(SettingsPalette.tertiary)
-                                    }
-                                }
+                            Group {
                                 if let result = DiagnosticLog.shared.latestResult(for: descriptor.id) {
-                                    Text(result.summary(language: language))
+                                    Text(diagnosticLine(provider: descriptor.name, result: result))
                                         .foregroundStyle(result.outcome == .success ? SettingsPalette.secondary : SettingsPalette.orange)
-                                    Text(copy.text("来源：", "Source: ") + result.source)
-                                        .foregroundStyle(SettingsPalette.tertiary)
+                                        .help(diagnosticLine(provider: descriptor.name, result: result))
                                 } else {
-                                    Text(copy.text("等待首次刷新", "Waiting for the first refresh"))
+                                    Text(descriptor.name + " · " + copy.text("等待首次刷新", "Waiting for the first refresh"))
                                         .foregroundStyle(SettingsPalette.tertiary)
                                 }
                             }
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                             .font(.system(size: 12))
                         }
                         HStack(spacing: 12) {
@@ -1891,6 +1884,18 @@ private struct AboutSettingsView: View {
             .padding(4)
             .frame(maxWidth: .infinity, alignment: .top)
         }
+    }
+
+    private func diagnosticLine(provider: String, result: ProviderDiagnosticResult) -> String {
+        let outcome = result.outcome == .success ? copy.text("成功", "Success") : copy.text("失败", "Failed")
+        let time = result.date.formatted(.dateTime.hour().minute().locale(language.locale))
+        var parts = [provider, outcome, result.source, time]
+        if result.outcome == .failed {
+            if let error = result.errorKind { parts.append(error) }
+            if let status = result.httpStatus { parts.append("HTTP \(status)") }
+        }
+        if result.usedCache { parts.append(copy.text("已回退缓存", "Using cached data")) }
+        return DiagnosticsRedactor.redact(parts.joined(separator: " · "))
     }
 
     private var versionText: String {

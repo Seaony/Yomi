@@ -38,23 +38,27 @@ struct DailyBillReceiptTests {
     }
 
     @Test
-    func sharedNamesNeverExposeAccountsCredentialsOrPaths() {
-        let unsafeNames = [
-            "private.person@example.com", "/Users/private/models/gpt", "~/private/model",
-            "C:\\Users\\private\\model", "https://example.com/private/model", "account_id=private-account",
-            "Bearer private-token", "sk-private-key", "acct-private-account", "user-private-id", "org-private-id",
-            "model\nCookie: private-cookie", "private 模型", "550e8400-e29b-41d4-a716-446655440000",
+    func modelLabelsAreCompactAndHoverNamesRetainTheOriginalKeys() {
+        let models = [
+            ("deepseek/deepseek-v4.1-flash", "deepseek-v4.1-flash"),
+            ("claude-new-model-20261001", "claude-new-model"),
+            ("claude-sonnet-4-5-20250929", "claude-sonnet-4-5"),
+            ("模型/自定义名称", "自定义名称"),
         ]
-        for name in unsafeNames {
-            #expect(safeModelUsageName(name, language: .english) == "Unknown model")
-            #expect(safeModelUsageName(name, language: .simplifiedChinese) == "未知模型")
+        for (model, compact) in models {
+            #expect(compactModelUsageName(model, language: .english) == compact)
+            #expect(compactModelUsageName(model, language: .simplifiedChinese) == compact)
+            #expect(fullModelUsageName(model, language: .english) == model)
         }
-        #expect(safeModelUsageName("gpt-6.1", language: .english) == "gpt-6.1")
-        #expect(safeModelUsageName("claude-sonnet-4-5", language: .simplifiedChinese) == "claude-sonnet-4-5")
-        #expect(safeModelUsageName("claude-sonnet-4-5-20250929", language: .english) == "claude-sonnet-4-5-20250929")
-        #expect(safeModelUsageName("claude-opus-4-5-20251101", language: .simplifiedChinese) == "claude-opus-4-5-20251101")
         #expect(DailyBillReceiptText.providerName(ProviderID(rawValue: "private.person@example.com"), language: .english) == "Local usage")
         #expect(DailyBillReceiptText.providerName(ProviderID(rawValue: "codex"), language: .english) == "Codex")
+    }
+
+    @Test
+    func dailyAverageComparisonUsesOneDecimalAndPlainWords() {
+        #expect(DailyBillReceiptText.dailyAverageComparison(4.284, language: .simplifiedChinese) == "是日均的 4.3 倍")
+        #expect(DailyBillReceiptText.dailyAverageComparison(4.284, language: .english) == "4.3× daily average")
+        #expect(DailyBillReceiptText.dailyAverageComparison(1, language: .english) == "1.0× daily average")
     }
 
     @Test

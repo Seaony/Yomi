@@ -133,9 +133,9 @@ struct ProviderDetailCard: View {
 
     private var last30DaysCostValue: String {
         if let value = usage.last30DaysRequests?.valueUSD ?? usage.last30Days?.valueUSD {
-            return String(format: "$%.2f", value)
+            return compactDollarValue(value)
         }
-        return usage.last30Days?.partialValueUSD.map { "≥ " + String(format: "$%.2f", $0) } ?? "$—"
+        return usage.last30Days?.partialValueUSD.map { "≥ " + compactDollarValue($0) } ?? "$—"
     }
 
     private var weeklyEstimateValue: String {
@@ -206,13 +206,9 @@ struct ProviderDetailCard: View {
             if isOverview || !displayedWindows.isEmpty || usage.today != nil {
                 usageHeadline
             }
-            if !isOverview, let models = usage.todayByModel, !models.isEmpty {
-                modelBreakdown(models)
-            }
-
             detailContent
             if isOverview, let openDailyBill {
-                Button(copy.text("今日账单", "Today's Bill"), action: openDailyBill)
+                Button(copy.text("今日 AI 账单", "Today's AI bill"), action: openDailyBill)
                     .buttonStyle(.bordered)
                     .pointerStyle(.link)
             }
@@ -230,31 +226,34 @@ struct ProviderDetailCard: View {
         if isOverview {
             overviewChart
                 .transition(sectionTransition)
-        } else if displayedWindows.isEmpty,
-                  usage.balance != nil || usage.providerCost != nil || !usage.details.isEmpty {
-            providerSummaryContent
-        } else if displayedWindows.isEmpty {
-            if usage.today == nil { emptyState }
         } else {
-            VStack(spacing: 11) {
-                ForEach(displayedWindows) { window in
-                    UsageWindowRow(window: window, tint: tint)
-                        .transition(sectionTransition)
+            if !displayedWindows.isEmpty {
+                VStack(spacing: 11) {
+                    ForEach(displayedWindows) { window in
+                        UsageWindowRow(window: window, tint: tint, usageUpdatedAt: usage.updatedAt, refreshInterval: refreshInterval)
+                            .transition(sectionTransition)
+                    }
                 }
+            }
+
+            if let models = usage.todayByModel, !models.isEmpty {
+                modelBreakdown(models)
             }
 
             if usage.balance != nil || usage.providerCost != nil || !usage.details.isEmpty {
                 providerSummaryContent
+            } else if displayedWindows.isEmpty, usage.today == nil {
+                emptyState
             }
 
-            footer
+            if !displayedWindows.isEmpty { footer }
         }
     }
 
     private func modelBreakdown(_ models: [ModelTokenUsage]) -> some View {
         let rows = ModelUsageBreakdown.displayRows(models)
         let total = models.reduce(Int64.zero) { $0 + $1.tokens }
-        let colors: [Color] = [.blue, .orange, .purple, .teal, .pink, .secondary]
+        let colors: [Color] = [.blue, .purple, .cyan, .pink, .indigo, .gray]
         return VStack(alignment: .leading, spacing: 7) {
             Text(copy.text("今日模型用量", "Today's model usage"))
                 .font(.system(size: 11.5, weight: .semibold))
@@ -274,18 +273,19 @@ struct ProviderDetailCard: View {
                     Circle().fill(colors[index % colors.count]).frame(width: 5, height: 5)
                     Text(modelName(row.model))
                         .lineLimit(1)
-                        .truncationMode(.middle)
-                        .help(modelName(row.model))
-                    Spacer(minLength: 4)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .help(fullModelUsageName(row.model == ModelUsageBreakdown.unknownModel ? "" : row.model, language: language))
                     Text(formatDetailTokensInMillions(row.tokens))
-                    if row.valueUSD != nil || row.partialValueUSD != nil {
-                        Text(costText(row.usage))
-                            .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
-                    }
+                        .frame(width: 50, alignment: .trailing)
+                    Text(row.valueUSD != nil || row.partialValueUSD != nil ? costText(row.usage) : "—")
+                        .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
+                        .frame(width: 60, alignment: .trailing)
                     Text(ModelUsageBreakdown.fraction(row, totalTokens: total).formatted(.percent.precision(.fractionLength(0...1))))
-                        .frame(minWidth: 30, alignment: .trailing)
+                        .frame(width: 36, alignment: .trailing)
                 }
                 .font(.system(size: 10.5))
+                .lineLimit(1)
                 .monospacedDigit()
                 .accessibilityElement(children: .combine)
             }
@@ -293,7 +293,7 @@ struct ProviderDetailCard: View {
     }
 
     private func modelName(_ model: String) -> String {
-        safeModelUsageName(model, language: language)
+        compactModelUsageName(model == ModelUsageBreakdown.unknownModel ? "" : model, language: language)
     }
 
     private var usageHeadline: some View {
@@ -359,7 +359,7 @@ struct ProviderDetailCard: View {
                     updatedAt: usage.updatedAt,
                     refreshInterval: refreshInterval(),
                     now: context.date
-                ), let updatedAt = usage.updatedAt {
+                ), cachedUsageStatus(usage, language: language) == nil, let updatedAt = usage.updatedAt {
                     Text(UsageFreshness.updatedText(updatedAt: updatedAt, now: context.date, language: language))
                         .font(.system(size: 10.5, weight: .medium))
                         .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
@@ -827,6 +827,8 @@ private struct ProviderDetailPanelShape: Shape {
 private struct UsageWindowRow: View {
     let window: UsageWindow
     let tint: Color
+    var usageUpdatedAt: Date? = nil
+    var refreshInterval: () -> TimeInterval = { 300 }
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.appLanguage) private var language
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -839,7 +841,7 @@ private struct UsageWindowRow: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
-            let pace = UsagePace.evaluate(window: window, now: context.date)
+            let pace = UsagePace.evaluate(window: window, now: context.date, updatedAt: usageUpdatedAt, refreshInterval: refreshInterval())
             let isAhead = pace.map { $0.predictionReady && $0.deltaPercent > 0 } ?? false
             let barTint = isAhead ? Color.orange : tint
         VStack(alignment: .leading, spacing: 5) {
@@ -870,26 +872,21 @@ private struct UsageWindowRow: View {
             }
 
             GeometryReader { proxy in
-                let count = SegmentedUsageBar.segmentCount(width: proxy.size.width)
-                let states = SegmentedUsageBar.states(
-                    remainingFraction: remainingFraction,
-                    expectedUsedFraction: pace.map { $0.expectedUsedPercent / 100 },
-                    segmentCount: count
-                )
-                HStack(alignment: .center, spacing: SegmentedUsageBar.spacing) {
+                let states = SegmentedUsageBar.states(remainingFraction: remainingFraction)
+                let width = max(0, (proxy.size.width - SegmentedUsageBar.spacing * Double(SegmentedUsageBar.segmentCount - 1))
+                    / Double(SegmentedUsageBar.segmentCount))
+                HStack(spacing: SegmentedUsageBar.spacing) {
                     ForEach(Array(states.enumerated()), id: \.offset) { _, state in
                         RoundedRectangle(cornerRadius: 1.5)
-                            .fill(barTint.opacity(state.fill == .solid ? 1 : state.fill == .overspent ? 0.45 : 0.16))
-                            .frame(width: SegmentedUsageBar.barWidth, height: state.isMarker ? 18 : 12)
+                            .fill(barTint.opacity(state == .solid ? 1 : 0.12))
+                            .frame(width: width, height: 12)
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: states)
             }
-            .frame(height: 18)
+            .frame(height: 12)
             .accessibilityLabel(copy.text("剩余额度", "Remaining quota"))
             .accessibilityValue("\(Int((remainingFraction * 100).rounded()))%")
-            .help(copy.text("加高的竖条表示按时间计算的剩余额度位置。", "The taller segment marks the remaining quota expected by this time."))
 
             if let pace, pace.predictionReady {
                 Text(paceText(pace, now: context.date))
@@ -911,13 +908,13 @@ private struct UsageWindowRow: View {
     private func paceText(_ pace: UsagePace, now: Date) -> String {
         if pace.actualUsedPercent >= 100 { return copy.text("已用完", "Quota depleted") }
         guard pace.deltaPercent > 0, let eta = pace.etaSeconds else {
-            return copy.text("能撑到重置", "Lasts until reset")
+            return copy.text("照这个速度能撑到重置", "On pace to last until reset")
         }
         let delta = pace.deltaPercent.formatted(.number.precision(.fractionLength(0...1)))
         let duration = eta < 60
             ? copy.text("不到 1 分钟", "less than 1 min")
             : compactDuration(from: now, until: now.addingTimeInterval(eta), language: language)
-        return copy.text("超前 \(delta)%，预计 \(duration)后用完", "\(delta)% ahead, runs out in \(duration)")
+        return copy.text("比时间进度多用了 \(delta)%，\n照这个速度 \(duration)后用完", "\(delta)% over pace · runs out in \(duration)")
     }
 
 }

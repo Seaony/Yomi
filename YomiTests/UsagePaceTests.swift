@@ -119,6 +119,71 @@ struct UsagePaceTests {
         }
     }
 
+    @Test
+    func freshQuotaStillPredictsExhaustion() throws {
+        let pace = try #require(UsagePace.evaluate(
+            window: window(used: 0.75, remaining: 9_000), now: now,
+            updatedAt: now.addingTimeInterval(-300)
+        ))
+        #expect(pace.predictionReady)
+        #expect(pace.etaSeconds == 3_000)
+    }
+
+    @Test
+    func oldQuotaHasNoPaceRegardlessOfItsUsageLevel() {
+        let ages: [TimeInterval] = [900.001, 1_800, 2 * 86_400]
+        for used in [0.0, 0.25, 0.75, 1.0] {
+            for age in ages {
+                #expect(UsagePace.evaluate(
+                    window: window(used: used, remaining: 9_000), now: now,
+                    updatedAt: now.addingTimeInterval(-age)
+                ) == nil)
+            }
+        }
+    }
+
+    @Test
+    func exactFreshnessBoundaryStillAllowsPrediction() {
+        #expect(UsagePace.evaluate(
+            window: window(used: 0.75, remaining: 9_000), now: now,
+            updatedAt: now.addingTimeInterval(-900)
+        )?.predictionReady == true)
+    }
+
+    @Test
+    func aLongerRefreshIntervalKeepsTheSameQuotaFresh() throws {
+        let value = window(used: 0.75, remaining: 9_000)
+        let updatedAt = now.addingTimeInterval(-1_200)
+        #expect(UsagePace.evaluate(window: value, now: now, updatedAt: updatedAt) == nil)
+        let pace = try #require(UsagePace.evaluate(
+            window: value, now: now, updatedAt: updatedAt, refreshInterval: 600
+        ))
+        #expect(pace.predictionReady)
+        #expect(pace.etaSeconds == 3_000)
+    }
+
+    @Test
+    func absentUpdateDatePreservesExistingCalls() {
+        let value = window(used: 0.75, remaining: 9_000)
+        let existing = UsagePace.evaluate(window: value, now: now)
+        #expect(existing != nil)
+        #expect(UsagePace.evaluate(window: value, now: now, updatedAt: nil) == existing)
+    }
+
+    @Test
+    func freshDataStillWaitsForOneFifteenthOfTheWindow() throws {
+        let early = try #require(UsagePace.evaluate(
+            window: window(used: 0.2, remaining: 16_801), now: now, updatedAt: now
+        ))
+        #expect(!early.predictionReady)
+        #expect(early.etaSeconds == nil)
+        let ready = try #require(UsagePace.evaluate(
+            window: window(used: 0.2, remaining: 16_800), now: now, updatedAt: now
+        ))
+        #expect(ready.predictionReady)
+        #expect(ready.etaSeconds != nil)
+    }
+
     @Test @MainActor
     func oldUsageCacheWithoutDurationStillRestores() throws {
         let suite = "usage-pace-cache-\(UUID().uuidString)"

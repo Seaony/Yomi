@@ -129,3 +129,155 @@ struct DiagnosticsTests {
         #expect(restored.diagnosticSource == "OAuth")
     }
 }
+
+extension DiagnosticsTests {
+    @Test
+    func fallbackOnlyReportsTheSuccessfulCookieSource() async throws {
+        let trace = FetchDiagnostics()
+        let usage = try await FetchDiagnostics.$current.withValue(trace) {
+            try await CodexUsageFetcher.execute(order: [.oauth, .web]) { strategy in
+                if strategy == .oauth { throw CodexUsageError.missingOAuthCredential }
+                return Self.diagnosticFixture
+            }
+        }
+        #expect(usage.diagnosticSource == "Cookie")
+        #expect(trace.source == "Cookie")
+        #expect(!trace.source.contains("OAuth"))
+    }
+
+    @Test
+    func CLIQuotaKeepsItsSourceAfterOptionalResetCredits() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let now = Date()
+        let auth: [String: Any] = [
+            "tokens": ["access_token": "private-oauth", "account_id": "private-account"],
+            "last_refresh": ISO8601DateFormatter().string(from: now),
+        ]
+        try JSONSerialization.data(withJSONObject: auth).write(to: directory.appendingPathComponent("auth.json"))
+        let trace = FetchDiagnostics()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [DiagnosticCreditsURLProtocol.self]
+        let session = URLSession(configuration: configuration, delegate: trace, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        let usage = try await FetchDiagnostics.$current.withValue(trace) {
+            try await CodexUsageFetcher.fetch(
+                source: .command, configuredCredential: nil, cachedCookieHeader: nil,
+                allowBrowserImport: false, session: session, environment: ["CODEX_HOME": directory.path],
+                now: now, cliLoader: { _ in Self.diagnosticFixture }
+            )
+        }
+        #expect(usage.codexResetCredits != nil)
+        #expect(usage.diagnosticSource == "CLI")
+        #expect(trace.source == "CLI")
+        trace.note("API")
+        #expect(trace.source == "CLI")
+        #expect(trace.failureSource == "CLI")
+    }
+
+    @Test
+    func nativeOAuthRefreshReportsItsSuccessfulCLIFallback() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data(#"{"tokens":{"access_token":"private-oauth"},"last_refresh":"1970-01-01T00:00:00Z"}"#.utf8)
+            .write(to: directory.appendingPathComponent("auth.json"))
+        let trace = FetchDiagnostics()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [DiagnosticCreditsURLProtocol.self]
+        let session = URLSession(configuration: configuration, delegate: trace, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        let usage = try await FetchDiagnostics.$current.withValue(trace) {
+            try await CodexUsageFetcher.fetch(
+                source: .account, configuredCredential: nil, cachedCookieHeader: nil,
+                allowBrowserImport: false, session: session, environment: ["CODEX_HOME": directory.path],
+                cliLoader: { _ in Self.diagnosticFixture }
+            )
+        }
+        #expect(usage.diagnosticSource == "CLI")
+        #expect(trace.source == "CLI")
+    }
+
+    @Test
+    func exhaustedFallbackReportsOnlyItsLastAttempt() async {
+        let trace = FetchDiagnostics()
+        await #expect(throws: CodexUsageError.unauthorized) {
+            try await FetchDiagnostics.$current.withValue(trace) {
+                _ = try await CodexUsageFetcher.execute(order: [.oauth, .web]) { strategy in
+                    if strategy == .oauth { throw CodexUsageError.missingOAuthCredential }
+                    throw CodexUsageError.unauthorized
+                }
+            }
+        }
+        #expect(trace.failureSource == "Cookie")
+        #expect(trace.source == "Cookie")
+    }
+
+    @Test
+    func explicitAPIStrategyWinsOverTransportTokenShape() async throws {
+        let trace = FetchDiagnostics()
+        let requestURL = try #require(URL(string: "https://example.invalid/backend-api/wham/usage"))
+        var request = URLRequest(url: requestURL)
+        request.setValue("Bearer private-key", forHTTPHeaderField: "Authorization")
+        let recordedRequest = request
+        let usage = try await FetchDiagnostics.$current.withValue(trace) {
+            try await CodexUsageFetcher.execute(order: [.api]) { _ in
+                trace.record(request: recordedRequest, response: nil)
+                return Self.diagnosticFixture
+            }
+        }
+        #expect(usage.diagnosticSource == "API")
+        #expect(trace.source == "API")
+    }
+
+    @Test
+    func credentialCLIIsReplacedByTheActualQuotaAPI() throws {
+        let trace = FetchDiagnostics()
+        trace.note("CLI")
+        let url = try #require(URL(string: "https://example.invalid/quota"))
+        trace.record(request: URLRequest(url: url), response: nil)
+        trace.finishSuccess()
+        #expect(trace.source == "API")
+        #expect(trace.failureSource == "API")
+    }
+
+    @Test
+    func sourceTrackingDoesNotTurnCancellationIntoFallback() async {
+        let trace = FetchDiagnostics()
+        await #expect(throws: CancellationError.self) {
+            try await FetchDiagnostics.$current.withValue(trace) {
+                _ = try await CodexUsageFetcher.execute(order: [.oauth, .web]) { _ in
+                    throw CancellationError()
+                }
+            }
+        }
+        #expect(trace.failureSource == "OAuth")
+    }
+
+    private nonisolated static var diagnosticFixture: ProviderUsage {
+        ProviderUsage(id: ProviderID(rawValue: "codex"), state: .ready, windows: [
+            UsageWindow(id: "weekly", label: "Weekly", usedFraction: 0.4),
+        ])
+    }
+}
+
+private nonisolated final class DiagnosticCreditsURLProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let url = request.url, url.path.hasSuffix("/wham/rate-limit-reset-credits"),
+              let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)
+        else {
+            Issue.record("Unexpected request in the offline credits fixture")
+            client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
+            return
+        }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(#"{"credits":[],"available_count":0}"#.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}

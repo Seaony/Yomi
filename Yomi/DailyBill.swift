@@ -13,6 +13,7 @@ nonisolated struct DailyBillData: Equatable, Sendable {
     var issuedAt: Date
     var providers: [DailyBillProviderGroup]
     var totalUsage: DailyTokenUsage
+    // 已扣除缓存读取的新输入；缓存写入仍计在这里。
     var inputTokens: Int64?
     var outputTokens: Int64?
     var cacheReadTokens: Int64?
@@ -62,14 +63,15 @@ nonisolated enum DailyBill {
             return model.reportedTotalTokens == nil || model.reportedTotalTokens == components
         }
         // Codex 的输入已含缓存；Claude 的读写缓存要补进输入分母，只有读缓存算命中。
-        let input = hasCompleteBreakdown ? models.reduce(Int64.zero) {
+        let effectiveInput = hasCompleteBreakdown ? models.reduce(Int64.zero) {
             $0 + $1.inputTokens + ($1.inputIncludesCache ? 0 : $1.cacheReadTokens + $1.cacheWriteTokens)
         } : nil
         let output = hasCompleteBreakdown ? models.reduce(Int64.zero) { $0 + $1.outputTokens } : nil
         let cacheRead = hasCompleteBreakdown ? models.reduce(Int64.zero) { $0 + $1.cacheReadTokens } : nil
+        let input = effectiveInput.flatMap { effective in cacheRead.map { effective - $0 } }
         let cacheHitRate: Double?
-        if let input, input > 0, let cacheRead {
-            cacheHitRate = Double(cacheRead) / Double(input)
+        if let effectiveInput, effectiveInput > 0, let cacheRead {
+            cacheHitRate = Double(cacheRead) / Double(effectiveInput)
         } else {
             cacheHitRate = nil
         }

@@ -14,7 +14,7 @@ struct DailyBillReceiptView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 8) {
-                Text(copy.text("今日用量小票", "Daily Usage Receipt"))
+                Text(copy.text("今日 AI 账单", "Today's AI bill"))
                     .font(.system(size: 20, weight: .semibold))
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(data.day.formatted(.dateTime.year().month().day().locale(language.locale)))
@@ -46,8 +46,10 @@ struct DailyBillReceiptView: View {
             VStack(spacing: 8) {
                 summaryRow(copy.text("连续使用", "Usage streak"), value: streakText)
                 if let ratio = data.comparisonToDailyAverage {
-                    summaryRow(copy.text("相当于活跃日日均", "Of active-day average"),
-                               value: ratio.formatted(.percent.precision(.fractionLength(0...1)).locale(language.locale)))
+                    Text(DailyBillReceiptText.dailyAverageComparison(ratio, language: language))
+                        .monospacedDigit()
+                        .foregroundStyle(ink.opacity(0.7))
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
 
@@ -68,9 +70,12 @@ struct DailyBillReceiptView: View {
                                 amount(provider.usage, weight: .semibold)
                             }
                             ForEach(provider.models) { model in
+                                let name = model.model == ModelUsageBreakdown.unknownModel ? "" : model.model
                                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                    Text(safeModelUsageName(model.model, language: language))
-                                        .lineLimit(2)
+                                    Text(compactModelUsageName(name, language: language))
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                        .help(fullModelUsageName(name, language: language))
                                         .fixedSize(horizontal: false, vertical: true)
                                     Spacer(minLength: 8)
                                     amount(model.usage)
@@ -88,7 +93,8 @@ struct DailyBillReceiptView: View {
 
             VStack(spacing: 8) {
                 summaryRow(copy.text("Token 总量", "Total tokens"), value: tokenText(data.totalUsage.tokens))
-                summaryRow(copy.text("输入", "Input"), value: tokenText(data.inputTokens))
+                summaryRow(copy.text("输入（不含缓存）", "Input (excluding cache)"), value: tokenText(data.inputTokens))
+                summaryRow(copy.text("缓存读取", "Cache reads"), value: tokenText(data.cacheReadTokens))
                 summaryRow(copy.text("输出", "Output"), value: tokenText(data.outputTokens))
                 summaryRow(copy.text("缓存命中率", "Cache hit rate"), value: data.cacheHitRate.map {
                     $0.formatted(.percent.precision(.fractionLength(0...1)).locale(language.locale))
@@ -242,6 +248,11 @@ enum DailyBillImageExporter {
 }
 
 enum DailyBillReceiptText {
+    static func dailyAverageComparison(_ ratio: Double, language: AppLanguage) -> String {
+        let multiple = ratio.formatted(.number.precision(.fractionLength(1)).locale(language.locale))
+        return AppCopy(language: language).text("是日均的 \(multiple) 倍", "\(multiple)× daily average")
+    }
+
     static func providerName(_ id: ProviderID, language: AppLanguage) -> String {
         ProviderCatalog.byID[id]?.name ?? AppCopy(language: language).text("本地用量", "Local usage")
     }

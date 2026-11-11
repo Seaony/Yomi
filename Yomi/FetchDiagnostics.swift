@@ -1,21 +1,48 @@
 import Foundation
 
-// 每次采集独立记录实际经过的认证方式，不保存请求地址、头或正文。
+// 每次采集只保留取到用量的来源；请求地址、认证头和正文都不保存。
 nonisolated final class FetchDiagnostics: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     @TaskLocal static var current: FetchDiagnostics?
     @TaskLocal static var session: URLSession?
     private let lock = NSLock()
-    private var sources: [String] = []
+    private var lastObservedSource: String?
+    private var lastStrategySource: String?
+    private var successfulSource: String?
     private var lastStatus: Int?
 
     func note(_ source: String) {
+        lock.withLock { lastObservedSource = Self.safeSource(source) }
+    }
+
+    func beginStrategy(_ source: String) {
         lock.withLock {
-            if !sources.contains(source) { sources.append(source) }
+            lastStrategySource = Self.safeSource(source)
+            lastObservedSource = lastStrategySource
+            successfulSource = nil
+            lastStatus = nil
         }
     }
 
-    var source: String { lock.withLock { sources.isEmpty ? "None" : sources.joined(separator: "+") } }
+    func finishSuccess(source: String? = nil) {
+        lock.withLock {
+            successfulSource = source.map(Self.safeSource)
+                ?? successfulSource ?? lastStrategySource ?? lastObservedSource ?? "Local"
+        }
+    }
+
+    var source: String {
+        lock.withLock { successfulSource ?? lastStrategySource ?? lastObservedSource ?? "None" }
+    }
+
+    var failureSource: String {
+        lock.withLock { lastStrategySource ?? lastObservedSource ?? "None" }
+    }
+
     var httpStatus: Int? { lock.withLock { lastStatus } }
+
+    private static func safeSource(_ value: String) -> String {
+        ["API", "OAuth", "Cookie", "CLI", "Local API", "Local", "None"].contains(value) ? value : "None"
+    }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
         for transaction in metrics.transactionMetrics {

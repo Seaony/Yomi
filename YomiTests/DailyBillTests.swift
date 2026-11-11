@@ -28,7 +28,7 @@ struct DailyBillTests {
         #expect(bill.totalUsage.valueUSD == bill.providers.reduce(0) { $0 + ($1.usage.valueUSD ?? 0) })
         #expect(bill.inputTokens == 110)
         #expect(bill.outputTokens == 55)
-        #expect(bill.totalUsage.tokens == (bill.inputTokens ?? 0) + (bill.outputTokens ?? 0))
+        #expect(bill.totalUsage.tokens == (bill.inputTokens ?? 0) + (bill.cacheReadTokens ?? 0) + (bill.outputTokens ?? 0))
         #expect(bill.day == calendar.startOfDay(for: now))
         #expect(bill.issuedAt == now)
     }
@@ -71,10 +71,11 @@ struct DailyBillTests {
         let claude = model("claude", input: 100, cacheRead: 50, cacheWrite: 25, output: 30,
                            inputIncludesCache: false, cost: 2)
         let bill = calculate([provider("codex", models: [codex]), provider("claude", models: [claude])])
-        #expect(bill.inputTokens == 275)
+        #expect(bill.inputTokens == 185)
         #expect(bill.outputTokens == 50)
         #expect(bill.cacheReadTokens == 90)
         #expect(bill.totalUsage.tokens == 325)
+        #expect(bill.totalUsage.tokens == (bill.inputTokens ?? 0) + (bill.cacheReadTokens ?? 0) + (bill.outputTokens ?? 0))
         #expect(bill.hasCompleteTokenBreakdown)
         #expect(abs(try #require(bill.cacheHitRate) - 90.0 / 275.0) < 1e-12)
     }
@@ -88,6 +89,33 @@ struct DailyBillTests {
         #expect(bill.totalUsage.tokens == 100)
         #expect(bill.cacheHitRate == 0)
         #expect(calculate([provider("pi", models: [model("output-only", output: 20, cost: 1)])]).cacheHitRate == nil)
+    }
+
+    @Test
+    func codexSeparatesCacheReadsFromNewInputWithoutChangingHitRate() throws {
+        let bill = calculate([provider("codex", models: [
+            model("gpt", input: 100, cacheRead: 40, output: 20, inputIncludesCache: true, cost: 1),
+        ])])
+        #expect(bill.inputTokens == 60)
+        #expect(bill.cacheReadTokens == 40)
+        #expect(bill.outputTokens == 20)
+        #expect(bill.totalUsage.tokens == 120)
+        #expect(bill.totalUsage.tokens == (bill.inputTokens ?? 0) + (bill.cacheReadTokens ?? 0) + (bill.outputTokens ?? 0))
+        #expect(abs(try #require(bill.cacheHitRate) - 0.4) < 1e-12)
+    }
+
+    @Test
+    func claudeCacheWritesStayInNewInputAndInTheHitRateDenominator() throws {
+        let bill = calculate([provider("claude", models: [
+            model("sonnet", input: 20, cacheRead: 50, cacheWrite: 80, output: 20,
+                  inputIncludesCache: false, cost: 1),
+        ])])
+        #expect(bill.inputTokens == 100)
+        #expect(bill.cacheReadTokens == 50)
+        #expect(bill.outputTokens == 20)
+        #expect(bill.totalUsage.tokens == 170)
+        #expect(bill.totalUsage.tokens == (bill.inputTokens ?? 0) + (bill.cacheReadTokens ?? 0) + (bill.outputTokens ?? 0))
+        #expect(abs(try #require(bill.cacheHitRate) - 50.0 / 150.0) < 1e-12)
     }
 
     @Test

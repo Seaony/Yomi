@@ -769,8 +769,8 @@ private struct ProviderRailItem: View {
             TimelineView(.periodic(from: .now, by: 60)) { context in
                 ZStack {
                     ring
-                        .opacity(UsageFreshness.isStale(
-                            updatedAt: usage.updatedAt,
+                        .opacity(UsageFreshness.shouldDim(
+                            usage: usage,
                             refreshInterval: refreshInterval(),
                             now: context.date
                         ) ? 0.45 : 1)

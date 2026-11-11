@@ -124,7 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             dailyBillPanel = window
         }
         dailyBillPanel?.contentViewController = NSHostingController(rootView: DailyBillWindowContent(store: store))
-        dailyBillPanel?.title = AppLocalization.text("今日账单", "Today's Bill")
+        dailyBillPanel?.title = AppLocalization.text("今日 AI 账单", "Today's AI bill")
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
         dailyBillPanel?.makeKeyAndOrderFront(nil)
@@ -137,7 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func languageChanged() {
         settingsWindow?.title = settingsWindowTitle
-        dailyBillPanel?.title = AppLocalization.text("今日账单", "Today's Bill")
+        dailyBillPanel?.title = AppLocalization.text("今日 AI 账单", "Today's AI bill")
     }
 
     private var settingsWindowTitle: String {

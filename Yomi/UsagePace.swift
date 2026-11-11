@@ -21,7 +21,15 @@ nonisolated struct UsagePace: Equatable, Sendable {
 
     var expectedRemainingFraction: Double { 1 - expectedUsedPercent / 100 }
 
-    static func evaluate(window: UsageWindow, now: Date = Date()) -> UsagePace? {
+    static func evaluate(
+        window: UsageWindow,
+        now: Date = Date(),
+        updatedAt: Date? = nil,
+        refreshInterval: TimeInterval = 300
+    ) -> UsagePace? {
+        guard !UsageFreshness.isStale(updatedAt: updatedAt, refreshInterval: refreshInterval, now: now) else {
+            return nil
+        }
         guard let minutes = window.windowMinutes, minutes > 0,
               let resetsAt = window.resetsAt,
               window.usedFraction.isFinite,
