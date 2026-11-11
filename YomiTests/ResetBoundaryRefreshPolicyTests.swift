@@ -25,7 +25,7 @@ struct ResetBoundaryRefreshPolicyTests {
         let plan = ResetBoundaryRefreshPolicy.plan(usages: [snapshot, snapshot], attemptedBoundaries: [], now: now)
         #expect(plan.dueProviderIDs == [ProviderID(rawValue: "codex")])
         #expect(plan.attemptedBoundaries == [
-            .init(providerID: snapshot.id, windowID: "weekly", resetsAt: now),
+            .init(providerID: snapshot.id, resetsAt: now),
         ])
         #expect(plan.nextDeadline == nil)
     }
@@ -66,20 +66,20 @@ struct ResetBoundaryRefreshPolicyTests {
     }
 
     @Test
-    func providerAndWindowIdentifiersRemainIndependent() {
+    func providersRemainIndependentWhileWindowsShareAResetBoundary() {
         let usages = [
             usage("claude", windows: [window("shared", reset: now), window("different", reset: now)]),
             usage("codex", windows: [window("shared", reset: now)]),
         ]
         let plan = ResetBoundaryRefreshPolicy.plan(usages: usages, attemptedBoundaries: [], now: now)
         #expect(plan.dueProviderIDs.count == 2)
-        #expect(plan.attemptedBoundaries.count == 3)
+        #expect(plan.attemptedBoundaries.count == 2)
     }
 
     @Test
     func windowsWithoutAResetAreIgnoredAndHistoryIsPreserved() {
         let previous = ResetBoundaryRefreshPolicy.Boundary(
-            providerID: ProviderID(rawValue: "claude"), windowID: "previous", resetsAt: now.addingTimeInterval(-60)
+            providerID: ProviderID(rawValue: "claude"), resetsAt: now.addingTimeInterval(-60)
         )
         let plan = ResetBoundaryRefreshPolicy.plan(
             usages: [usage("claude", windows: [window("unknown", reset: nil)])],
@@ -157,7 +157,105 @@ struct ResetBoundaryRefreshPolicyTests {
         )
         #expect(due.dueProviderIDs == [usage.id])
         #expect(due.nextDeadline == nil)
-        #expect(due.attemptedBoundaries == [.init(providerID: usage.id, windowID: "session", resetsAt: reset)])
+        #expect(due.attemptedBoundaries == [.init(providerID: usage.id, resetsAt: reset)])
+    }
+
+    @Test
+    func renamingAWindowAtTheSameResetDoesNotTriggerAgain() {
+        let first = ResetBoundaryRefreshPolicy.plan(
+            usages: [usage("claude", windows: [window("weekly", reset: now)])],
+            attemptedBoundaries: [], now: now
+        )
+        let renamed = usage("claude", windows: [window("renamed-weekly", reset: now)])
+        let second = ResetBoundaryRefreshPolicy.plan(
+            usages: [renamed], attemptedBoundaries: first.attemptedBoundaries,
+            lastTriggeredAtByProvider: first.lastTriggeredAtByProvider, now: now.addingTimeInterval(60)
+        )
+        #expect(first.dueProviderIDs == [renamed.id])
+        #expect(second.dueProviderIDs.isEmpty)
+        #expect(second.nextDeadline == nil)
+        #expect(second.attemptedBoundaries == first.attemptedBoundaries)
+    }
+
+    @Test
+    func anotherResetWaitsUntilSixtySecondsAfterThePreviousTrigger() {
+        let original = usage("claude", windows: [window("session", reset: now)])
+        let first = ResetBoundaryRefreshPolicy.plan(usages: [original], attemptedBoundaries: [], now: now)
+        let next = usage("claude", windows: [window("weekly", reset: now.addingTimeInterval(30))])
+        let waiting = ResetBoundaryRefreshPolicy.plan(
+            usages: [next], attemptedBoundaries: first.attemptedBoundaries,
+            lastTriggeredAtByProvider: first.lastTriggeredAtByProvider, now: now.addingTimeInterval(59)
+        )
+        #expect(waiting.dueProviderIDs.isEmpty)
+        #expect(waiting.nextDeadline == now.addingTimeInterval(60))
+        #expect(waiting.attemptedBoundaries == first.attemptedBoundaries)
+        #expect(waiting.lastTriggeredAtByProvider[next.id] == now)
+        let due = ResetBoundaryRefreshPolicy.plan(
+            usages: [next], attemptedBoundaries: waiting.attemptedBoundaries,
+            lastTriggeredAtByProvider: waiting.lastTriggeredAtByProvider, now: now.addingTimeInterval(60)
+        )
+        #expect(due.dueProviderIDs == [next.id])
+        #expect(due.attemptedBoundaries.count == 2)
+        #expect(due.lastTriggeredAtByProvider[next.id] == now.addingTimeInterval(60))
+        #expect(due.nextDeadline == nil)
+    }
+
+    @Test
+    func aProviderCoolingDownDoesNotDelayAnotherProvider() {
+        let first = ResetBoundaryRefreshPolicy.plan(
+            usages: [usage("claude", windows: [window("session", reset: now)])],
+            attemptedBoundaries: [], now: now
+        )
+        let nextReset = now.addingTimeInterval(1)
+        let usages = [
+            usage("claude", windows: [window("weekly", reset: nextReset)]),
+            usage("codex", windows: [window("weekly", reset: nextReset)]),
+        ]
+        let second = ResetBoundaryRefreshPolicy.plan(
+            usages: usages, attemptedBoundaries: first.attemptedBoundaries,
+            lastTriggeredAtByProvider: first.lastTriggeredAtByProvider, now: now.addingTimeInterval(2)
+        )
+        #expect(second.dueProviderIDs == [ProviderID(rawValue: "codex")])
+        #expect(second.nextDeadline == now.addingTimeInterval(60))
+        #expect(second.lastTriggeredAtByProvider[ProviderID(rawValue: "claude")] == now)
+        #expect(second.lastTriggeredAtByProvider[ProviderID(rawValue: "codex")] == now.addingTimeInterval(2))
+    }
+
+    @Test
+    func allDueResetsOfOneProviderShareOneTrigger() {
+        let snapshot = usage(
+            "claude", windows: [window("session", reset: now.addingTimeInterval(-10)), window("weekly", reset: now)],
+            additional: [window("model-weekly", reset: now), window("another", reset: now.addingTimeInterval(-5))]
+        )
+        let first = ResetBoundaryRefreshPolicy.plan(usages: [snapshot], attemptedBoundaries: [], now: now)
+        #expect(first.dueProviderIDs == [snapshot.id])
+        #expect(first.attemptedBoundaries.count == 3)
+        #expect(first.lastTriggeredAtByProvider[snapshot.id] == now)
+        let repeated = ResetBoundaryRefreshPolicy.plan(
+            usages: [snapshot], attemptedBoundaries: first.attemptedBoundaries,
+            lastTriggeredAtByProvider: first.lastTriggeredAtByProvider, now: now.addingTimeInterval(1)
+        )
+        #expect(repeated.dueProviderIDs.isEmpty)
+        #expect(repeated.nextDeadline == nil)
+    }
+
+    @Test
+    func aFutureObservedResetIsScheduledAndRecordsItsTriggerTime() {
+        let reset = now.addingTimeInterval(120)
+        let snapshot = ProviderUsage(
+            id: ProviderID(rawValue: "codex"), state: .ready,
+            windows: [window("weekly", reset: reset)], updatedAt: now
+        )
+        let future = ResetBoundaryRefreshPolicy.plan(usages: [snapshot], attemptedBoundaries: [], now: now)
+        #expect(future.dueProviderIDs.isEmpty)
+        #expect(future.nextDeadline == reset)
+        #expect(future.lastTriggeredAtByProvider.isEmpty)
+        let due = ResetBoundaryRefreshPolicy.plan(
+            usages: [snapshot], attemptedBoundaries: future.attemptedBoundaries,
+            lastTriggeredAtByProvider: future.lastTriggeredAtByProvider, now: reset
+        )
+        #expect(due.dueProviderIDs == [snapshot.id])
+        #expect(due.lastTriggeredAtByProvider[snapshot.id] == reset)
     }
 
     private func usage(

@@ -134,6 +134,24 @@ struct UsageStoreBackoffTests {
         #expect(await collector.browserImportPermissions() == [false, false])
     }
 
+    @Test
+    func distinctResetDatesCannotRefreshTheSameProviderAgainDuringCooldown() async throws {
+        let fixture = try fixture(enabled: ["codex"])
+        defer { fixture.defaults.removePersistentDomain(forName: fixture.name) }
+        let now = Date()
+        let collector = BackoffFixtureCollector(replies: [
+            "codex": [
+                .init(resetAt: now.addingTimeInterval(-1), updatedAt: now.addingTimeInterval(-2)),
+                .init(resetAt: now.addingTimeInterval(-0.5), updatedAt: now.addingTimeInterval(-1)),
+            ],
+        ])
+        let store = UsageStore(preferences: fixture.preferences, collector: collector, defaults: fixture.defaults)
+        await store.refresh()
+        await waitForCalls(collector, provider: "codex", count: 2)
+        try await Task.sleep(for: .milliseconds(40))
+        #expect(await collector.calls(for: "codex") == 2)
+    }
+
     private func fixture(enabled: Set<String>) throws -> (name: String, defaults: UserDefaults, preferences: ProviderPreferences) {
         let name = "backoff-integration-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: name))

@@ -17,6 +17,7 @@ final class UsageStore: ObservableObject {
     private var refreshLoop: Task<Void, Never>?
     private var deadlineRefreshTask: Task<Void, Never>?
     private var attemptedResetBoundaries: Set<ResetBoundaryRefreshPolicy.Boundary> = []
+    private var lastResetTriggeredAtByProvider: [ProviderID: Date] = [:]
     private var attemptedBackoffRetries: [String: Date] = [:]
     private let backoffKey = "provider-backoff.v1"
     private var preferenceObserver: AnyCancellable?
@@ -34,6 +35,7 @@ final class UsageStore: ObservableObject {
         var providerID: ProviderID?
         var allowBrowserCookieImport: Bool
         var isManual: Bool
+        var resetBoundaries: Set<ResetBoundaryRefreshPolicy.Boundary> = []
     }
 
     var enabledProviders: [ProviderDescriptor] {
@@ -110,8 +112,10 @@ final class UsageStore: ObservableObject {
         let now = Date()
         let usages = enabledProviders.compactMap { usageByID[$0.id] }
         let plan = ResetBoundaryRefreshPolicy.plan(
-            usages: usages, attemptedBoundaries: attemptedResetBoundaries, now: now
+            usages: usages, attemptedBoundaries: attemptedResetBoundaries,
+            lastTriggeredAtByProvider: lastResetTriggeredAtByProvider, now: now
         )
+        let newResetBoundaries = plan.attemptedBoundaries.subtracting(attemptedResetBoundaries)
         attemptedResetBoundaries = plan.attemptedBoundaries
         let retries = ProviderBackoffPolicy.plan(
             stateByID: backoffByID, enabledProviderIDs: Set(enabledProviders.map(\.id)),
@@ -125,7 +129,10 @@ final class UsageStore: ObservableObject {
                 self.deadlineRefreshTask = nil
                 for id in ids.sorted(by: { $0.rawValue < $1.rawValue }) {
                     guard !Task.isCancelled else { return }
-                    await self.refresh(providerID: id)
+                    let boundaries: Set<ResetBoundaryRefreshPolicy.Boundary> = retries.dueProviderIDs.contains(id)
+                        ? [] : Set(newResetBoundaries.filter { $0.providerID == id })
+                    await self.refresh(RefreshRequest(providerID: id, allowBrowserCookieImport: false,
+                                                      isManual: false, resetBoundaries: boundaries))
                 }
                 self.scheduleDeadlineRefresh()
             }
@@ -148,6 +155,10 @@ final class UsageStore: ObservableObject {
     func refresh(providerID: ProviderID? = nil, allowBrowserCookieImport: Bool = false, isManual: Bool = false) async {
         let request = RefreshRequest(providerID: providerID, allowBrowserCookieImport: allowBrowserCookieImport,
                                      isManual: isManual || allowBrowserCookieImport)
+        await refresh(request)
+    }
+
+    private func refresh(_ request: RefreshRequest) async {
         guard !isRefreshing else {
             enqueue(request)
             return
@@ -162,7 +173,8 @@ final class UsageStore: ObservableObject {
                 await performRefresh(
                     providerID: currentRequest.providerID,
                     allowBrowserCookieImport: currentRequest.allowBrowserCookieImport,
-                    isManual: currentRequest.isManual
+                    isManual: currentRequest.isManual,
+                    resetBoundaries: currentRequest.resetBoundaries
                 )
             }
             nextRequest = dequeueRefresh()
@@ -174,11 +186,13 @@ final class UsageStore: ObservableObject {
             var pending = pendingProviderIDs[id] ?? request
             pending.allowBrowserCookieImport = pending.allowBrowserCookieImport || request.allowBrowserCookieImport
             pending.isManual = pending.isManual || request.isManual
+            pending.resetBoundaries.formUnion(request.resetBoundaries)
             pendingProviderIDs[id] = pending
         } else {
             var pending = pendingFullRefresh ?? request
             pending.allowBrowserCookieImport = pending.allowBrowserCookieImport || request.allowBrowserCookieImport
             pending.isManual = pending.isManual || request.isManual
+            pending.resetBoundaries.formUnion(request.resetBoundaries)
             pendingFullRefresh = pending
         }
     }
@@ -193,7 +207,18 @@ final class UsageStore: ObservableObject {
         return request
     }
 
-    private func performRefresh(providerID: ProviderID?, allowBrowserCookieImport: Bool, isManual: Bool) async {
+    private func performRefresh(providerID: ProviderID?, allowBrowserCookieImport: Bool, isManual: Bool,
+                                resetBoundaries: Set<ResetBoundaryRefreshPolicy.Boundary>) async {
+        if let providerID, !resetBoundaries.isEmpty {
+            let now = Date()
+            if !isManual, let last = lastResetTriggeredAtByProvider[providerID], now.timeIntervalSince(last) < 60 {
+                attemptedResetBoundaries.subtract(resetBoundaries)
+                scheduleDeadlineRefresh()
+                return
+            }
+            // 真正开始取数时才记时间，排队等待不能缩短两次请求的间隔。
+            lastResetTriggeredAtByProvider[providerID] = now
+        }
         DiagnosticLog.shared.write("Refresh started", category: .refresh)
         let requested = enabledProviders.filter { providerID == nil || $0.id == providerID }
         let now = Date()
