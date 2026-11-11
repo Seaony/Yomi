@@ -350,7 +350,8 @@ nonisolated enum ClaudeCLIUsageFetcher {
                 label: label,
                 usedFraction: Double(100 - percentLeft) / 100,
                 resetsAt: parseResetDate(reset, now: now, expectedWindow: expectedWindow),
-                detail: reset
+                detail: reset,
+                windowMinutes: Int(expectedWindow / 60)
             )
         }
 

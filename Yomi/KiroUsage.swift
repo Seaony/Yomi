@@ -530,7 +530,8 @@ nonisolated enum KiroUsageFetcher {
                 detail: AppLocalization.text(
                     "剩余 \(formatCredits(remaining)) / \(formatCredits(report.creditsTotal)) 点额度",
                     "\(formatCredits(remaining)) of \(formatCredits(report.creditsTotal)) credits left"
-                )
+                ),
+                windowMinutes: monthlyWindowMinutes(endingAt: report.resetsAt)
             ))
         }
 
@@ -1195,6 +1196,16 @@ nonisolated enum KiroUsageFetcher {
     private static func capture(_ match: NSTextCheckingResult, index: Int, in text: String) -> String? {
         guard index < match.numberOfRanges, let range = Range(match.range(at: index), in: text) else { return nil }
         return String(text[range])
+    }
+
+    private static func monthlyWindowMinutes(endingAt reset: Date?) -> Int? {
+        guard let reset else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? calendar.timeZone
+        guard let start = calendar.date(byAdding: .month, value: -1, to: reset) else { return nil }
+        let minutes = reset.timeIntervalSince(start) / 60
+        guard minutes.isFinite, minutes > 0 else { return nil }
+        return Int(exactly: minutes.rounded())
     }
 
     private static func formatCredits(_ value: Double) -> String {

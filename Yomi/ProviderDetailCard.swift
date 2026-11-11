@@ -773,6 +773,7 @@ private struct UsageWindowRow: View {
     let tint: Color
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.appLanguage) private var language
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var copy: AppCopy { AppCopy(language: language) }
 
@@ -781,6 +782,10 @@ private struct UsageWindowRow: View {
     }
 
     var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let pace = UsagePace.evaluate(window: window, now: context.date)
+            let isAhead = pace.map { $0.predictionReady && $0.deltaPercent > 0 } ?? false
+            let barTint = isAhead ? Color.orange : tint
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(copy.usageLabel(window.label))
@@ -792,7 +797,7 @@ private struct UsageWindowRow: View {
                     "\(Int((remainingFraction * 100).rounded()))% left"
                 ))
                     .font(.system(size: 11.5, weight: .bold, design: .rounded))
-                    .foregroundStyle(tint)
+                    .foregroundStyle(barTint)
                     .monospacedDigit()
                     .fixedSize(horizontal: true, vertical: false)
                     .contentTransition(.numericText(value: remainingFraction))
@@ -809,15 +814,35 @@ private struct UsageWindowRow: View {
             }
 
             GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(AppTheme.primaryText(for: colorScheme).opacity(0.13))
-                    Capsule()
-                        .fill(tint)
-                        .frame(width: max(4, proxy.size.width * remainingFraction))
-                        .animation(.easeInOut(duration: 0.18), value: remainingFraction)
+                let count = SegmentedUsageBar.segmentCount(width: proxy.size.width)
+                let filled = SegmentedUsageBar.filledCount(remainingFraction: remainingFraction, segmentCount: count)
+                let marker = pace.flatMap {
+                    SegmentedUsageBar.markerIndex(expectedUsedFraction: $0.expectedUsedPercent / 100, segmentCount: count)
                 }
+                HStack(alignment: .center, spacing: SegmentedUsageBar.spacing) {
+                    ForEach(0..<count, id: \.self) { index in
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(index == marker
+                                ? AppTheme.primaryText(for: colorScheme).opacity(0.8)
+                                : barTint.opacity(index < filled ? 1 : 0.16))
+                            .frame(width: SegmentedUsageBar.barWidth, height: index == marker ? 16 : 12)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: filled)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: marker)
             }
-            .frame(height: 5)
+            .frame(height: 16)
+            .accessibilityLabel(copy.text("剩余额度", "Remaining quota"))
+            .accessibilityValue("\(Int((remainingFraction * 100).rounded()))%")
+            .help(copy.text("加高的竖条表示按时间计算的剩余额度位置。", "The taller segment marks the remaining quota expected by this time."))
+
+            if let pace, pace.predictionReady {
+                Text(paceText(pace, now: context.date))
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(isAhead ? Color.orange : AppTheme.primaryText(for: colorScheme).opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if let detail = window.detail, !detail.isEmpty {
                 Text(detail)
@@ -826,6 +851,19 @@ private struct UsageWindowRow: View {
                     .lineLimit(2)
             }
         }
+        }
+    }
+
+    private func paceText(_ pace: UsagePace, now: Date) -> String {
+        if pace.actualUsedPercent >= 100 { return copy.text("已用完", "Quota depleted") }
+        guard pace.deltaPercent > 0, let eta = pace.etaSeconds else {
+            return copy.text("能撑到重置", "Lasts until reset")
+        }
+        let delta = pace.deltaPercent.formatted(.number.precision(.fractionLength(0...1)))
+        let duration = eta < 60
+            ? copy.text("不到 1 分钟", "less than 1 min")
+            : compactDuration(from: now, until: now.addingTimeInterval(eta), language: language)
+        return copy.text("超前 \(delta)%，预计 \(duration)后用完", "\(delta)% ahead, runs out in \(duration)")
     }
 
 }

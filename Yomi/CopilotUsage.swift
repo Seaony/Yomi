@@ -326,7 +326,18 @@ nonisolated enum CopilotUsageFetcher {
             : nil
         return UsageWindow(
             id: id, label: label, usedFraction: quota.usedFraction,
-            resetsAt: reset, detail: overage
+            resetsAt: reset, detail: overage,
+            windowMinutes: monthlyWindowMinutes(endingAt: reset)
         )
+    }
+
+    private static func monthlyWindowMinutes(endingAt reset: Date?) -> Int? {
+        guard let reset else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? calendar.timeZone
+        guard let start = calendar.date(byAdding: .month, value: -1, to: reset) else { return nil }
+        let minutes = reset.timeIntervalSince(start) / 60
+        guard minutes.isFinite, minutes > 0 else { return nil }
+        return Int(exactly: minutes.rounded())
     }
 }

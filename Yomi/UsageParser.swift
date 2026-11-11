@@ -75,7 +75,8 @@ nonisolated enum UsageParser {
                 label: label,
                 usedFraction: usedPercent / 100,
                 resetsAt: date(object["reset_at"]),
-                detail: nil
+                detail: nil,
+                windowMinutes: seconds.flatMap { $0 >= 60 ? $0 / 60 : nil }
             ),
             role: role
         )
@@ -104,7 +105,7 @@ nonisolated enum UsageParser {
 
     private static func parseClaude(_ root: Any, descriptor: ProviderDescriptor, isWeb: Bool) -> ProviderUsage? {
         guard let response = root as? [String: Any] else { return nil }
-        func window(_ key: String, label: String) -> UsageWindow? {
+        func window(_ key: String, label: String, windowMinutes: Int? = nil) -> UsageWindow? {
             guard let object = response[key] as? [String: Any],
                   let utilization = numericValue(object["utilization"])
             else { return nil }
@@ -113,15 +114,16 @@ nonisolated enum UsageParser {
                 label: label,
                 usedFraction: utilization / 100,
                 resetsAt: date(object["resets_at"]),
-                detail: nil
+                detail: nil,
+                windowMinutes: windowMinutes
             )
         }
 
-        let fiveHour = window("five_hour", label: "Session")
-        let sevenDay = window("seven_day", label: "Weekly")
-        let oauthApps = window("seven_day_oauth_apps", label: "OAuth apps")
-        let sonnet = window("seven_day_sonnet", label: "Sonnet")
-        let opus = window("seven_day_opus", label: "Opus")
+        let fiveHour = window("five_hour", label: "Session", windowMinutes: 300)
+        let sevenDay = window("seven_day", label: "Weekly", windowMinutes: 10_080)
+        let oauthApps = window("seven_day_oauth_apps", label: "OAuth apps", windowMinutes: 10_080)
+        let sonnet = window("seven_day_sonnet", label: "Sonnet", windowMinutes: 10_080)
+        let opus = window("seven_day_opus", label: "Opus", windowMinutes: 10_080)
         // 没有五小时窗口时会话行保持缺席，周额度和模型额度各占自己的位置，对齐 CodexBar。
         var windows = [fiveHour, sevenDay ?? oauthApps, sonnet ?? opus].compactMap { $0 }
 
@@ -162,7 +164,8 @@ nonisolated enum UsageParser {
                     label: label,
                     usedFraction: percent / 100,
                     resetsAt: date(limit["resets_at"]),
-                    detail: nil
+                    detail: nil,
+                    windowMinutes: 10_080
                 ))
             }
         }
@@ -244,7 +247,8 @@ nonisolated enum UsageParser {
                 label: tier,
                 usedFraction: 1 - quota.remaining,
                 resetsAt: quota.reset,
-                detail: nil
+                detail: nil,
+                windowMinutes: 1_440
             )
         }
         guard !windows.isEmpty else { return nil }

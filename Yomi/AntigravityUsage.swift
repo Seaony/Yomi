@@ -416,7 +416,8 @@ nonisolated enum AntigravityUsageFetcher {
                         label: "\(groupName) \(cadence.title ?? rawName)",
                         usedFraction: fraction,
                         resetsAt: parseDate(bucket["resetTime"]),
-                        detail: detail
+                        detail: detail,
+                        windowMinutes: cadence.rank == 0 ? 300 : cadence.rank == 1 ? 10080 : nil
                     )
                 ))
             }
@@ -455,7 +456,8 @@ nonisolated enum AntigravityUsageFetcher {
                 label: key == "gemini" ? "Gemini Models" : "Claude and \(otherFamilyAbbreviation) models",
                 usedFraction: representative.usedFraction,
                 resetsAt: representative.resetsAt,
-                detail: representative.detail
+                detail: representative.detail,
+                windowMinutes: representative.windowMinutes
             )
         }
         return ProviderUsage(

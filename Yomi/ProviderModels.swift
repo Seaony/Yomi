@@ -79,6 +79,7 @@ nonisolated struct UsageWindow: Codable, Hashable, Sendable, Identifiable {
     var usedFraction: Double
     var resetsAt: Date?
     var detail: String?
+    var windowMinutes: Int? = nil
 
     nonisolated var clampedFraction: Double {
         min(max(usedFraction, 0), 1)

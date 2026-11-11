@@ -101,19 +101,19 @@ nonisolated enum GeminiAppUsageFetcher {
               let usage = (viewer["rpcs"] as? [String: Any])?["getUsageInfo"] as? [String: Any],
               let pools = usage["pools"] as? [Any] else { throw FetchError.parseFailed }
 
-        func window(_ type: String, id: String, label: String) -> UsageWindow? {
+        func window(_ type: String, id: String, label: String, minutes: Int) -> UsageWindow? {
             guard let pool = pools.compactMap({ $0 as? [String: Any] }).first(where: { $0["poolType"] as? String == type }),
                   let percent = (pool["percentageUsed"] as? NSNumber)?.doubleValue,
                   percent.isFinite, percent >= 0 else { return nil }
             let rawReset = (pool["gxu"] as? [String: Any])?["windowRefreshesAt"] as? String
             return UsageWindow(
                 id: id, label: label, usedFraction: min(1, percent),
-                resetsAt: rawReset.flatMap(parseDate), detail: nil
+                resetsAt: rawReset.flatMap(parseDate), detail: nil, windowMinutes: minutes
             )
         }
         let windows = [
-            window("GXU_FIVE_HOURLY", id: "gemini-app-5h", label: "5-hour"),
-            window("GXU_WEEKLY", id: "gemini-app-weekly", label: "Weekly"),
+            window("GXU_FIVE_HOURLY", id: "gemini-app-5h", label: "5-hour", minutes: 300),
+            window("GXU_WEEKLY", id: "gemini-app-weekly", label: "Weekly", minutes: 10080),
         ].compactMap { $0 }
         guard !windows.isEmpty else { throw FetchError.noWindows }
         return ProviderUsage(

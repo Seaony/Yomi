@@ -681,7 +681,8 @@ nonisolated enum CodexUsageFetcher {
         }
         return UsageWindow(
             id: id, label: label, usedFraction: value.usedPercent / 100,
-            resetsAt: value.resetsAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }, detail: nil)
+            resetsAt: value.resetsAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }, detail: nil,
+            windowMinutes: value.windowDurationMins.flatMap { $0 > 0 ? $0 : nil })
     }
 
     private static func normalizeWindows(_ windows: [UsageWindow]) -> [UsageWindow] {

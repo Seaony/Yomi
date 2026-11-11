@@ -132,6 +132,7 @@ enum CursorUsageFetcher {
         }
 
         let reset = date(summary.billingCycleEnd)
+        let billingCycleMinutes = windowMinutes(start: date(summary.billingCycleStart), end: reset)
         let legacyUsed = legacy?.gpt4?.numRequestsTotal ?? legacy?.gpt4?.numRequests
         let legacyLimit = legacy?.gpt4?.maxRequestUsage
         let hasLegacy = teamBudget == nil && legacyUsed != nil && (legacyLimit ?? 0) > 0
@@ -152,7 +153,8 @@ enum CursorUsageFetcher {
                 label: "Weekly",
                 usedFraction: clampedPercent(percent) / 100,
                 resetsAt: sharedWeeklyReset,
-                detail: nil
+                detail: nil,
+                windowMinutes: 10080
             ))
         } else if hasLegacy || totalPercent != nil {
             windows.append(UsageWindow(
@@ -162,7 +164,8 @@ enum CursorUsageFetcher {
                     ? Double(legacyUsed ?? 0) / Double(legacyLimit ?? 1)
                     : (totalPercent ?? 0) / 100,
                 resetsAt: reset,
-                detail: hasLegacy ? "\(legacyUsed ?? 0) / \(legacyLimit ?? 0) requests" : nil
+                detail: hasLegacy ? "\(legacyUsed ?? 0) / \(legacyLimit ?? 0) requests" : nil,
+                windowMinutes: billingCycleMinutes
             ))
         }
         if !hasLegacy, sharedWeeklyReset == nil, let autoPercent {
@@ -171,7 +174,8 @@ enum CursorUsageFetcher {
                 label: "Cursor",
                 usedFraction: autoPercent / 100,
                 resetsAt: reset,
-                detail: nil
+                detail: nil,
+                windowMinutes: billingCycleMinutes
             ))
         }
         if !hasLegacy, sharedWeeklyReset == nil, let apiPercent {
@@ -180,7 +184,8 @@ enum CursorUsageFetcher {
                 label: "Third Party",
                 usedFraction: apiPercent / 100,
                 resetsAt: reset,
-                detail: nil
+                detail: nil,
+                windowMinutes: billingCycleMinutes
             ))
         }
         var additional: [UsageWindow] = []
@@ -190,7 +195,8 @@ enum CursorUsageFetcher {
                 label: "Grok Bot",
                 usedFraction: clampedPercent(percent) / 100,
                 resetsAt: sandReset,
-                detail: nil
+                detail: nil,
+                windowMinutes: sandReset == nil ? nil : 10080
             ))
         }
 
@@ -385,6 +391,13 @@ enum CursorUsageFetcher {
 
     private nonisolated static func clampedPercent(_ value: Double) -> Double {
         min(max(value, 0), 100)
+    }
+
+    private static func windowMinutes(start: Date?, end: Date?) -> Int? {
+        guard let start, let end else { return nil }
+        let minutes = end.timeIntervalSince(start) / 60
+        guard minutes.isFinite, minutes > 0 else { return nil }
+        return Int(exactly: minutes.rounded()).flatMap { $0 > 0 ? $0 : nil }
     }
 
     private static func date(_ raw: String?) -> Date? {

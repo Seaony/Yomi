@@ -171,7 +171,7 @@ nonisolated enum GeminiUsageFetcher {
             return UsageWindow(
                 id: "gemini-\(label.lowercased().replacingOccurrences(of: " ", with: "-"))",
                 label: label, usedFraction: 1 - quota.remaining,
-                resetsAt: quota.reset, detail: nil
+                resetsAt: quota.reset, detail: nil, windowMinutes: 1440
             )
         }
         guard !windows.isEmpty else { throw UsageCollectionError.unreadableResponse }
