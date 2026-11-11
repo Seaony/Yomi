@@ -4,6 +4,30 @@ import Testing
 
 struct DiagnosticsTests {
     @Test
+    func railTimingLogsRetainMillisecondPrecision() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let log = DiagnosticLog(directoryURL: directory, systemLoggingEnabled: false)
+        let start = Date(timeIntervalSince1970: 1_800_000_000.123)
+        log.write("Reveal strip pointer entered", category: .rail, date: start)
+        log.write("Rail expansion started", category: .rail, date: start.addingTimeInterval(0.001))
+        log.write("Rail expansion completed", category: .rail, date: start.addingTimeInterval(0.201))
+        let lines = log.recentLogText().split(separator: "\n")
+        #expect(lines.count == 3)
+        #expect(lines.allSatisfy { $0.contains("[rail]") })
+        #expect(lines[0].contains("pointer entered"))
+        #expect(lines[1].contains("expansion started"))
+        #expect(lines[2].contains("expansion completed"))
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let dates = try lines.map { line in
+            try #require(formatter.date(from: String(line.split(separator: " ")[0])))
+        }
+        #expect(abs(dates[1].timeIntervalSince(dates[0]) - 0.001) < 0.0001)
+        #expect(abs(dates[2].timeIntervalSince(dates[1]) - 0.2) < 0.0001)
+    }
+
+    @Test
     func removesCredentialsAndAccountIdentifiers() {
         let secrets = [
             "very-private-bearer", "sk-ant-private-key", "session-private-cookie",

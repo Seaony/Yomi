@@ -5,6 +5,81 @@ import Testing
 struct FullscreenDetectionTests {
     private let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
     private let pid: pid_t = 42
+    private let measuredScreen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+    private let measuredFilledWindow = CGRect(x: 0, y: 33, width: 1512, height: 949)
+    private let desktopIconLayer = -2_147_483_603
+
+    @Test
+    func measuredAccessoryOverlayAndVisibleDesktopAreNotFullscreen() {
+        #expect(!FullscreenDetection.hasFullscreenWindow(
+            screenBounds: measuredScreen,
+            windows: [.init(pid: 100, layer: 0, bounds: measuredScreen, activationPolicy: .accessory)],
+            desktopWindows: [.init(pid: 200, layer: desktopIconLayer, bounds: measuredScreen)],
+            safeAreaTopInset: 33
+        ))
+    }
+
+    @Test
+    func measuredRegularFilledWindowWithVisibleDesktopIsNotFullscreen() {
+        #expect(!FullscreenDetection.hasFullscreenWindow(
+            screenBounds: measuredScreen,
+            windows: [.init(pid: pid, layer: 0, bounds: measuredFilledWindow)],
+            desktopWindows: [.init(pid: 200, layer: desktopIconLayer, bounds: measuredScreen)],
+            safeAreaTopInset: 33
+        ))
+    }
+
+    @Test
+    func measuredFinderFullscreenCountsWhileAnotherDisplaysDesktopRemainsVisible() {
+        let otherDisplay = CGRect(x: 1512, y: -98, width: 1920, height: 1080)
+        #expect(FullscreenDetection.hasFullscreenWindow(
+            screenBounds: measuredScreen,
+            windows: [.init(pid: 200, layer: 0, bounds: measuredFilledWindow)],
+            desktopWindows: [.init(pid: 200, layer: desktopIconLayer, bounds: otherDisplay)],
+            safeAreaTopInset: 33
+        ))
+    }
+
+    @Test
+    func noDesktopIconsOnAnyDisplayFallsBackToRegularWindowGeometry() {
+        #expect(FullscreenDetection.hasFullscreenWindow(
+            screenBounds: measuredScreen,
+            windows: [.init(pid: pid, layer: 0, bounds: measuredFilledWindow)],
+            desktopWindows: [],
+            safeAreaTopInset: 33
+        ))
+    }
+
+    @Test(arguments: [
+        FullscreenDetection.ActivationPolicy.accessory, .prohibited, .unknown,
+    ])
+    func overlaysAndUnknownProcessesCannotTriggerTheFallback(policy: FullscreenDetection.ActivationPolicy) {
+        #expect(!FullscreenDetection.hasFullscreenWindow(
+            screenBounds: measuredScreen,
+            windows: [.init(pid: 100, layer: 0, bounds: measuredScreen, activationPolicy: policy)]
+        ))
+    }
+
+    @Test
+    func unrelatedSystemLayersAreNotDesktopIconEvidence() {
+        #expect(FullscreenDetection.hasFullscreenWindow(
+            screenBounds: measuredScreen,
+            windows: [.init(pid: pid, layer: 0, bounds: measuredFilledWindow)],
+            desktopWindows: [.init(pid: 300, layer: desktopIconLayer + 1, bounds: measuredScreen)],
+            safeAreaTopInset: 33
+        ))
+    }
+
+    @Test
+    func desktopWindowCoveringTheTargetScreenRejectsFullscreen() {
+        let spanningDesktop = CGRect(x: -1920, y: -98, width: 3432, height: 1080)
+        #expect(!FullscreenDetection.hasFullscreenWindow(
+            screenBounds: measuredScreen,
+            windows: [.init(pid: pid, layer: 0, bounds: measuredFilledWindow)],
+            desktopWindows: [.init(pid: 200, layer: desktopIconLayer, bounds: spanningDesktop)],
+            safeAreaTopInset: 33
+        ))
+    }
 
     @Test
     func recognizesFullHeightWindowOnTargetScreen() {

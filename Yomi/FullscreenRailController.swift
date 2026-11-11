@@ -20,6 +20,7 @@ final class FullscreenRailController {
     private let onCollapseChanged: (Bool) -> Void
     private var isRunning = false
     private var isFullscreenOnTargetScreen = false
+    private var lastFullscreenResult: Bool?
     private var lastEnabled: Bool?
     private var workspaceObservers: [NSObjectProtocol] = []
     private var defaultsObserver: NSObjectProtocol?
@@ -97,6 +98,7 @@ final class FullscreenRailController {
         globalMouseMonitor = nil
         lastEnabled = nil
         isFullscreenOnTargetScreen = false
+        lastFullscreenResult = nil
         let wasCollapsed = state.isCollapsed
         state = FullscreenCollapsePolicy.State()
         if wasCollapsed { onCollapseChanged(false) }
@@ -106,19 +108,33 @@ final class FullscreenRailController {
         guard isRunning else { return }
         let current = context()
         lastEnabled = current.enabled
+        var desktopCount = 0
+        var regularCount = 0
         if current.enabled, let screenFrame = current.screenFrame,
            let primaryScreen = NSScreen.screens.first {
             let bounds = FullscreenDetection.coreGraphicsBounds(
                 appKitFrame: screenFrame, primaryScreenHeight: primaryScreen.frame.height
             )
+            let windows = FullscreenDetection.onScreenWindows()
+            let desktopWindows = FullscreenDetection.onScreenDesktopWindows()
+            desktopCount = desktopWindows.count
+            regularCount = windows.filter { $0.layer == 0 && $0.activationPolicy == .regular }.count
             isFullscreenOnTargetScreen = FullscreenDetection.hasFullscreenWindow(
                 screenBounds: bounds,
-                windows: FullscreenDetection.onScreenWindows(),
+                windows: windows,
+                desktopWindows: desktopWindows,
                 excludingPIDs: [ProcessInfo.processInfo.processIdentifier],
                 safeAreaTopInset: current.safeAreaTopInset
             )
         } else {
             isFullscreenOnTargetScreen = false
+        }
+        if lastFullscreenResult != isFullscreenOnTargetScreen {
+            lastFullscreenResult = isFullscreenOnTargetScreen
+            DiagnosticLog.shared.write(
+                "Fullscreen detection active=\(isFullscreenOnTargetScreen) desktopCount=\(desktopCount) regularCount=\(regularCount)",
+                category: .rail
+            )
         }
         updateState(using: current)
     }
@@ -131,6 +147,11 @@ final class FullscreenRailController {
     func reveal() {
         guard isRunning else { return }
         updateState(using: context(), revealRequested: true)
+    }
+
+    func pointerEnteredRevealStrip() {
+        guard isRunning else { return }
+        updateState(using: context(), revealRequested: true, pointerEntry: true)
     }
 
     private func workspaceChanged() {
@@ -150,19 +171,23 @@ final class FullscreenRailController {
         refreshFullscreen()
     }
 
-    private func updateState(using current: Context, revealRequested: Bool = false) {
-        let pointer = NSEvent.mouseLocation
+    private func updateState(using current: Context, revealRequested: Bool = false, pointerEntry: Bool = false) {
+        let pointer = pointerEntry ? nil : NSEvent.mouseLocation
         let revealFrame = current.screenFrame.map {
             FullscreenCollapsePolicy.collapsedFrame(
                 expandedFrame: current.expandedFrame, screenFrame: $0, edge: current.edge
             )
         }
         let previous = state
+        let pointerInsideRevealFrame = pointer.map { revealFrame?.contains($0) == true } ?? false
+        if previous.isCollapsed && (pointerEntry || pointerInsideRevealFrame) {
+            DiagnosticLog.shared.write("Reveal strip pointer entered", category: .rail)
+        }
         state = FullscreenCollapsePolicy.reduce(previous: previous, input: .init(
             enabled: current.enabled,
             isFullscreenOnTargetScreen: isFullscreenOnTargetScreen,
-            pointerInsideRail: current.railFrame.contains(pointer),
-            pointerInsideRevealStrip: revealFrame?.contains(pointer) == true,
+            pointerInsideRail: pointer.map { current.railFrame.contains($0) } ?? false,
+            pointerInsideRevealStrip: pointerEntry || pointerInsideRevealFrame,
             detailVisible: current.detailVisible,
             billVisible: current.billVisible,
             revealRequested: revealRequested,

@@ -7,6 +7,7 @@ nonisolated enum FullscreenCollapsePolicy {
     static let collapseDelay: TimeInterval = 0.45
     static let stripWidth: CGFloat = 4
     static let stripHeight: CGFloat = 48
+    static let slideDuration: TimeInterval = 0.2
 
     enum Edge: Equatable, Sendable {
         case left
@@ -53,5 +54,9 @@ nonisolated enum FullscreenCollapsePolicy {
             width: stripWidth,
             height: stripHeight
         )
+    }
+
+    static func slideOffset(width: CGFloat, edge: Edge, revealProgress: CGFloat) -> CGFloat {
+        (edge == .left ? -width : width) * (1 - revealProgress)
     }
 }

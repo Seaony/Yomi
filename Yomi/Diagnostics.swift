@@ -6,7 +6,7 @@ nonisolated enum DiagnosticCategory: String, CaseIterable, Sendable {
     case provider
     case credentials
     case update
-    case window
+    case rail
 }
 
 nonisolated enum DiagnosticsRedactor {
@@ -134,7 +134,9 @@ nonisolated final class DiagnosticLog: @unchecked Sendable {
         if systemLoggingEnabled {
             loggers[category]?.info("\(safe, privacy: .public)")
         }
-        let timestamp = ISO8601DateFormatter().string(from: date)
+        let formatter = ISO8601DateFormatter()
+        if category == .rail { formatter.formatOptions.insert(.withFractionalSeconds) }
+        let timestamp = formatter.string(from: date)
         let line = "\(timestamp) [\(category.rawValue)] \(safe)\n"
         // 单条也有上限，异常错误文本不能把整份日志撑大。
         let data = Data((String(decoding: line.utf8.prefix(maximumFileBytes - 1), as: UTF8.self)
