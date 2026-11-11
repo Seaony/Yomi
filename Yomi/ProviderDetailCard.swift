@@ -61,6 +61,7 @@ struct ProviderDetailCard: View {
     let isRefreshing: Bool
     let refreshInterval: () -> TimeInterval
     let refresh: () -> Void
+    var openDailyBill: (() -> Void)? = nil
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.appLanguage) private var language
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -210,6 +211,11 @@ struct ProviderDetailCard: View {
             }
 
             detailContent
+            if isOverview, let openDailyBill {
+                Button(copy.text("今日账单", "Today's Bill"), action: openDailyBill)
+                    .buttonStyle(.bordered)
+                    .pointerStyle(.link)
+            }
         }
         .padding(14)
         .frame(width: 300)
@@ -287,11 +293,7 @@ struct ProviderDetailCard: View {
     }
 
     private func modelName(_ model: String) -> String {
-        switch model {
-        case ModelUsageBreakdown.unknownModel: copy.text("未知模型", "Unknown model")
-        case ModelUsageBreakdown.otherModels: copy.text("其他", "Other")
-        default: DiagnosticsRedactor.redact(model)
-        }
+        safeModelUsageName(model, language: language)
     }
 
     private var usageHeadline: some View {
@@ -563,6 +565,7 @@ struct ProviderDetailPanelView: View {
     @ObservedObject private var appPreferences = AppPreferences.shared
     @ObservedObject var presentation: ProviderDetailPresentation
     let railSide: UsageRailSide
+    var openDailyBill: (() -> Void)? = nil
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -585,7 +588,8 @@ struct ProviderDetailPanelView: View {
                         allowBrowserCookieImport: true
                     )
                 }
-            }
+            },
+            openDailyBill: openDailyBill
         )
         .padding(
             railSide == .right ? .trailing : .leading,

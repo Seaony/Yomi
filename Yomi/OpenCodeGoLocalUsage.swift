@@ -21,8 +21,10 @@ enum OpenCodeGoLocalUsageReader {
         let today = rows.filter { $0.date >= todayStart && $0.date <= now }
         let last30Days = rows.filter { $0.date >= thirtyDayStart && $0.date <= now }
         enriched.today = tokenUsage(today)
-        enriched.todayByModel = enriched.today != nil && today.allSatisfy { $0.modelUsage != nil }
-            ? ModelUsageBreakdown.merged(today.compactMap(\.modelUsage)) : nil
+        enriched.todayByModel = today.isEmpty ? [] : (
+            enriched.today != nil && today.allSatisfy { $0.modelUsage != nil }
+                ? ModelUsageBreakdown.merged(today.compactMap(\.modelUsage)) : nil
+        )
         enriched.last30Days = tokenUsage(last30Days)
         enriched.last30DaysDaily = Dictionary(grouping: last30Days) { calendar.startOfDay(for: $0.date) }
             .compactMap { date, rows in

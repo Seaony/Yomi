@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var providerDetailCloseTask: Task<Void, Never>?
     private var providerDetailSizeObserver: AnyCancellable?
     private var settingsWindow: NSWindow?
+    private var dailyBillPanel: NSPanel?
     private var verticalPosition: CGFloat = 0.5
     private var railSide = UsageRailSide.right
 
@@ -93,12 +94,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func closeSettingsIfNeeded() {
-        guard settingsWindow?.isVisible != true else { return }
+        guard settingsWindow?.isVisible != true, dailyBillPanel?.isVisible != true else { return }
         NSApp.setActivationPolicy(.accessory)
     }
 
     func windowWillClose(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        let closing = notification.object as? NSWindow
+        let anotherWindowIsOpen = [settingsWindow, dailyBillPanel].contains { window in
+            window != closing && window?.isVisible == true
+        }
+        if !anotherWindowIsOpen { NSApp.setActivationPolicy(.accessory) }
+    }
+
+    private func openDailyBill() {
+        closeProviderDetail()
+        if dailyBillPanel == nil {
+            let visible = targetScreen()?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+            let height = min(720, max(420, visible.height - 80))
+            let window = NSPanel(
+                contentRect: NSRect(x: visible.midX - 214, y: visible.midY - height / 2, width: 428, height: height),
+                styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false
+            )
+            window.minSize = NSSize(width: 428, height: 420)
+            window.level = .floating
+            window.hidesOnDeactivate = false
+            window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+            window.isReleasedWhenClosed = false
+            window.delegate = self
+            dailyBillPanel = window
+        }
+        dailyBillPanel?.contentViewController = NSHostingController(rootView: DailyBillWindowContent(store: store))
+        dailyBillPanel?.title = AppLocalization.text("今日账单", "Today's Bill")
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate()
+        dailyBillPanel?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func screenLayoutChanged() {
@@ -108,6 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func languageChanged() {
         settingsWindow?.title = settingsWindowTitle
+        dailyBillPanel?.title = AppLocalization.text("今日账单", "Today's Bill")
     }
 
     private var settingsWindowTitle: String {
@@ -219,7 +249,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let root = ProviderDetailPanelView(
             store: store,
             presentation: presentation,
-            railSide: railSide
+            railSide: railSide,
+            openDailyBill: { [weak self] in self?.openDailyBill() }
         )
         let hostingView = NSHostingView(rootView: root)
         let fittingSize = hostingView.fittingSize
@@ -495,6 +526,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : duration
     }
 
+}
+
+private struct DailyBillWindowContent: View {
+    @ObservedObject var store: UsageStore
+    @ObservedObject private var preferences = AppPreferences.shared
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        DailyBillPanelView(
+            data: DailyBill.calculate(usages: store.enabledProviders.compactMap { store.usageByID[$0.id] }),
+            language: preferences.language,
+            colorScheme: preferences.appearance.colorScheme ?? colorScheme
+        )
+        .preferredColorScheme(preferences.appearance.colorScheme)
+    }
 }
 
 final class FloatingPanel: NSPanel {
