@@ -78,7 +78,7 @@ struct ProviderDetailCard: View {
             return compactTokenCount(requests, language: language)
         }
         guard let tokens = usage.today?.tokens else { return "—" }
-        return compactTokenCount(tokens, language: language)
+        return formatDetailTokensInMillions(tokens)
     }
 
     private var headlineCaption: String {
@@ -113,7 +113,7 @@ struct ProviderDetailCard: View {
     private var overviewCaption: String {
         let cost = costText(usage.last30Days)
         let tokens = usage.last30Days.map {
-            compactTokenCount($0.tokens, language: language)
+            formatDetailTokensInMillions($0.tokens)
         } ?? "—"
         return copy.text(
             "\(tokens) Token · \(cost) · 30 天",
@@ -127,7 +127,7 @@ struct ProviderDetailCard: View {
                 + " " + copy.text("次请求", "requests")
         }
         guard let tokens = usage.last30Days?.tokens else { return "—" }
-        return compactTokenCount(tokens, language: language)
+        return formatDetailTokensInMillions(tokens)
     }
 
     private var last30DaysCostValue: String {
@@ -271,7 +271,7 @@ struct ProviderDetailCard: View {
                         .truncationMode(.middle)
                         .help(modelName(row.model))
                     Spacer(minLength: 4)
-                    Text(compactTokenCount(row.tokens, language: language))
+                    Text(formatDetailTokensInMillions(row.tokens))
                     if row.valueUSD != nil || row.partialValueUSD != nil {
                         Text(costText(row.usage))
                             .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
@@ -742,7 +742,7 @@ private struct DailyUsageTooltip: View {
             HStack(spacing: 8) {
                 Text(copy.text("总用量", "Total usage"))
                 Spacer(minLength: 8)
-                Text(compactTokenCount(point.usage.tokens, language: language))
+                Text(formatDetailTokensInMillions(point.usage.tokens))
                     .monospacedDigit()
             }
             .font(.system(size: 10, weight: .bold, design: .rounded))
@@ -757,7 +757,7 @@ private struct DailyUsageTooltip: View {
                     Text(providerName(for: breakdown.providerID))
                         .lineLimit(1)
                     Spacer(minLength: 8)
-                    Text(compactTokenCount(breakdown.usage.tokens, language: language))
+                    Text(formatDetailTokensInMillions(breakdown.usage.tokens))
                         .monospacedDigit()
                 }
                 .font(.system(size: 9.5, weight: .semibold, design: .rounded))
