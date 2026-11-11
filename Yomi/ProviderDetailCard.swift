@@ -202,8 +202,11 @@ struct ProviderDetailCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if isOverview || !displayedWindows.isEmpty {
+            if isOverview || !displayedWindows.isEmpty || usage.today != nil {
                 usageHeadline
+            }
+            if !isOverview, let models = usage.todayByModel, !models.isEmpty {
+                modelBreakdown(models)
             }
 
             detailContent
@@ -225,7 +228,7 @@ struct ProviderDetailCard: View {
                   usage.balance != nil || usage.providerCost != nil || !usage.details.isEmpty {
             providerSummaryContent
         } else if displayedWindows.isEmpty {
-            emptyState
+            if usage.today == nil { emptyState }
         } else {
             VStack(spacing: 11) {
                 ForEach(displayedWindows) { window in
@@ -239,6 +242,55 @@ struct ProviderDetailCard: View {
             }
 
             footer
+        }
+    }
+
+    private func modelBreakdown(_ models: [ModelTokenUsage]) -> some View {
+        let rows = ModelUsageBreakdown.displayRows(models)
+        let total = models.reduce(Int64.zero) { $0 + $1.tokens }
+        let colors: [Color] = [.blue, .orange, .purple, .teal, .pink, .secondary]
+        return VStack(alignment: .leading, spacing: 7) {
+            Text(copy.text("今日模型用量", "Today's model usage"))
+                .font(.system(size: 11.5, weight: .semibold))
+            GeometryReader { proxy in
+                HStack(spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                        Rectangle()
+                            .fill(colors[index % colors.count])
+                            .frame(width: proxy.size.width * ModelUsageBreakdown.fraction(row, totalTokens: total))
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
+            .frame(height: 6)
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                HStack(spacing: 4) {
+                    Circle().fill(colors[index % colors.count]).frame(width: 5, height: 5)
+                    Text(modelName(row.model))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(modelName(row.model))
+                    Spacer(minLength: 4)
+                    Text(compactTokenCount(row.tokens, language: language))
+                    if row.valueUSD != nil || row.partialValueUSD != nil {
+                        Text(costText(row.usage))
+                            .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
+                    }
+                    Text(ModelUsageBreakdown.fraction(row, totalTokens: total).formatted(.percent.precision(.fractionLength(0...1))))
+                        .frame(minWidth: 30, alignment: .trailing)
+                }
+                .font(.system(size: 10.5))
+                .monospacedDigit()
+                .accessibilityElement(children: .combine)
+            }
+        }
+    }
+
+    private func modelName(_ model: String) -> String {
+        switch model {
+        case ModelUsageBreakdown.unknownModel: copy.text("未知模型", "Unknown model")
+        case ModelUsageBreakdown.otherModels: copy.text("其他", "Other")
+        default: DiagnosticsRedactor.redact(model)
         }
     }
 

@@ -21,6 +21,8 @@ enum OpenCodeGoLocalUsageReader {
         let today = rows.filter { $0.date >= todayStart && $0.date <= now }
         let last30Days = rows.filter { $0.date >= thirtyDayStart && $0.date <= now }
         enriched.today = tokenUsage(today)
+        enriched.todayByModel = enriched.today != nil && today.allSatisfy { $0.modelUsage != nil }
+            ? ModelUsageBreakdown.merged(today.compactMap(\.modelUsage)) : nil
         enriched.last30Days = tokenUsage(last30Days)
         enriched.last30DaysDaily = Dictionary(grouping: last30Days) { calendar.startOfDay(for: $0.date) }
             .compactMap { date, rows in
@@ -53,13 +55,15 @@ enum OpenCodeGoLocalUsageReader {
                   let cost = Double(fields[1]), cost.isFinite, cost >= 0,
                   let requests = Int(fields[2])
             else { return nil }
+            let counts = fields.count > 3
+                ? try? JSONDecoder().decode(TokenCounts.self, from: Data(fields[3].utf8)) : nil
+            let model = fields.count > 4 ? String(fields[4]) : ModelUsageBreakdown.unknownModel
             return OpenCodeGoLocalRow(
                 date: Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1000),
                 cost: cost,
                 requestCount: max(1, requests),
-                tokens: fields.count > 3
-                    ? (try? JSONDecoder().decode(TokenCounts.self, from: Data(fields[3].utf8)))?.resolvedTotal
-                    : nil
+                tokens: counts?.resolvedTotal,
+                modelUsage: counts?.modelUsage(model: model, cost: cost)
             )
         }
     }
@@ -193,7 +197,8 @@ enum OpenCodeGoLocalUsageReader {
           CAST(COALESCE(json_extract(data, '$.time.created'), time_created) AS INTEGER) AS createdMs,
           CAST(json_extract(data, '$.cost') AS REAL) AS cost,
           json_type(data, '$.cost') IN ('integer', 'real') AS hasCost,
-          CASE WHEN json_type(data, '$.tokens') = 'object' THEN json_extract(data, '$.tokens') END AS tokens
+          CASE WHEN json_type(data, '$.tokens') = 'object' THEN json_extract(data, '$.tokens') END AS tokens,
+          COALESCE(json_extract(data, '$.modelID'), '') AS modelID
         FROM message
         WHERE json_valid(data)
           AND json_extract(data, '$.providerID') = 'opencode-go'
@@ -208,7 +213,8 @@ enum OpenCodeGoLocalUsageReader {
             CAST(json_extract(p.data, '$.cost') AS REAL) AS cost,
             CASE WHEN json_type(p.data, '$.tokens') = 'object' THEN json_extract(p.data, '$.tokens') END
               AS tokens,
-            m.messageID AS messageID
+            m.messageID AS messageID,
+            m.modelID AS modelID
           FROM part p
           JOIN provider_messages m ON m.messageID = p.message_id
           WHERE json_valid(p.data)
@@ -217,7 +223,7 @@ enum OpenCodeGoLocalUsageReader {
         )
         SELECT * FROM provider_parts
         UNION ALL
-        SELECT createdMs, cost, tokens, messageID
+        SELECT createdMs, cost, tokens, messageID, modelID
         FROM provider_messages m
         WHERE hasCost
           AND NOT EXISTS (SELECT 1 FROM provider_parts p WHERE p.messageID = m.messageID)
@@ -227,11 +233,11 @@ enum OpenCodeGoLocalUsageReader {
         hasMessage: Bool, hasPart: Bool, hasV2: Bool, since minimumMilliseconds: Int64
     ) -> String {
         let legacy = if !hasMessage {
-            "SELECT NULL AS createdMs, NULL AS cost, NULL AS tokens, NULL AS messageID WHERE 0"
+            "SELECT NULL AS createdMs, NULL AS cost, NULL AS tokens, NULL AS messageID, NULL AS modelID WHERE 0"
         } else if hasPart {
             messageAndPartSQL
         } else {
-            "SELECT createdMs, cost, tokens, messageID FROM (\(providerMessagesSQL)) WHERE hasCost"
+            "SELECT createdMs, cost, tokens, messageID, modelID FROM (\(providerMessagesSQL)) WHERE hasCost"
         }
         // 同一条消息旧表已有可用金额时以旧表为准，避免新旧两份重复计算。
         let v2 = hasV2 ? """
@@ -239,7 +245,8 @@ enum OpenCodeGoLocalUsageReader {
             SELECT
               CAST(COALESCE(json_extract(s.data, '$.time.created'), s.time_created) AS INTEGER),
               CAST(json_extract(s.data, '$.cost') AS REAL),
-              CASE WHEN json_type(s.data, '$.tokens') = 'object' THEN json_extract(s.data, '$.tokens') END
+              CASE WHEN json_type(s.data, '$.tokens') = 'object' THEN json_extract(s.data, '$.tokens') END,
+              COALESCE(json_extract(s.data, '$.model.id'), '')
             FROM session_message s
             WHERE s.type IN ('assistant', 'compaction')
               AND json_valid(s.data)
@@ -253,8 +260,8 @@ enum OpenCodeGoLocalUsageReader {
             """ : ""
         return """
         WITH legacy_usage AS (\(legacy))
-        SELECT createdMs, cost, 1, tokens FROM (
-          SELECT createdMs, cost, tokens FROM legacy_usage
+        SELECT createdMs, cost, 1, tokens, modelID FROM (
+          SELECT createdMs, cost, tokens, modelID FROM legacy_usage
           \(v2)
         )
         WHERE createdMs >= \(minimumMilliseconds);
@@ -272,6 +279,20 @@ enum OpenCodeGoLocalUsageReader {
         let output: Int64?
         let reasoning: Int64?
         let cache: Cache?
+
+        func modelUsage(model: String, cost: Double) -> ModelTokenUsage? {
+            guard let total = resolvedTotal else { return nil }
+            let output = (output ?? 0).addingReportingOverflow(reasoning ?? 0)
+            guard !output.overflow else { return nil }
+            var row = ModelTokenUsage(
+                model: model.isEmpty ? ModelUsageBreakdown.unknownModel : model,
+                inputTokens: input ?? 0, cacheReadTokens: cache?.read ?? 0,
+                cacheWriteTokens: cache?.write ?? 0, outputTokens: output.partialValue,
+                inputIncludesCache: false, valueUSD: cost
+            )
+            if row.tokens != total { row.reportedTotalTokens = total }
+            return row
+        }
 
         var resolvedTotal: Int64? {
             let components = [input, output, reasoning, cache?.read, cache?.write]
@@ -294,4 +315,5 @@ struct OpenCodeGoLocalRow: Equatable {
     let cost: Double
     let requestCount: Int
     let tokens: Int64?
+    var modelUsage: ModelTokenUsage? = nil
 }

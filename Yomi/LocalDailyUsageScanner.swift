@@ -358,11 +358,25 @@ actor LocalDailyUsageScanner {
         var last30Days = PeriodAccumulator()
         var currentWeek = PeriodAccumulator()
         var last30DaysDaily: [Date: PeriodAccumulator] = [:]
+        var todayModels: [String: ModelTokenUsage] = [:]
 
-        mutating func add(timestamp: Date, tokens: Int, valueUSD: Double?) {
+        mutating func add(
+            timestamp: Date, tokens: Int, valueUSD: Double?,
+            model: String?, counts: Tokens, inputIncludesCache: Bool
+        ) {
             guard timestamp < end else { return }
             if timestamp >= todayStart {
                 today.add(tokens: tokens, valueUSD: valueUSD)
+                if tokens > 0 {
+                    var row = ModelTokenUsage(
+                        model: model ?? ModelUsageBreakdown.unknownModel,
+                        inputTokens: Int64(counts.input), cacheReadTokens: Int64(counts.cacheRead),
+                        cacheWriteTokens: Int64(counts.cacheWrite), outputTokens: Int64(counts.output),
+                        inputIncludesCache: inputIncludesCache, valueUSD: valueUSD
+                    )
+                    if row.tokens != Int64(tokens) { row.reportedTotalTokens = Int64(tokens) }
+                    ModelUsageBreakdown.add(row, to: &todayModels)
+                }
             }
             if timestamp >= last30DaysStart {
                 last30Days.add(tokens: tokens, valueUSD: valueUSD)
@@ -390,7 +404,8 @@ actor LocalDailyUsageScanner {
                 currentWeek: currentWeekUsage,
                 last30DaysDaily: last30DaysDaily.compactMap { date, accumulator in
                     accumulator.usage.map { DailyTokenUsagePoint(date: date, usage: $0) }
-                }.sorted { $0.date < $1.date }
+                }.sorted { $0.date < $1.date },
+                todayByModel: ModelUsageBreakdown.sorted(Array(todayModels.values))
             )
         }
     }
@@ -1036,7 +1051,8 @@ actor LocalDailyUsageScanner {
                 periods.add(
                     timestamp: sample.timestamp,
                     tokens: sample.tokens.codexTotal,
-                    valueUSD: valueUSD
+                    valueUSD: valueUSD,
+                    model: pricedModel ?? sample.model, counts: sample.tokens, inputIncludesCache: true
                 )
             }
         }
@@ -1286,7 +1302,8 @@ actor LocalDailyUsageScanner {
             periods.add(
                 timestamp: sample.timestamp,
                 tokens: sample.tokens.claudeTotal,
-                valueUSD: valueUSD
+                valueUSD: valueUSD,
+                model: sample.model, counts: sample.tokens, inputIncludesCache: false
             )
         }
     }
@@ -2203,7 +2220,11 @@ actor LocalDailyUsageScanner {
             periods.add(
                 timestamp: session.timestamp,
                 tokens: session.tokens,
-                valueUSD: rates.map { Self.deepSeekHarnessCost(session, rates: $0) }
+                valueUSD: rates.map { Self.deepSeekHarnessCost(session, rates: $0) },
+                model: session.model,
+                counts: Tokens(input: session.uncachedInputTokens, cacheRead: session.cacheReadTokens,
+                               cacheWrite: session.cacheWriteTokens, output: session.outputTokens),
+                inputIncludesCache: false
             )
         }
     }
@@ -2247,7 +2268,11 @@ actor LocalDailyUsageScanner {
             periods.add(
                 timestamp: entry.timestamp,
                 tokens: entry.totalTokens,
-                valueUSD: Self.piCost(entry, catalog: pricingCatalog)
+                valueUSD: Self.piCost(entry, catalog: pricingCatalog),
+                model: entry.model,
+                counts: Tokens(input: entry.inputTokens, cacheRead: entry.cacheReadTokens,
+                               cacheWrite: entry.cacheWriteTokens, output: entry.outputTokens),
+                inputIncludesCache: false
             )
         }
     }

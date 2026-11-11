@@ -93,6 +93,26 @@ nonisolated struct DailyTokenUsage: Codable, Hashable, Sendable {
     var partialValueUSD: Double? = nil
 }
 
+nonisolated struct ModelTokenUsage: Codable, Hashable, Sendable, Identifiable {
+    var model: String
+    var inputTokens: Int64
+    var cacheReadTokens: Int64
+    var cacheWriteTokens: Int64
+    var outputTokens: Int64
+    var inputIncludesCache: Bool
+    var valueUSD: Double?
+    var partialValueUSD: Double? = nil
+    var reportedTotalTokens: Int64? = nil
+
+    var id: String { model }
+    var tokens: Int64 {
+        reportedTotalTokens ?? (inputTokens + outputTokens + (inputIncludesCache ? 0 : cacheReadTokens + cacheWriteTokens))
+    }
+    var usage: DailyTokenUsage {
+        DailyTokenUsage(tokens: tokens, valueUSD: valueUSD, partialValueUSD: partialValueUSD)
+    }
+}
+
 nonisolated struct DailyRequestUsage: Codable, Hashable, Sendable {
     var requests: Int64
     var valueUSD: Double
@@ -132,6 +152,7 @@ nonisolated struct LocalTokenUsageSummary: Sendable {
     var last30Days: DailyTokenUsage?
     var currentWeek: DailyTokenUsage?
     var last30DaysDaily: [DailyTokenUsagePoint]
+    var todayByModel: [ModelTokenUsage]? = nil
 }
 
 nonisolated struct CodexResetCredit: Codable, Hashable, Sendable {
@@ -168,6 +189,7 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
     var updatedAt: Date?
     var message: String?
     var diagnosticSource: String? = nil
+    var todayByModel: [ModelTokenUsage]? = nil
 
     nonisolated init(
         id: ProviderID,
@@ -191,7 +213,8 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         commandCodeMonthlyGrantDepleted: Bool = false,
         updatedAt: Date? = nil,
         message: String? = nil,
-        diagnosticSource: String? = nil
+        diagnosticSource: String? = nil,
+        todayByModel: [ModelTokenUsage]? = nil
     ) {
         self.id = id
         self.state = state
@@ -215,6 +238,7 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         self.updatedAt = updatedAt
         self.message = message
         self.diagnosticSource = diagnosticSource
+        self.todayByModel = todayByModel
     }
 
     var headlineFraction: Double {
@@ -226,7 +250,7 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         case last30DaysDaily
         case todayDate, todayRequests, last30DaysRequests
         case weeklyEstimate, providerCost, details, updatedAt, message
-        case codexResetCredits, diagnosticSource
+        case codexResetCredits, diagnosticSource, todayByModel
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -256,6 +280,7 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         last30DaysRequests = try values.decodeIfPresent(DailyRequestUsage.self, forKey: .last30DaysRequests)
         message = try values.decodeIfPresent(String.self, forKey: .message)
         diagnosticSource = try values.decodeIfPresent(String.self, forKey: .diagnosticSource)
+        todayByModel = try values.decodeIfPresent([ModelTokenUsage].self, forKey: .todayByModel)
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -279,5 +304,6 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         try values.encodeIfPresent(updatedAt, forKey: .updatedAt)
         try values.encodeIfPresent(message, forKey: .message)
         try values.encodeIfPresent(diagnosticSource, forKey: .diagnosticSource)
+        try values.encodeIfPresent(todayByModel, forKey: .todayByModel)
     }
 }

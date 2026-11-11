@@ -180,7 +180,8 @@ final class UsageStore: ObservableObject {
                 commandCodeMonthlyGrantDepleted:
                     loadingUsage[job.0.id]?.commandCodeMonthlyGrantDepleted ?? false,
                 updatedAt: loadingUsage[job.0.id]?.updatedAt,
-                message: nil
+                message: nil,
+                todayByModel: loadingUsage[job.0.id]?.todayByModel
             )
         }
         usageByID = loadingUsage
@@ -313,6 +314,7 @@ final class UsageStore: ObservableObject {
               Calendar.current.isDate(todayDate, inSameDayAs: now) else {
             var resolved = usage
             resolved.today = nil
+            resolved.todayByModel = nil
             resolved.todayRequests = nil
             return resolved
         }

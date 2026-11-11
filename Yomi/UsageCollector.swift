@@ -1517,6 +1517,7 @@ actor UsageCollector {
             pricingCatalog: pricingCatalog,
             allowVertexClaudeFallback: allowVertexClaudeFallback
         )
+        enriched.todayByModel = localUsage?.todayByModel
         enriched.today = localUsage?.today
         enriched.todayDate = localUsage?.today == nil ? nil : now
         enriched.last30Days = localUsage?.last30Days
