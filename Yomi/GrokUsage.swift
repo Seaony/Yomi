@@ -706,6 +706,7 @@ nonisolated enum GrokUsageFetcher {
 
     private static func runCLI(environment: [String: String]) async throws -> GrokBillingSnapshot {
         guard let executable = cliExecutable(environment: environment) else { throw GrokUsageError.cliUnavailable }
+        FetchDiagnostics.current?.note("CLI")
         let process = Process(); let input = Pipe(); let output = Pipe(); let errors = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = [executable, "agent", "stdio"]

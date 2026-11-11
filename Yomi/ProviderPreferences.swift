@@ -179,6 +179,7 @@ private nonisolated enum SecretVault {
 
     private static func check(_ status: OSStatus) throws {
         guard status == errSecSuccess else {
+            DiagnosticLog.shared.write("Keychain operation failed status=\(status)", category: .credentials)
             throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
         }
     }

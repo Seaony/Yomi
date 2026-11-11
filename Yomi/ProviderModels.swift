@@ -166,6 +166,7 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
     var commandCodeMonthlyGrantDepleted = false
     var updatedAt: Date?
     var message: String?
+    var diagnosticSource: String? = nil
 
     nonisolated init(
         id: ProviderID,
@@ -188,7 +189,8 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         commandCodeHasSubscriptionPlan: Bool = false,
         commandCodeMonthlyGrantDepleted: Bool = false,
         updatedAt: Date? = nil,
-        message: String? = nil
+        message: String? = nil,
+        diagnosticSource: String? = nil
     ) {
         self.id = id
         self.state = state
@@ -211,6 +213,7 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         self.commandCodeMonthlyGrantDepleted = commandCodeMonthlyGrantDepleted
         self.updatedAt = updatedAt
         self.message = message
+        self.diagnosticSource = diagnosticSource
     }
 
     var headlineFraction: Double {
@@ -222,7 +225,7 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         case last30DaysDaily
         case todayDate, todayRequests, last30DaysRequests
         case weeklyEstimate, providerCost, details, updatedAt, message
-        case codexResetCredits
+        case codexResetCredits, diagnosticSource
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -251,6 +254,7 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         todayRequests = try values.decodeIfPresent(DailyRequestUsage.self, forKey: .todayRequests)
         last30DaysRequests = try values.decodeIfPresent(DailyRequestUsage.self, forKey: .last30DaysRequests)
         message = try values.decodeIfPresent(String.self, forKey: .message)
+        diagnosticSource = try values.decodeIfPresent(String.self, forKey: .diagnosticSource)
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -273,5 +277,6 @@ nonisolated struct ProviderUsage: Codable, Hashable, Sendable, Identifiable {
         try values.encode(details, forKey: .details)
         try values.encodeIfPresent(updatedAt, forKey: .updatedAt)
         try values.encodeIfPresent(message, forKey: .message)
+        try values.encodeIfPresent(diagnosticSource, forKey: .diagnosticSource)
     }
 }

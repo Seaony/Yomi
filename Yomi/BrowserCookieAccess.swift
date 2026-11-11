@@ -54,6 +54,7 @@ nonisolated enum BrowserCookieAccess {
         in browser: Browser,
         client: BrowserCookieClient = BrowserCookieClient()
     ) throws -> [BrowserCookieStoreRecords] {
+        FetchDiagnostics.current?.note("Cookie")
         do {
             return try BrowserCookieKeychainAccessGate.withUserInteractionDisallowed {
                 try client.records(matching: query, in: browser)
@@ -110,6 +111,7 @@ nonisolated enum BrowserCookieAccess {
             }
         }
         if status == errSecSuccess { setCredentialGrant(true, service: grantService) }
+        DiagnosticLog.shared.write("Foreign keychain read status=\(status)", category: .credentials)
         return (status, data)
     }
 
@@ -173,6 +175,7 @@ nonisolated enum BrowserCookieAccess {
 
     private static func recordFailure(_ error: Error, browser: Browser, client: BrowserCookieClient) {
         guard let error = error as? BrowserCookieError, scope != nil else { return }
+        DiagnosticLog.shared.write("Browser cookie access failed", category: .credentials)
         switch error {
         case .accessDenied where browser.usesChromiumProfileStore:
             scope?.record(AppLocalization.text(

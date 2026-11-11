@@ -412,7 +412,8 @@ nonisolated enum AlibabaTokenPlanFetcher {
     }
 
     private static func fetchCLI(region: Region, now: Date) async throws -> ProviderUsage {
-        try await Task.detached(priority: .utility) {
+        FetchDiagnostics.current?.note("CLI")
+        return try await Task.detached(priority: .utility) {
             let environment = ProcessInfo.processInfo.environment
             let path = environment["PATH"] ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
             let directories = path.split(separator: ":").map(String.init).filter { $0.hasPrefix("/") }

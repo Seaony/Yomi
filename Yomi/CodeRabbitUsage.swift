@@ -135,6 +135,7 @@ nonisolated enum CodeRabbitUsageFetcher {
     }
 
     private static func run(binary: String, environment: [String: String]) async throws -> String {
+        FetchDiagnostics.current?.note("CLI")
         let task = Task.detached(priority: .utility) {
             let process = Process()
             let output = Pipe()

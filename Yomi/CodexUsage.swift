@@ -244,6 +244,7 @@ nonisolated enum CodexUsageFetcher {
     ) async throws -> ProviderUsage {
         let selected = CodexUsageSource.selected(by: source)
         let cliUsage: @Sendable () async throws -> ProviderUsage = {
+            FetchDiagnostics.current?.note("CLI")
             var usage = try await cliLoader(environment)
             if let auth = try? CodexAuthStore.load(environment: environment) {
                 usage.codexResetCredits = try await fetchResetCredits(
@@ -287,6 +288,7 @@ nonisolated enum CodexUsageFetcher {
         var lastError: Error = CodexUsageError.missingOAuthCredential
         for (index, source) in order.enumerated() {
             do {
+                FetchDiagnostics.current?.note(source == .cli ? "CLI" : source == .oauth ? "OAuth" : source == .web ? "Cookie" : "API")
                 return try await loader(source)
             } catch is CancellationError {
                 throw CancellationError()

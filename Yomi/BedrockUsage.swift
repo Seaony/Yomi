@@ -198,7 +198,8 @@ nonisolated enum BedrockCredentialResolver {
         arguments: [String],
         environment: [String: String]
     ) async throws -> BedrockCLIResult {
-        try await Task.detached(priority: .utility) {
+        FetchDiagnostics.current?.note("CLI")
+        return try await Task.detached(priority: .utility) {
             let process = Process()
             let stdout = Pipe()
             let stderr = Pipe()

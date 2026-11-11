@@ -707,6 +707,7 @@ nonisolated enum DoubaoUsageFetcher {
     }
 
     private static func runArkcli(executable: URL, environment: [String: String]) async throws -> Data {
+        FetchDiagnostics.current?.note("CLI")
         let state = ProcessState()
         let task = Task.detached(priority: .utility) {
             let process = Process()

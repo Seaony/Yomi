@@ -30,7 +30,8 @@ enum UsageCollectionError: LocalizedError {
 actor UsageCollector {
     private static let claudeWeeklyAmountEstimatorKey = "claude-weekly-amount-estimator.v1"
 
-    private let session: URLSession
+    private let baseSession: URLSession
+    private var session: URLSession { FetchDiagnostics.session ?? baseSession }
     private var pricingCatalog: ModelPricingCatalog?
     private var pricingCatalogLoadTask: Task<ModelPricingCatalogLoadResult, Never>?
     private var pricingCatalogReloadAt = Date.distantPast
@@ -44,7 +45,7 @@ actor UsageCollector {
         configuration.timeoutIntervalForResource = 25
         configuration.waitsForConnectivity = false
         configuration.urlCache = nil
-        session = URLSession(configuration: configuration)
+        baseSession = URLSession(configuration: configuration)
         claudeWeeklyAmountEstimator = UserDefaults.standard.data(
             forKey: Self.claudeWeeklyAmountEstimatorKey
         ).flatMap { try? JSONDecoder().decode(ClaudeWeeklyAmountEstimator.self, from: $0) }
@@ -63,24 +64,32 @@ actor UsageCollector {
             allowInteraction: allowBrowserCookieImport,
             sharingAllowanceFrom: BrowserCookieAccess.scope
         )
-        let usage: ProviderUsage
+        let trace = FetchDiagnostics.current ?? FetchDiagnostics()
+        let tracedSession = URLSession(configuration: baseSession.configuration, delegate: trace, delegateQueue: nil)
+        defer { tracedSession.finishTasksAndInvalidate() }
+        var usage: ProviderUsage
         do {
-            usage = try await BrowserCookieAccess.$scope.withValue(scope) {
-                try await collectRaw(
-                    descriptor: descriptor,
-                    configuration: configuration,
-                    secret: secret,
-                    allowBrowserCookieImport: allowBrowserCookieImport,
-                    usageRevision: usageRevision
-                )
+            usage = try await FetchDiagnostics.$current.withValue(trace) {
+                try await FetchDiagnostics.$session.withValue(tracedSession) {
+                    try await BrowserCookieAccess.$scope.withValue(scope) {
+                        try await collectRaw(
+                            descriptor: descriptor,
+                            configuration: configuration,
+                            secret: secret,
+                            allowBrowserCookieImport: allowBrowserCookieImport,
+                            usageRevision: usageRevision
+                        )
+                    }
+                }
             }
+            usage.diagnosticSource = trace.source == "None" ? "Local" : trace.source
         } catch is CancellationError {
             throw CancellationError()
-        } catch let error as URLError where error.code == .cancelled {
-            throw error
         } catch {
-            guard let message = scope.failureMessage else { throw error }
-            throw UsageCollectionError.browserAccessFailed(error.localizedDescription + "\n" + message)
+            let resolved: Error = scope.failureMessage.map {
+                UsageCollectionError.browserAccessFailed(error.localizedDescription + "\n" + $0)
+            } ?? error
+            throw resolved
         }
         if descriptor.id.rawValue == "opencodego" {
             return OpenCodeGoLocalUsageReader.enrich(usage)
@@ -1225,6 +1234,7 @@ actor UsageCollector {
         var lastError: Error?
         for source in sources {
             do {
+                FetchDiagnostics.current?.note(source == .cli ? "CLI" : source == .webAPI ? "Cookie" : source == .oauthAPI ? "OAuth" : "API")
                 switch source {
                 case .oauthAPI:
                     let credential = configuration.source == .token

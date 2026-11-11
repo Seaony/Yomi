@@ -44,6 +44,7 @@ final class UpdateController: ObservableObject {
         let publicKey = bundle.object(forInfoDictionaryKey: "SUPublicEDKey") as? String
 
         guard let feed, URL(string: feed) != nil else {
+            DiagnosticLog.shared.write("Update feed is not configured", category: .update)
             configurationError = "The update feed is not configured for this build."
             updaterController = nil
             return
@@ -52,6 +53,7 @@ final class UpdateController: ObservableObject {
               let decodedKey = Data(base64Encoded: publicKey),
               decodedKey.count == 32
         else {
+            DiagnosticLog.shared.write("Update public key is not configured", category: .update)
             configurationError = "The Sparkle public key is not configured for this build."
             updaterController = nil
             return
@@ -74,6 +76,7 @@ final class UpdateController: ObservableObject {
     }
 
     func checkForUpdates() {
+        DiagnosticLog.shared.write("User requested update check", category: .update)
         updaterController?.checkForUpdates(nil)
     }
 }

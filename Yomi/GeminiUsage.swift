@@ -61,6 +61,7 @@ nonisolated enum GeminiUsageFetcher {
     private static let refreshEndpoint = URL(string: "https://oauth2.googleapis.com/token")!
 
     static func fetch(session: URLSession, now: Date = Date()) async throws -> ProviderUsage {
+        FetchDiagnostics.current?.note("OAuth")
         let home = FileManager.default.homeDirectoryForCurrentUser
         let settingsURL = home.appending(path: ".gemini/settings.json")
         switch authType(settingsURL: settingsURL) {

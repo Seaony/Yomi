@@ -246,7 +246,8 @@ nonisolated enum VertexAICredentialsStore {
     }
 
     private static func printAccessToken(environment: [String: String]) async throws -> String {
-        try await withThrowingTaskGroup(of: String.self) { group in
+        FetchDiagnostics.current?.note("CLI")
+        return try await withThrowingTaskGroup(of: String.self) { group in
             group.addTask(priority: .utility) {
                 let process = Process()
                 let output = Pipe()

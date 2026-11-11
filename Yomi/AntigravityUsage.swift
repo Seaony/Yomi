@@ -239,6 +239,7 @@ nonisolated enum AntigravityUsageFetcher {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) async throws -> ProviderUsage {
+        FetchDiagnostics.current?.note("OAuth")
         var credentials = try resolvedCredentials(
             rawCredential: rawCredential,
             environment: environment,
@@ -1082,6 +1083,7 @@ nonisolated enum AntigravityUsageFetcher {
         body: [String: Any],
         endpoint: LocalEndpoint
     ) async throws -> Data {
+        FetchDiagnostics.current?.note("Local API")
         guard let url = URL(string: "\(endpoint.scheme)://127.0.0.1:\(endpoint.port)\(path)") else {
             throw AntigravityUsageError.localServiceUnavailable
         }
@@ -1140,6 +1142,7 @@ nonisolated enum AntigravityUsageFetcher {
         environment: [String: String],
         now: Date
     ) async throws -> ProviderUsage {
+        FetchDiagnostics.current?.note("CLI")
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "yomi-agy-no-browser-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(

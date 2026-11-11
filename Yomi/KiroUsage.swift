@@ -878,6 +878,7 @@ nonisolated enum KiroUsageFetcher {
         environment: [String: String],
         usePTY: Bool
     ) async throws -> CommandResult {
+        FetchDiagnostics.current?.note("CLI")
         let cancellation = CancellationState()
         let task = Task.detached(priority: .utility) {
             try runCommandSync(

@@ -233,6 +233,7 @@ nonisolated enum AugmentUsageFetcher {
 
     private static func fetchCLI(environment: [String: String]) async throws -> Snapshot {
         guard let executable = executable(environment: environment) else { throw AugmentUsageError.cliUnavailable }
+        FetchDiagnostics.current?.note("CLI")
         let output = try await runCLI(executable: executable, environment: environment)
         return try parseCLI(output)
     }

@@ -192,7 +192,7 @@ struct SettingsView: View {
                         searchText: $searchText
                     )
                 case .about:
-                    AboutSettingsView(updateController: updates)
+                    AboutSettingsView(updateController: updates, store: store)
                 }
             }
             .id(selection)
@@ -1708,60 +1708,108 @@ private struct SettingsTextField: View {
 
 private struct AboutSettingsView: View {
     @ObservedObject var updateController: UpdateController
+    @ObservedObject var store: UsageStore
+    @State private var copied = false
     @Environment(\.appLanguage) private var language
 
     private var copy: AppCopy { AppCopy(language: language) }
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .interpolation(.high)
-                .scaledToFit()
-                .frame(width: 88, height: 88)
+        ScrollView {
+            VStack(spacing: 16) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: 88, height: 88)
 
-            VStack(spacing: 5) {
-                Text("Yomi")
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
-                Text(copy.text("跨 Provider 用量一览", "Usage across all your providers"))
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(SettingsPalette.tertiary)
-                Text(versionText)
-                    .font(.system(size: 11))
-                    .foregroundStyle(SettingsPalette.tertiary)
-            }
-            .multilineTextAlignment(.center)
-
-            HStack(spacing: 10) {
-                Button {
-                    updateController.checkForUpdates()
-                } label: {
-                    Label(copy.text("检查更新", "Check for Updates"), systemImage: "arrow.clockwise")
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(SettingsPalette.primary)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(SettingsPalette.control)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                VStack(spacing: 5) {
+                    Text("Yomi")
+                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                    Text(copy.text("跨 Provider 用量一览", "Usage across all your providers"))
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(SettingsPalette.tertiary)
+                    Text(versionText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(SettingsPalette.tertiary)
                 }
-                .buttonStyle(SettingsPressButtonStyle())
-                .disabled(!updateController.canCheckForUpdates)
+                .multilineTextAlignment(.center)
 
-                Button {
-                    NSApp.terminate(nil)
-                } label: {
-                    Label(copy.text("退出 Yomi", "Quit Yomi"), systemImage: "power")
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(SettingsPalette.red)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(SettingsPalette.control)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                HStack(spacing: 10) {
+                    Button {
+                        updateController.checkForUpdates()
+                    } label: {
+                        Label(copy.text("检查更新", "Check for Updates"), systemImage: "arrow.clockwise")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(SettingsPalette.primary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(SettingsPalette.control)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    .buttonStyle(SettingsPressButtonStyle())
+                    .disabled(!updateController.canCheckForUpdates)
+
+                    Button {
+                        NSApp.terminate(nil)
+                    } label: {
+                        Label(copy.text("退出 Yomi", "Quit Yomi"), systemImage: "power")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(SettingsPalette.red)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(SettingsPalette.control)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    .buttonStyle(SettingsPressButtonStyle())
                 }
-                .buttonStyle(SettingsPressButtonStyle())
+                SettingsCard(copy.text("诊断", "Diagnostics")) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(store.enabledProviders) { descriptor in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 8) {
+                                    Text(descriptor.name).fontWeight(.medium)
+                                    Spacer()
+                                    if let result = DiagnosticLog.shared.latestResult(for: descriptor.id) {
+                                        Text(result.date, style: .time)
+                                            .foregroundStyle(SettingsPalette.tertiary)
+                                    }
+                                }
+                                if let result = DiagnosticLog.shared.latestResult(for: descriptor.id) {
+                                    Text(result.summary(language: language))
+                                        .foregroundStyle(result.outcome == .success ? SettingsPalette.secondary : SettingsPalette.orange)
+                                    Text(copy.text("来源：", "Source: ") + result.source)
+                                        .foregroundStyle(SettingsPalette.tertiary)
+                                } else {
+                                    Text(copy.text("等待首次刷新", "Waiting for the first refresh"))
+                                        .foregroundStyle(SettingsPalette.tertiary)
+                                }
+                            }
+                            .font(.system(size: 12))
+                        }
+                        HStack(spacing: 12) {
+                            Button(copied ? copy.text("已复制", "Copied") : copy.text("复制诊断信息", "Copy diagnostics")) {
+                                NSPasteboard.general.clearContents()
+                                copied = NSPasteboard.general.setString(
+                                    DiagnosticLog.shared.report(enabledProviders: store.enabledProviders), forType: .string
+                                )
+                            }
+                            Button(copy.text("打开日志文件夹", "Open log folder")) {
+                                let directory = DiagnosticLog.shared.directoryURL
+                                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                                NSWorkspace.shared.open(directory)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        Text(copy.text("仅包含应用、系统、刷新状态和脱敏日志。", "Includes app, system, refresh status and redacted logs only."))
+                            .font(.system(size: 11))
+                            .foregroundStyle(SettingsPalette.tertiary)
+                    }
+                }
             }
+            .padding(4)
+            .frame(maxWidth: .infinity, alignment: .top)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
     private var versionText: String {

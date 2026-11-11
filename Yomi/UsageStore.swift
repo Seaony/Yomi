@@ -138,6 +138,7 @@ final class UsageStore: ObservableObject {
     }
 
     private func performRefresh(providerID: ProviderID?, allowBrowserCookieImport: Bool) async {
+        DiagnosticLog.shared.write("Refresh started", category: .refresh)
         let providers = enabledProviders.filter { providerID == nil || $0.id == providerID }
         let preferences = preferences
         let jobs = providers.map { descriptor in
@@ -180,7 +181,7 @@ final class UsageStore: ObservableObject {
         usageByID = loadingUsage
         var refreshedUsage = loadingUsage
 
-        await withTaskGroup(of: (ProviderUsage, Int).self) { group in
+        await withTaskGroup(of: (ProviderUsage, Int, ProviderDiagnosticResult).self) { group in
             let concurrencyLimit = 6
             var nextJobIndex = 0
 
@@ -188,6 +189,8 @@ final class UsageStore: ObservableObject {
                 let (descriptor, configuration) = job
                 let revision = revisions[descriptor.id]!
                 group.addTask { [collector] in
+                    let started = Date()
+                    let trace = FetchDiagnostics()
                     do {
                         let secret = try await MainActor.run {
                             guard revision == preferences.usageRevision(for: descriptor.id) else {
@@ -195,16 +198,25 @@ final class UsageStore: ObservableObject {
                             }
                             return preferences.secret(for: descriptor.id)
                         }
-                        let usage = try await collector.collect(
-                            descriptor: descriptor,
-                            configuration: configuration,
-                            secret: secret,
-                            allowVertexClaudeFallback: allowVertexClaudeFallback,
-                            allowBrowserCookieImport: allowBrowserCookieImport,
-                            usageRevision: revision
-                        )
-                        return (usage, revision)
+                        let usage = try await FetchDiagnostics.$current.withValue(trace) {
+                            try await collector.collect(
+                                descriptor: descriptor,
+                                configuration: configuration,
+                                secret: secret,
+                                allowVertexClaudeFallback: allowVertexClaudeFallback,
+                                allowBrowserCookieImport: allowBrowserCookieImport,
+                                usageRevision: revision
+                            )
+                        }
+                        return (usage, revision, ProviderDiagnosticResult(
+                            providerID: descriptor.id, source: usage.diagnosticSource ?? "Local",
+                            date: Date(), duration: Date().timeIntervalSince(started),
+                            outcome: usage.state == .ready ? .success : .failed,
+                            errorKind: usage.state == .ready ? nil : "Provider.\(usage.state.rawValue)",
+                            httpStatus: trace.httpStatus
+                        ))
                     } catch {
+                        let summary = DiagnosticsErrorSummary(error: error)
                         return (ProviderUsage(
                             id: descriptor.id,
                             state: .failed,
@@ -213,7 +225,11 @@ final class UsageStore: ObservableObject {
                             plan: nil,
                             updatedAt: Date(),
                             message: error.localizedDescription
-                        ), revision)
+                        ), revision, ProviderDiagnosticResult(
+                            providerID: descriptor.id, source: trace.source,
+                            date: Date(), duration: Date().timeIntervalSince(started), outcome: .failed,
+                            errorKind: summary.kind, httpStatus: summary.httpStatus ?? trace.httpStatus
+                        ))
                     }
                 }
             }
@@ -223,7 +239,7 @@ final class UsageStore: ObservableObject {
                 nextJobIndex += 1
             }
 
-            while let (usage, revision) = await group.next() {
+            while let (usage, revision, diagnostic) = await group.next() {
                 if revision == preferences.usageRevision(for: usage.id) {
                     let resolvedUsage = Self.commandCodeUsageResolvingDepletionOnEnrichmentFailure(
                         current: usage,
@@ -251,6 +267,9 @@ final class UsageStore: ObservableObject {
                     }
 
                     if revision == preferences.usageRevision(for: usage.id) {
+                        var result = diagnostic
+                        result.usedCache = refreshedUsage[usage.id]?.state == .unavailable
+                        DiagnosticLog.shared.record(result)
                         usageByID[usage.id] = refreshedUsage[usage.id]
                         usageRevisions[usage.id] = revision
                     }
@@ -263,6 +282,7 @@ final class UsageStore: ObservableObject {
             }
         }
         persistCache()
+        DiagnosticLog.shared.write("Refresh finished", category: .refresh)
     }
 
     func usage(for id: ProviderID) -> ProviderUsage {

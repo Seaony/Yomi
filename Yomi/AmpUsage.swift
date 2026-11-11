@@ -461,6 +461,7 @@ nonisolated enum AmpUsageFetcher {
 
     private static func fetchCLI(environment: [String: String], now: Date) async throws -> Snapshot {
         guard let executable = executable(environment: environment) else { throw AmpUsageError.cliUnavailable }
+        FetchDiagnostics.current?.note("CLI")
         return try parseDisplayText(
             try await runCLI(executable: executable, environment: environment),
             now: now
