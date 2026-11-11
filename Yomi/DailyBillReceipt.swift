@@ -46,10 +46,8 @@ struct DailyBillReceiptView: View {
             VStack(spacing: 8) {
                 summaryRow(copy.text("连续使用", "Usage streak"), value: streakText)
                 if let ratio = data.comparisonToDailyAverage {
-                    Text(DailyBillReceiptText.dailyAverageComparison(ratio, language: language))
-                        .monospacedDigit()
-                        .foregroundStyle(ink.opacity(0.7))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    summaryRow(copy.text("对比日均", "vs. daily average"),
+                               value: DailyBillReceiptText.dailyAverageComparison(ratio, language: language))
                 }
             }
 
@@ -250,7 +248,7 @@ enum DailyBillImageExporter {
 enum DailyBillReceiptText {
     static func dailyAverageComparison(_ ratio: Double, language: AppLanguage) -> String {
         let multiple = ratio.formatted(.number.precision(.fractionLength(1)).locale(language.locale))
-        return AppCopy(language: language).text("是日均的 \(multiple) 倍", "\(multiple)× daily average")
+        return AppCopy(language: language).text("\(multiple) 倍", "\(multiple)×")
     }
 
     static func providerName(_ id: ProviderID, language: AppLanguage) -> String {

@@ -56,9 +56,9 @@ struct DailyBillReceiptTests {
 
     @Test
     func dailyAverageComparisonUsesOneDecimalAndPlainWords() {
-        #expect(DailyBillReceiptText.dailyAverageComparison(4.284, language: .simplifiedChinese) == "是日均的 4.3 倍")
-        #expect(DailyBillReceiptText.dailyAverageComparison(4.284, language: .english) == "4.3× daily average")
-        #expect(DailyBillReceiptText.dailyAverageComparison(1, language: .english) == "1.0× daily average")
+        #expect(DailyBillReceiptText.dailyAverageComparison(4.284, language: .simplifiedChinese) == "4.3 倍")
+        #expect(DailyBillReceiptText.dailyAverageComparison(4.284, language: .english) == "4.3×")
+        #expect(DailyBillReceiptText.dailyAverageComparison(1, language: .english) == "1.0×")
     }
 
     @Test
