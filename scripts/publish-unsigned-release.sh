@@ -48,7 +48,7 @@ if gh release view "$tag" --repo "$repository" >/dev/null 2>&1; then
     exit 1
 fi
 
-for command_name in gh xcodebuild ditto hdiutil xmllint lipo codesign; do
+for command_name in gh xcodebuild ditto hdiutil xmllint lipo codesign dmgbuild; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         echo "Required command is unavailable: $command_name" >&2
         exit 1
@@ -60,9 +60,8 @@ work_dir="$(mktemp -d /tmp/yomi-unsigned-release.XXXXXX)"
 trap 'rm -rf "$work_dir"' EXIT
 derived_data="$work_dir/DerivedData"
 updates_dir="$work_dir/updates"
-dmg_root="$work_dir/dmg-root"
 output_dir="$repo_root/build/releases/$tag"
-mkdir -p "$updates_dir" "$dmg_root"
+mkdir -p "$updates_dir"
 if [[ -e "$output_dir" ]]; then
     echo "Release output already exists: $output_dir" >&2
     exit 1
@@ -128,12 +127,11 @@ zip_name="$app_name-$version-unsigned.zip"
 dmg_name="$app_name-$version-unsigned.dmg"
 mkdir -p "$output_dir"
 ditto -c -k --sequesterRsrc --keepParent "$app_path" "$output_dir/$zip_name"
-ditto "$app_path" "$dmg_root/$app_name.app"
-ln -s /Applications "$dmg_root/Applications"
-hdiutil create \
-    -volname "$app_name" \
-    -srcfolder "$dmg_root" \
-    -ov -format UDZO \
+# 带背景图和固定图标布局的安装窗口，配置见 scripts/dmg/。
+dmgbuild \
+    -s scripts/dmg/dmg-settings.py \
+    -D app="$app_path" \
+    "$app_name" \
     "$output_dir/$dmg_name"
 
 previous_tag="$(git describe --tags --abbrev=0 HEAD 2>/dev/null || true)"

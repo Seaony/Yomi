@@ -9,7 +9,7 @@ Yomi 使用 Sparkle 进行应用内更新，更新文件托管在 GitHub Release
 3. 根据上一个正式 Release 的 `appcast.xml` 自动递增 build number；首次发布从 `1` 开始。
 4. 构建包含 `arm64` 和 `x86_64` 的 Release 应用。
 5. 对应用执行本地 ad-hoc 签名，以保证应用包和 Sparkle Framework 的完整性；这不是 Apple Developer ID 签名。
-6. 生成 ZIP、DMG、Release Notes 和带 EdDSA 签名的 `appcast.xml`。
+6. 生成 ZIP、DMG、Release Notes 和带 EdDSA 签名的 `appcast.xml`。DMG 用 `dmgbuild` 打包，打开后是带背景图、大图标、拖到 Applications 的安装窗口。
 7. 创建并推送版本标签，随后创建 GitHub Release 并上传全部产物。
 
 应用固定读取以下更新源：
@@ -30,7 +30,33 @@ gh auth status
 本机还需要可用的 Xcode、Command Line Tools，以及以下命令：
 
 ```text
-gh xcodebuild ditto hdiutil xmllint lipo codesign
+gh xcodebuild ditto hdiutil xmllint lipo codesign dmgbuild
+```
+
+`dmgbuild` 用 uv 安装：
+
+```bash
+uv tool install dmgbuild
+```
+
+## DMG 安装窗口
+
+DMG 的外观由 `scripts/dmg/` 决定：
+
+- `dmg-settings.py`：窗口大小、隐藏工具栏和侧边栏、图标大小和位置、卷图标。
+- `background.png` / `background@2x.png`：窗口背景，由 `render-background.swift` 生成，打包时自动合成 Retina 背景。
+
+改了窗口尺寸或图标位置时，两个文件里的数值要一起改，然后重新生成背景：
+
+```bash
+swift scripts/dmg/render-background.swift scripts/dmg
+```
+
+不发版、只看效果时，可以拿任意一个构建好的 `Yomi.app` 打一个预览：
+
+```bash
+dmgbuild -s scripts/dmg/dmg-settings.py -D app=/tmp/YomiDerivedData/Build/Products/Debug/Yomi.app Yomi /tmp/Yomi-preview.dmg
+open /tmp/Yomi-preview.dmg
 ```
 
 Sparkle 的 EdDSA 私钥必须位于登录钥匙串。Yomi 当前沿用自动更新配置中已有的 `com.seaony.Moni` Sparkle 密钥账户，脚本默认读取该账户。可以这样确认它存在：
