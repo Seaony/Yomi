@@ -85,6 +85,8 @@ actor UsageCollector {
             usage.diagnosticSource = trace.source == "None" ? "Local" : trace.source
         } catch is CancellationError {
             throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw error
         } catch {
             let resolved: Error = scope.failureMessage.map {
                 UsageCollectionError.browserAccessFailed(error.localizedDescription + "\n" + $0)

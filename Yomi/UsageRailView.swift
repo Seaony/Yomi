@@ -88,6 +88,7 @@ struct UsageRailView: View {
                                 usage: descriptor.id == ProviderCatalog.overview.id
                                     ? store.overviewUsage
                                     : store.usage(for: descriptor.id),
+                                refreshInterval: { store.currentRefreshInterval },
                                 animationDelay: Double(index) * 0.045,
                                 showName: showProviderNames,
                                 hoverChanged: { hovering in
@@ -654,6 +655,7 @@ enum ProviderBrandColors {
 private struct ProviderRailItem: View {
     let descriptor: ProviderDescriptor
     let usage: ProviderUsage
+    let refreshInterval: () -> TimeInterval
     let animationDelay: Double
     let showName: Bool
     let hoverChanged: (Bool) -> Void
@@ -764,53 +766,22 @@ private struct ProviderRailItem: View {
 
     var body: some View {
         VStack(spacing: UsageRailLayout.scaled(5)) {
-            ZStack {
-                Circle()
-                    .stroke(
-                        AppTheme.primaryText(for: colorScheme).opacity(0.16),
-                        style: StrokeStyle(
-                            lineWidth: UsageRailLayout.scaled(6),
-                            lineCap: .round
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                ZStack {
+                    ring
+                        .opacity(UsageFreshness.isStale(
+                            updatedAt: usage.updatedAt,
+                            refreshInterval: refreshInterval(),
+                            now: context.date
+                        ) ? 0.45 : 1)
+                    ProviderIconView(provider: descriptor)
+                        .frame(
+                            width: UsageRailLayout.scaled(32),
+                            height: UsageRailLayout.scaled(32)
                         )
-                    )
-                if showsRefreshProgress {
-                    Circle()
-                        .trim(from: 0, to: refreshProgress)
-                        .stroke(
-                            tint,
-                            style: StrokeStyle(
-                                lineWidth: UsageRailLayout.scaled(4),
-                                lineCap: .round
-                            )
-                        )
-                        .rotationEffect(.degrees(-90))
-                        .transition(.opacity)
-                } else {
-                    Circle()
-                        .trim(from: 0, to: animatedFraction)
-                        .stroke(
-                            tint,
-                            style: StrokeStyle(
-                                lineWidth: UsageRailLayout.scaled(4),
-                                lineCap: .round
-                            )
-                        )
-                        .rotationEffect(.degrees(-90))
-                        .transition(.opacity)
+                        .foregroundStyle(tint)
+                        .symbolEffect(.pulse, isActive: usage.state == .loading)
                 }
-                Circle()
-                    .stroke(
-                        AppTheme.primaryText(for: colorScheme).opacity(0.08),
-                        lineWidth: UsageRailLayout.scaled(1)
-                    )
-                    .padding(UsageRailLayout.scaled(7))
-                ProviderIconView(provider: descriptor)
-                    .frame(
-                        width: UsageRailLayout.scaled(32),
-                        height: UsageRailLayout.scaled(32)
-                    )
-                    .foregroundStyle(tint)
-                    .symbolEffect(.pulse, isActive: usage.state == .loading)
             }
             .frame(
                 width: UsageRailLayout.providerRingDiameter,
@@ -881,6 +852,50 @@ private struct ProviderRailItem: View {
             reduceMotion ? nil : .easeOut(duration: 0.12),
             value: usage.state
         )
+    }
+
+    private var ring: some View {
+        ZStack {
+            Circle()
+                .stroke(
+                    AppTheme.primaryText(for: colorScheme).opacity(0.16),
+                    style: StrokeStyle(
+                        lineWidth: UsageRailLayout.scaled(6),
+                        lineCap: .round
+                    )
+                )
+            if showsRefreshProgress {
+                Circle()
+                    .trim(from: 0, to: refreshProgress)
+                    .stroke(
+                        tint,
+                        style: StrokeStyle(
+                            lineWidth: UsageRailLayout.scaled(4),
+                            lineCap: .round
+                        )
+                    )
+                    .rotationEffect(.degrees(-90))
+                    .transition(.opacity)
+            } else {
+                Circle()
+                    .trim(from: 0, to: animatedFraction)
+                    .stroke(
+                        tint,
+                        style: StrokeStyle(
+                            lineWidth: UsageRailLayout.scaled(4),
+                            lineCap: .round
+                        )
+                    )
+                    .rotationEffect(.degrees(-90))
+                    .transition(.opacity)
+            }
+            Circle()
+                .stroke(
+                    AppTheme.primaryText(for: colorScheme).opacity(0.08),
+                    lineWidth: UsageRailLayout.scaled(1)
+                )
+                .padding(UsageRailLayout.scaled(7))
+        }
     }
 
     private func animate(to value: Double, delay: Double) {

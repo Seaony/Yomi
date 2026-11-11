@@ -81,13 +81,16 @@ final class UsageStore: ObservableObject {
     }
     #endif
 
+    var currentRefreshInterval: TimeInterval {
+        max(60, defaults.object(forKey: "refresh-interval") as? Double ?? 300)
+    }
+
     func start() {
         guard refreshLoop == nil else { return }
         refreshLoop = Task { [weak self] in
             await self?.refresh()
             while !Task.isCancelled {
-                let storedInterval = self?.defaults.object(forKey: "refresh-interval") as? Double
-                let resolvedInterval = max(60, storedInterval ?? 300)
+                let resolvedInterval = self?.currentRefreshInterval ?? 300
                 try? await Task.sleep(for: .seconds(resolvedInterval), tolerance: .seconds(20))
                 guard !Task.isCancelled else { break }
                 await self?.refresh()

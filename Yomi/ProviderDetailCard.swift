@@ -59,6 +59,7 @@ struct ProviderDetailCard: View {
     let usage: ProviderUsage
     let transitionDirection: ProviderDetailTransitionDirection
     let isRefreshing: Bool
+    let refreshInterval: () -> TimeInterval
     let refresh: () -> Void
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.appLanguage) private var language
@@ -297,6 +298,24 @@ struct ProviderDetailCard: View {
     }
 
     private var header: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            VStack(alignment: .leading, spacing: 4) {
+                headerContent
+                if UsageFreshness.isStale(
+                    updatedAt: usage.updatedAt,
+                    refreshInterval: refreshInterval(),
+                    now: context.date
+                ), let updatedAt = usage.updatedAt {
+                    Text(UsageFreshness.updatedText(updatedAt: updatedAt, now: context.date, language: language))
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
+                        .help(usage.message.map { DiagnosticsRedactor.redact(copy.usageMessage($0)) } ?? "")
+                }
+            }
+        }
+    }
+
+    private var headerContent: some View {
         HStack(spacing: 7) {
             ZStack {
                 ProviderIconView(provider: descriptor)
@@ -503,6 +522,7 @@ struct ProviderDetailPanelView: View {
                 : store.usage(for: presentation.descriptor.id),
             transitionDirection: presentation.direction,
             isRefreshing: store.isRefreshing,
+            refreshInterval: { store.currentRefreshInterval },
             refresh: {
                 let providerID = presentation.descriptor.id
                 Task {
@@ -838,7 +858,7 @@ func cachedUsageStatus(_ usage: ProviderUsage, language: AppLanguage) -> String?
         status += " · " + copy.text("数据时间：", "Last updated: ") + timestamp
     }
     if let message = usage.message, !message.isEmpty {
-        status += "\n" + copy.usageMessage(message)
+        status += "\n" + DiagnosticsRedactor.redact(copy.usageMessage(message))
     }
     return status
 }
