@@ -8,6 +8,7 @@ final class UsageStore: ObservableObject {
     @Published private(set) var usageByID: [ProviderID: ProviderUsage] = [:]
     @Published private(set) var isRefreshing = false
 
+    let notifications: QuotaNotificationController
     let preferences: ProviderPreferences
     private let collector: UsageCollector
     private let defaults: UserDefaults
@@ -55,6 +56,7 @@ final class UsageStore: ObservableObject {
         self.preferences = preferences ?? .shared
         self.collector = collector
         self.defaults = defaults
+        self.notifications = QuotaNotificationController(defaults: defaults)
         restoreCache()
         preferenceObserver = self.preferences.$configurations
             .dropFirst()
@@ -275,6 +277,9 @@ final class UsageStore: ObservableObject {
                         DiagnosticLog.shared.record(result)
                         usageByID[usage.id] = refreshedUsage[usage.id]
                         usageRevisions[usage.id] = revision
+                        if let finalUsage = refreshedUsage[usage.id] {
+                            await notifications.process(usage: finalUsage, revision: revision)
+                        }
                     }
                 }
 

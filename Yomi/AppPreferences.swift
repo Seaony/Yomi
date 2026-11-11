@@ -67,6 +67,17 @@ nonisolated struct AppCopy {
         return Self.usageLabels[label] ?? label
     }
 
+    // 通知只能展示这份固定词表，不能把接口传来的账号文字带出去。
+    func knownUsageLabel(_ label: String) -> String? {
+        if let chinese = Self.usageLabels[label] {
+            return text(chinese, label)
+        }
+        if let pair = Self.usageLabels.first(where: { $0.value == label }) {
+            return text(pair.value, pair.key)
+        }
+        return nil
+    }
+
     func usageMessage(_ message: String) -> String {
         let pairs = [
             ("未找到可用的认证信息", "No available credentials found"),
@@ -118,6 +129,12 @@ nonisolated struct AppCopy {
         "Deployment": "部署",
         "5-hour": "5 小时",
         "Total": "总计",
+        "Cursor": "Cursor",
+        "Third Party": "第三方",
+        "Grok Bot": "Grok Bot",
+        "Request quota": "请求额度",
+        "Claude and GPT models": "Claude 与 GPT 模型",
+        "Claude and GPT-OSS models": "Claude 与 GPT-OSS 模型",
         "Credits": "点数",
         "Usage": "用量",
         "Standard": "标准",

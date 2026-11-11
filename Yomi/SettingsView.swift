@@ -184,7 +184,7 @@ struct SettingsView: View {
             Group {
                 switch selection {
                 case .general:
-                    GeneralSettingsView()
+                    GeneralSettingsView(notifications: store.notifications)
                 case .providers:
                     ProviderSettingsView(
                         store: store,
@@ -265,6 +265,7 @@ struct SettingsView: View {
 }
 
 private struct GeneralSettingsView: View {
+    let notifications: QuotaNotificationController
     @ObservedObject private var appPreferences = AppPreferences.shared
     @AppStorage("refresh-interval") private var refreshInterval = 300.0
     @AppStorage("show-provider-names") private var showProviderNames = true
@@ -427,6 +428,8 @@ private struct GeneralSettingsView: View {
                         .foregroundStyle(SettingsPalette.tertiary)
                 }
 
+                QuotaNotificationSettingsView(notifications: notifications)
+
                 SettingsCard(copy.text("行为", "Behavior")) {
                     VStack(spacing: 0) {
                         SettingsToggleRow(
@@ -483,6 +486,80 @@ private struct GeneralSettingsView: View {
             launchAtLogin = SMAppService.mainApp.status == .enabled
             loginError = error.localizedDescription
         }
+    }
+}
+
+private struct QuotaNotificationSettingsView: View {
+    @ObservedObject var notifications: QuotaNotificationController
+    @AppStorage(QuotaNotificationController.Keys.lowQuotaEnabled) private var lowQuotaEnabled = false
+    @AppStorage(QuotaNotificationController.Keys.depletedEnabled) private var depletedEnabled = false
+    @AppStorage(QuotaNotificationController.Keys.resetEnabled) private var resetEnabled = false
+    @Environment(\.appLanguage) private var language
+    private var copy: AppCopy { AppCopy(language: language) }
+
+    var body: some View {
+        SettingsCard(copy.text("额度提醒", "Quota notifications")) {
+            VStack(spacing: 0) {
+                SettingsToggleRow(title: copy.text("剩余额度较低", "Low remaining quota"),
+                                  hint: copy.text("跨过所选档位时提醒，每个周期一次", "Notify once per threshold in each quota cycle"),
+                                  isOn: $lowQuotaEnabled)
+                SettingsToggleRow(title: copy.text("额度用完", "Quota depleted"),
+                                  hint: copy.text("额度耗尽时提醒", "Notify when a quota is exhausted"),
+                                  isOn: $depletedEnabled)
+                SettingsToggleRow(title: copy.text("额度重置或恢复", "Quota reset or restored"),
+                                  hint: copy.text("确认新周期开始后提醒", "Notify when a new quota cycle is confirmed"),
+                                  isOn: $resetEnabled)
+            }
+            if lowQuotaEnabled {
+                HStack(spacing: 12) {
+                    Text(copy.text("剩余提醒阈值", "Remaining thresholds"))
+                        .foregroundStyle(SettingsPalette.secondary)
+                    ForEach(QuotaNotificationController.thresholdChoices, id: \.self) { threshold in
+                        Toggle("\(threshold)%", isOn: Binding(
+                            get: { notifications.selectedThresholds.contains(threshold) },
+                            set: { enabled in
+                                var values = notifications.selectedThresholds
+                                if enabled { values.append(threshold) }
+                                else { values.removeAll { $0 == threshold } }
+                                if !values.isEmpty { notifications.setThresholds(values) }
+                            }
+                        ))
+                        .toggleStyle(.checkbox)
+                        .pointerStyle(.link)
+                    }
+                }
+                .font(.system(size: 12))
+            }
+            if notifications.authorizationDenied {
+                Text(copy.text("通知权限已关闭，请在系统设置 → 通知 → Yomi 中允许通知。", "Notifications are disabled. Allow Yomi notifications in System Settings → Notifications."))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(SettingsPalette.orange)
+            } else if let error = notifications.permissionError {
+                Text(error)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(SettingsPalette.orange)
+            }
+        }
+        .task { await notifications.refreshAuthorizationStatus() }
+        .onChange(of: [lowQuotaEnabled, depletedEnabled, resetEnabled]) { old, new in
+            if zip(old, new).contains(where: { !$0 && $1 }) {
+                Task { await notifications.requestAuthorizationIfNeeded() }
+            }
+        }
+    }
+}
+
+private struct ProviderQuotaMuteToggle: View {
+    @ObservedObject var notifications: QuotaNotificationController
+    let providerID: ProviderID
+    @Environment(\.appLanguage) private var language
+
+    var body: some View {
+        let copy = AppCopy(language: language)
+        SettingsToggleRow(title: copy.text("静音此 Provider", "Mute this provider"),
+                          hint: copy.text("保留额度显示，停止此 Provider 的额度通知", "Keep quota data visible without quota notifications"),
+                          isOn: Binding(get: { notifications.isMuted(providerID) },
+                                        set: { notifications.setMuted($0, for: providerID) }))
     }
 }
 
@@ -791,6 +868,10 @@ private struct ProviderConfigurationView: View {
                             .tint(SettingsPalette.blue)
                             .pointerStyle(.link)
                     }
+                }
+
+                SettingsCard(copy.text("额度提醒", "Quota notifications")) {
+                    ProviderQuotaMuteToggle(notifications: store.notifications, providerID: descriptor.id)
                 }
 
                 SettingsCard(copy.text("数据来源", "Data source")) {
