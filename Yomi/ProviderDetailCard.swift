@@ -867,24 +867,22 @@ private struct UsageWindowRow: View {
 
             GeometryReader { proxy in
                 let count = SegmentedUsageBar.segmentCount(width: proxy.size.width)
-                let filled = SegmentedUsageBar.filledCount(remainingFraction: remainingFraction, segmentCount: count)
-                let marker = pace.flatMap {
-                    SegmentedUsageBar.markerIndex(expectedUsedFraction: $0.expectedUsedPercent / 100, segmentCount: count)
-                }
+                let states = SegmentedUsageBar.states(
+                    remainingFraction: remainingFraction,
+                    expectedUsedFraction: pace.map { $0.expectedUsedPercent / 100 },
+                    segmentCount: count
+                )
                 HStack(alignment: .center, spacing: SegmentedUsageBar.spacing) {
-                    ForEach(0..<count, id: \.self) { index in
+                    ForEach(Array(states.enumerated()), id: \.offset) { _, state in
                         RoundedRectangle(cornerRadius: 1.5)
-                            .fill(index == marker
-                                ? AppTheme.primaryText(for: colorScheme).opacity(0.8)
-                                : barTint.opacity(index < filled ? 1 : 0.16))
-                            .frame(width: SegmentedUsageBar.barWidth, height: index == marker ? 16 : 12)
+                            .fill(barTint.opacity(state.fill == .solid ? 1 : state.fill == .overspent ? 0.45 : 0.16))
+                            .frame(width: SegmentedUsageBar.barWidth, height: state.isMarker ? 18 : 12)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: filled)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: marker)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: states)
             }
-            .frame(height: 16)
+            .frame(height: 18)
             .accessibilityLabel(copy.text("剩余额度", "Remaining quota"))
             .accessibilityValue("\(Int((remainingFraction * 100).rounded()))%")
             .help(copy.text("加高的竖条表示按时间计算的剩余额度位置。", "The taller segment marks the remaining quota expected by this time."))

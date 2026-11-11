@@ -1,8 +1,40 @@
 import Foundation
 
 nonisolated enum SegmentedUsageBar {
+    enum Fill: Equatable, Sendable {
+        case solid
+        case overspent
+        case dim
+    }
+
+    struct SegmentState: Equatable, Sendable {
+        let fill: Fill
+        let isMarker: Bool
+    }
+
     static let barWidth = 3.0
     static let spacing = 2.0
+
+    static func states(
+        remainingFraction: Double,
+        expectedUsedFraction: Double?,
+        segmentCount: Int
+    ) -> [SegmentState] {
+        guard segmentCount > 0 else { return [] }
+        let filled = filledCount(remainingFraction: remainingFraction, segmentCount: segmentCount)
+        let expected = expectedUsedFraction.flatMap { $0.isFinite ? $0 : nil }
+        let expectedFilled = expected.map {
+            filledCount(remainingFraction: 1 - $0, segmentCount: segmentCount)
+        } ?? filled
+        let marker = expected.flatMap {
+            markerIndex(expectedUsedFraction: $0, segmentCount: segmentCount)
+        }
+        return (0..<segmentCount).map { index in
+            let fill: Fill = index < filled ? .solid : index < expectedFilled ? .overspent : .dim
+            // 刻度只决定高度，不覆盖这一段原本的颜色。
+            return SegmentState(fill: fill, isMarker: index == marker)
+        }
+    }
 
     static func segmentCount(width: Double) -> Int {
         guard width.isFinite, width >= barWidth else { return 0 }
