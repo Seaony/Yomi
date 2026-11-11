@@ -15,6 +15,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let updates = UpdateController()
 
     private var panel: FloatingPanel?
+    private var railHostingView: NSHostingView<UsageRailView>?
+    private var revealStripHostingView: NSHostingView<FullscreenRevealStrip>?
+    private var fullscreenRailController: FullscreenRailController?
+    private var expandedRailFrame: NSRect?
+    private var applyingRailPresentation = false
+    private var railPresentationRevision = 0
     private var providerDetailPanel: ProviderDetailPanel?
     private var providerDetailHostingView: NSHostingView<ProviderDetailPanelView>?
     private var providerDetailPresentation: ProviderDetailPresentation?
@@ -32,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard !Self.isRunningTests else { return }
         restorePanelPosition()
         createPanel()
+        startFullscreenRailController()
         store.start()
         providerDetailSizeObserver = store.objectWillChange.sink { [weak self] _ in
             Task { @MainActor [weak self] in
@@ -55,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        fullscreenRailController?.stop()
         providerDetailCloseTask?.cancel()
         providerDetailSizeObserver = nil
         NotificationCenter.default.removeObserver(self)
@@ -104,6 +112,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             window != closing && window?.isVisible == true
         }
         if !anotherWindowIsOpen { NSApp.setActivationPolicy(.accessory) }
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            self?.fullscreenRailController?.updatePointerState()
+        }
     }
 
     private func openDailyBill() {
@@ -128,11 +140,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
         dailyBillPanel?.makeKeyAndOrderFront(nil)
+        fullscreenRailController?.updatePointerState()
     }
 
     @objc private func screenLayoutChanged() {
         positionPanel(animated: false)
         updateProviderDetailFrame(animated: false)
+        fullscreenRailController?.refreshFullscreen()
     }
 
     @objc private func languageChanged() {
@@ -179,7 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.panelDragEnded()
         }
         self.panel = panel
-        panel.contentView = NSHostingView(rootView: UsageRailView(
+        let hostingView = NSHostingView(rootView: UsageRailView(
             store: store,
             openSettings: { [weak self] providerID in self?.openSettings(providerID: providerID) },
             showProviderDetail: { [weak self] descriptor, localY in
@@ -191,8 +205,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             contentHeightChanged: { [weak self] height in
                 guard let self else { return }
                 self.resizePanel(to: height, animated: (self.panel?.alphaValue ?? 0) > 0)
+            },
+            hoverChanged: { [weak self] _ in
+                self?.fullscreenRailController?.updatePointerState()
             }
         ))
+        railHostingView = hostingView
+        panel.contentView = hostingView
         panel.contentView?.layoutSubtreeIfNeeded()
         positionPanel(animated: false)
 
@@ -202,6 +221,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 1
         }
+    }
+
+    private func startFullscreenRailController() {
+        revealStripHostingView = NSHostingView(rootView: FullscreenRevealStrip(
+            hoverChanged: { [weak self] _ in self?.fullscreenRailController?.updatePointerState() },
+            reveal: { [weak self] in self?.fullscreenRailController?.reveal() }
+        ))
+        let controller = FullscreenRailController(context: { [weak self] in
+            guard let self else {
+                return .init(enabled: false, screenFrame: nil, safeAreaTopInset: 0,
+                             expandedFrame: .zero, railFrame: .zero, edge: .right,
+                             detailVisible: false, billVisible: false)
+            }
+            let screen = self.targetScreen()
+            let enabled = UserDefaults.standard.object(forKey: FullscreenCollapsePolicy.settingKey) as? Bool
+                ?? FullscreenCollapsePolicy.defaultEnabled
+            return .init(enabled: enabled, screenFrame: screen?.frame,
+                         safeAreaTopInset: screen?.safeAreaInsets.top ?? 0,
+                         expandedFrame: self.expandedRailFrame ?? self.panel?.frame ?? .zero,
+                         railFrame: self.panel?.frame ?? .zero,
+                         edge: self.railSide == .left ? .left : .right,
+                         detailVisible: self.providerDetailPanel?.isVisible == true,
+                         billVisible: self.dailyBillPanel?.isVisible == true)
+        }, onCollapseChanged: { [weak self] collapsed in
+            self?.applyFullscreenRailPresentation(collapsed: collapsed)
+        })
+        fullscreenRailController = controller
+        controller.start()
+    }
+
+    private func applyCollapsedRailFrame() {
+        guard let panel, let expanded = expandedRailFrame, let screen = targetScreen() else { return }
+        let frame = FullscreenCollapsePolicy.collapsedFrame(
+            expandedFrame: expanded, screenFrame: screen.frame, edge: railSide == .left ? .left : .right
+        )
+        panel.setFrame(frame, display: true)
+    }
+
+    private func applyFullscreenRailPresentation(collapsed: Bool) {
+        guard let panel, let railHostingView, let revealStripHostingView else { return }
+        railPresentationRevision += 1
+        let revision = railPresentationRevision
+        applyingRailPresentation = true
+        if collapsed {
+            if panel.contentView === railHostingView { expandedRailFrame = panel.frame }
+            panel.allowsDragging = false
+            panel.contentView = revealStripHostingView
+            applyCollapsedRailFrame()
+            panel.alphaValue = 1
+            applyingRailPresentation = false
+            DiagnosticLog.shared.write("Rail collapsed to 4x48", category: .window)
+            return
+        }
+
+        let frame = pinnedFrame(expandedRailFrame ?? panel.frame)
+        expandedRailFrame = frame
+        panel.setFrame(frame, display: false)
+        panel.contentView = railHostingView
+        panel.allowsDragging = true
+        let offset = ProviderDetailLayout.transitionOffset * (railSide == .right ? 1 : -1)
+        panel.setFrame(frame.offsetBy(dx: offset, dy: 0), display: false)
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        DiagnosticLog.shared.write("Rail expanded", category: .window)
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = animationDuration(0.2)
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrame(frame, display: true)
+            panel.animator().alphaValue = 1
+        }, completionHandler: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.fullscreenRailController?.state.isCollapsed == true {
+                    self.applyCollapsedRailFrame()
+                }
+                guard self.railPresentationRevision == revision else { return }
+                self.applyingRailPresentation = false
+                self.fullscreenRailController?.updatePointerState()
+            }
+        })
     }
 
     private func showProviderDetail(_ descriptor: ProviderDescriptor, localY: CGFloat) {
@@ -282,6 +381,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         providerDetailPresentation = presentation
         selectedProviderID = descriptor.id
         selectedProviderLocalY = localY
+        fullscreenRailController?.updatePointerState()
         panel.addChildWindow(detailPanel, ordered: .above)
         detailPanel.orderFrontRegardless()
 
@@ -355,6 +455,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         providerDetailPresentation = nil
         selectedProviderID = nil
         selectedProviderLocalY = nil
+        fullscreenRailController?.updatePointerState()
 
         let transitionDirection: CGFloat = railSide == .right ? 1 : -1
         let targetOrigin = NSPoint(
@@ -421,10 +522,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             max(contentHeight, UsageRailLayout.minimumPanelHeight),
             visibleHeight - UsageRailLayout.screenVerticalMargin * 2
         )
-        guard abs(panel.frame.height - newHeight) > 0.5 else { return }
-        var frame = panel.frame
+        var frame = expandedRailFrame ?? panel.frame
+        guard abs(frame.height - newHeight) > 0.5 else { return }
         frame.size.height = newHeight
         frame = pinnedFrame(frame)
+        expandedRailFrame = frame
+        if fullscreenRailController?.state.isCollapsed == true {
+            applyCollapsedRailFrame()
+            return
+        }
         panel.setFrame(
             frame,
             display: true,
@@ -433,6 +539,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func constrainedPanelOrigin(_ origin: NSPoint, size: NSSize) -> NSPoint {
+        if applyingRailPresentation || fullscreenRailController?.state.isCollapsed == true { return origin }
         guard let visible = targetScreen()?.visibleFrame else { return origin }
         let minimumX = visible.minX - UsageRailLayout.screenEdgeOverlap
         let maximumX = visible.maxX - size.width + UsageRailLayout.screenEdgeOverlap
@@ -452,7 +559,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func positionPanel(animated: Bool) {
         guard let panel else { return }
-        let frame = pinnedFrame(panel.frame)
+        let frame = pinnedFrame(expandedRailFrame ?? panel.frame)
+        expandedRailFrame = frame
+        if fullscreenRailController?.state.isCollapsed == true {
+            applyCollapsedRailFrame()
+            return
+        }
         panel.setFrame(frame, display: true, animate: animated)
     }
 
@@ -510,7 +622,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         closeProviderDetail()
         railSide = panel.frame.midX < visible.midX ? .left : .right
         persistPanelPosition()
+        expandedRailFrame = panel.frame
         positionPanel(animated: true)
+        fullscreenRailController?.refreshFullscreen()
     }
 
     private func pinnedX(in visible: NSRect, panelWidth: CGFloat) -> CGFloat {
@@ -544,6 +658,7 @@ private struct DailyBillWindowContent: View {
 }
 
 final class FloatingPanel: NSPanel {
+    var allowsDragging = true
     var originConstraint: ((NSPoint, NSSize) -> NSPoint)?
     var onDragEnded: (() -> Void)?
     private var dragStartMouseLocation: NSPoint?
@@ -558,6 +673,7 @@ final class FloatingPanel: NSPanel {
     }
 
     override func sendEvent(_ event: NSEvent) {
+        guard allowsDragging else { super.sendEvent(event); return }
         switch event.type {
         case .leftMouseDown:
             dragStartMouseLocation = NSPoint(

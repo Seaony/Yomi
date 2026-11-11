@@ -269,6 +269,7 @@ private struct GeneralSettingsView: View {
     @ObservedObject private var appPreferences = AppPreferences.shared
     @AppStorage("refresh-interval") private var refreshInterval = 300.0
     @AppStorage("show-provider-names") private var showProviderNames = true
+    @AppStorage(FullscreenCollapsePolicy.settingKey) private var collapseInFullscreen = FullscreenCollapsePolicy.defaultEnabled
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
     @State private var railBackgroundHex = ""
@@ -432,6 +433,12 @@ private struct GeneralSettingsView: View {
 
                 SettingsCard(copy.text("行为", "Behavior")) {
                     VStack(spacing: 0) {
+                        SettingsToggleRow(
+                            title: copy.text("全屏时收起", "Collapse in full screen"),
+                            hint: copy.text("全屏时收成细条，鼠标移到细条上即可展开", "Collapses to a thin bar in full screen. Hover it to expand."),
+                            isOn: $collapseInFullscreen
+                        )
+                        Divider().padding(.vertical, 8)
                         SettingsToggleRow(
                             title: copy.text("登录后自动启动", "Launch at login"),
                             hint: copy.text(

@@ -36,6 +36,27 @@ enum UsageRailLayout {
     }
 }
 
+struct FullscreenRevealStrip: View {
+    let hoverChanged: (Bool) -> Void
+    let reveal: () -> Void
+    @ObservedObject private var preferences = AppPreferences.shared
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 2)
+            .fill((preferences.railBackgroundColor ?? AppTheme.railBackground(for: colorScheme)).opacity(0.7))
+            .frame(width: FullscreenCollapsePolicy.stripWidth, height: FullscreenCollapsePolicy.stripHeight)
+            .contentShape(Rectangle())
+            .onHover(perform: hoverChanged)
+            .onTapGesture(perform: reveal)
+            .pointerStyle(.link)
+            .accessibilityLabel(AppCopy(language: preferences.language).text("展开 Yomi", "Expand Yomi"))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { reveal() }
+            .preferredColorScheme(preferences.appearance.colorScheme)
+    }
+}
+
 struct UsageRailView: View {
     @ObservedObject var store: UsageStore
     @ObservedObject private var appPreferences = AppPreferences.shared
@@ -43,6 +64,7 @@ struct UsageRailView: View {
     let showProviderDetail: (ProviderDescriptor, CGFloat) -> Void
     let hideProviderDetail: (ProviderID) -> Void
     let contentHeightChanged: (CGFloat) -> Void
+    var hoverChanged: (Bool) -> Void = { _ in }
 
     @State private var appeared = false
     @State private var isHovering = false
@@ -180,6 +202,7 @@ struct UsageRailView: View {
             reportContentHeight(providerRows: providerRowHeights)
         }
         .onHover { hovering in
+            hoverChanged(hovering)
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
                 isHovering = hovering
             }

@@ -6,6 +6,7 @@ nonisolated enum DiagnosticCategory: String, CaseIterable, Sendable {
     case provider
     case credentials
     case update
+    case window
 }
 
 nonisolated enum DiagnosticsRedactor {
