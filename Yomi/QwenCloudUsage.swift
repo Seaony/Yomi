@@ -472,7 +472,7 @@ nonisolated enum QwenCloudUsageFetcher {
             apiCookieHeader: headers.api,
             dashboardCookieHeader: headers.dashboard
         )
-        return try await session.data(for: request, delegate: delegate)
+        return try await FetchDiagnostics.data(for: request, session: session, delegate: delegate)
     }
 
     private static func fetchTeam(

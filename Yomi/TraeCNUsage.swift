@@ -113,7 +113,7 @@ nonisolated enum TraeCNUsageFetcher {
         if let token { request.setValue("Cloud-IDE-JWT \(token)", forHTTPHeaderField: "Authorization") }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         // 不跟随跳转：过期会话会被重定向到登录页，要当作拒绝并换下一个会话。
-        let (data, response) = try await session.data(for: request, delegate: TraeCNRedirectBlocker())
+        let (data, response) = try await FetchDiagnostics.data(for: request, session: session, delegate: TraeCNRedirectBlocker())
         guard let http = response as? HTTPURLResponse else { throw TraeCNUsageError.parseFailure }
         switch http.statusCode {
         case 200: return data

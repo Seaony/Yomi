@@ -7,40 +7,33 @@ final class UsageStore: ObservableObject {
 
     @Published private(set) var usageByID: [ProviderID: ProviderUsage] = [:]
     @Published private(set) var isRefreshing = false
+    @Published private(set) var backoffByID: [String: ProviderBackoffState] = [:]
 
     let notifications: QuotaNotificationController
     let preferences: ProviderPreferences
-    private let collector: UsageCollector
+    private let collector: any UsageCollecting
     private let defaults: UserDefaults
     private let cacheKey = "usage-cache.v3"
     private var refreshLoop: Task<Void, Never>?
+    private var deadlineRefreshTask: Task<Void, Never>?
+    private var attemptedResetBoundaries: Set<ResetBoundaryRefreshPolicy.Boundary> = []
+    private var attemptedBackoffRetries: [String: Date] = [:]
+    private let backoffKey = "provider-backoff.v1"
     private var preferenceObserver: AnyCancellable?
     private var credentialObserver: AnyCancellable?
     private var usageRevisions: [ProviderID: Int] = [:]
-    private var pendingFullRefresh: Bool?
-    private var pendingProviderIDs: [ProviderID: Bool] = [:]
+    private var pendingFullRefresh: RefreshRequest?
+    private var pendingProviderIDs: [ProviderID: RefreshRequest] = [:]
 
     private struct CachedUsage: Codable {
         let usage: ProviderUsage
         let revision: Int
     }
 
-    private enum RefreshRequest {
-        case all(Bool)
-        case provider(ProviderID, Bool)
-
-        var providerID: ProviderID? {
-            switch self {
-            case .all: nil
-            case let .provider(id, _): id
-            }
-        }
-
-        var allowBrowserCookieImport: Bool {
-            switch self {
-            case let .all(allowed), let .provider(_, allowed): allowed
-            }
-        }
+    private struct RefreshRequest {
+        var providerID: ProviderID?
+        var allowBrowserCookieImport: Bool
+        var isManual: Bool
     }
 
     var enabledProviders: [ProviderDescriptor] {
@@ -50,13 +43,16 @@ final class UsageStore: ObservableObject {
 
     init(
         preferences: ProviderPreferences? = nil,
-        collector: UsageCollector = UsageCollector(),
+        collector: any UsageCollecting = UsageCollector(),
         defaults: UserDefaults = .standard
     ) {
         self.preferences = preferences ?? .shared
         self.collector = collector
         self.defaults = defaults
         self.notifications = QuotaNotificationController(defaults: defaults)
+        backoffByID = defaults.data(forKey: backoffKey).flatMap {
+            try? JSONDecoder().decode([String: ProviderBackoffState].self, from: $0)
+        } ?? [:]
         restoreCache()
         preferenceObserver = self.preferences.$configurations
             .dropFirst()
@@ -74,6 +70,7 @@ final class UsageStore: ObservableObject {
 
     deinit {
         refreshLoop?.cancel()
+        deadlineRefreshTask?.cancel()
     }
 
     #if DEBUG
@@ -85,6 +82,13 @@ final class UsageStore: ObservableObject {
 
     var currentRefreshInterval: TimeInterval {
         max(60, defaults.object(forKey: "refresh-interval") as? Double ?? 300)
+    }
+
+    func backoffDescription(for id: ProviderID, now: Date = Date(), language: AppLanguage) -> String? {
+        let remaining = ProviderBackoffPolicy.remaining(state: backoffByID[id.rawValue], now: now)
+        guard remaining > 0 else { return nil }
+        let minutes = max(1, Int(ceil(remaining / 60)))
+        return AppCopy(language: language).text("限流中，\(minutes) 分钟后重试", "Rate limited. Retry in \(minutes) min")
     }
 
     func start() {
@@ -100,9 +104,50 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    func refresh(providerID: ProviderID? = nil, allowBrowserCookieImport: Bool = false) async {
-        let request = providerID.map { RefreshRequest.provider($0, allowBrowserCookieImport) }
-            ?? .all(allowBrowserCookieImport)
+    private func scheduleDeadlineRefresh() {
+        deadlineRefreshTask?.cancel()
+        deadlineRefreshTask = nil
+        let now = Date()
+        let usages = enabledProviders.compactMap { usageByID[$0.id] }
+        let plan = ResetBoundaryRefreshPolicy.plan(
+            usages: usages, attemptedBoundaries: attemptedResetBoundaries, now: now
+        )
+        attemptedResetBoundaries = plan.attemptedBoundaries
+        let retries = ProviderBackoffPolicy.plan(
+            stateByID: backoffByID, enabledProviderIDs: Set(enabledProviders.map(\.id)),
+            attemptedRetries: attemptedBackoffRetries, now: now
+        )
+        attemptedBackoffRetries = retries.attemptedRetries
+        let ids = plan.dueProviderIDs.union(retries.dueProviderIDs)
+        if !ids.isEmpty {
+            deadlineRefreshTask = Task { [weak self] in
+                guard let self, !Task.isCancelled else { return }
+                self.deadlineRefreshTask = nil
+                for id in ids.sorted(by: { $0.rawValue < $1.rawValue }) {
+                    guard !Task.isCancelled else { return }
+                    await self.refresh(providerID: id)
+                }
+                self.scheduleDeadlineRefresh()
+            }
+            return
+        }
+        guard let next = [plan.nextDeadline, retries.nextDeadline].compactMap({ $0 }).min() else { return }
+        deadlineRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(0, next.timeIntervalSinceNow)))
+            guard let self, !Task.isCancelled else { return }
+            self.deadlineRefreshTask = nil
+            self.scheduleDeadlineRefresh()
+        }
+    }
+
+    private func persistBackoff() {
+        guard let data = try? JSONEncoder().encode(backoffByID) else { return }
+        defaults.set(data, forKey: backoffKey)
+    }
+
+    func refresh(providerID: ProviderID? = nil, allowBrowserCookieImport: Bool = false, isManual: Bool = false) async {
+        let request = RefreshRequest(providerID: providerID, allowBrowserCookieImport: allowBrowserCookieImport,
+                                     isManual: isManual || allowBrowserCookieImport)
         guard !isRefreshing else {
             enqueue(request)
             return
@@ -116,7 +161,8 @@ final class UsageStore: ObservableObject {
             await BrowserCookieAccess.$scope.withValue(scope) {
                 await performRefresh(
                     providerID: currentRequest.providerID,
-                    allowBrowserCookieImport: currentRequest.allowBrowserCookieImport
+                    allowBrowserCookieImport: currentRequest.allowBrowserCookieImport,
+                    isManual: currentRequest.isManual
                 )
             }
             nextRequest = dequeueRefresh()
@@ -124,27 +170,45 @@ final class UsageStore: ObservableObject {
     }
 
     private func enqueue(_ request: RefreshRequest) {
-        switch request {
-        case let .all(allowed):
-            pendingFullRefresh = (pendingFullRefresh ?? false) || allowed
-        case let .provider(id, allowed):
-            pendingProviderIDs[id] = (pendingProviderIDs[id] ?? false) || allowed
+        if let id = request.providerID {
+            var pending = pendingProviderIDs[id] ?? request
+            pending.allowBrowserCookieImport = pending.allowBrowserCookieImport || request.allowBrowserCookieImport
+            pending.isManual = pending.isManual || request.isManual
+            pendingProviderIDs[id] = pending
+        } else {
+            var pending = pendingFullRefresh ?? request
+            pending.allowBrowserCookieImport = pending.allowBrowserCookieImport || request.allowBrowserCookieImport
+            pending.isManual = pending.isManual || request.isManual
+            pendingFullRefresh = pending
         }
     }
 
     private func dequeueRefresh() -> RefreshRequest? {
-        if let allowed = pendingFullRefresh {
+        if let request = pendingFullRefresh {
             pendingFullRefresh = nil
-            return .all(allowed)
+            return request
         }
-        guard let (id, allowed) = pendingProviderIDs.first else { return nil }
+        guard let (id, request) = pendingProviderIDs.first else { return nil }
         pendingProviderIDs.removeValue(forKey: id)
-        return .provider(id, allowed)
+        return request
     }
 
-    private func performRefresh(providerID: ProviderID?, allowBrowserCookieImport: Bool) async {
+    private func performRefresh(providerID: ProviderID?, allowBrowserCookieImport: Bool, isManual: Bool) async {
         DiagnosticLog.shared.write("Refresh started", category: .refresh)
-        let providers = enabledProviders.filter { providerID == nil || $0.id == providerID }
+        let requested = enabledProviders.filter { providerID == nil || $0.id == providerID }
+        let now = Date()
+        let providers = requested.filter { descriptor in
+            let allowed = ProviderBackoffPolicy.canRefresh(
+                state: backoffByID[descriptor.id.rawValue], now: now, isManual: isManual
+            )
+            if !allowed {
+                var cached = usage(for: descriptor.id)
+                cached.state = .unavailable
+                cached.message = backoffDescription(for: descriptor.id, now: now, language: AppLocalization.currentLanguage)
+                usageByID[descriptor.id] = cached
+            }
+            return allowed
+        }
         let preferences = preferences
         let jobs = providers.map { descriptor in
             (descriptor, preferences.configuration(for: descriptor.id))
@@ -187,7 +251,7 @@ final class UsageStore: ObservableObject {
         usageByID = loadingUsage
         var refreshedUsage = loadingUsage
 
-        await withTaskGroup(of: (ProviderUsage, Int, ProviderDiagnosticResult).self) { group in
+        await withTaskGroup(of: (ProviderUsage, Int, ProviderDiagnosticResult, ProviderRateLimitObservation?).self) { group in
             let concurrencyLimit = 6
             var nextJobIndex = 0
 
@@ -220,7 +284,7 @@ final class UsageStore: ObservableObject {
                             outcome: usage.state == .ready ? .success : .failed,
                             errorKind: usage.state == .ready ? nil : "Provider.\(usage.state.rawValue)",
                             httpStatus: usage.state == .ready ? nil : trace.httpStatus
-                        ))
+                        ), trace.rateLimit)
                     } catch {
                         let summary = DiagnosticsErrorSummary(error: error)
                         return (ProviderUsage(
@@ -235,7 +299,7 @@ final class UsageStore: ObservableObject {
                             providerID: descriptor.id, source: trace.failureSource,
                             date: Date(), duration: Date().timeIntervalSince(started), outcome: .failed,
                             errorKind: summary.kind, httpStatus: summary.httpStatus ?? trace.httpStatus
-                        ))
+                        ), trace.rateLimit)
                     }
                 }
             }
@@ -245,7 +309,7 @@ final class UsageStore: ObservableObject {
                 nextJobIndex += 1
             }
 
-            while let (usage, revision, diagnostic) = await group.next() {
+            while let (usage, revision, diagnostic, rateLimit) = await group.next() {
                 if revision == preferences.usageRevision(for: usage.id) {
                     let resolvedUsage = Self.commandCodeUsageResolvingDepletionOnEnrichmentFailure(
                         current: usage,
@@ -273,6 +337,25 @@ final class UsageStore: ObservableObject {
                     }
 
                     if revision == preferences.usageRevision(for: usage.id) {
+                        let key = usage.id.rawValue
+                        let previousBackoff = backoffByID[key]
+                        let finishedAt = Date()
+                        var backoff = ProviderBackoffPolicy.updating(
+                            previous: previousBackoff,
+                            httpStatus: rateLimit == nil ? diagnostic.httpStatus : 429,
+                            retryAfter: rateLimit?.retryAfter,
+                            succeeded: resolvedUsage.state == .ready, now: finishedAt
+                        )
+                        if let previousBackoff, attemptedBackoffRetries[key] == previousBackoff.retryAt,
+                           let deadline = backoff?.retryAt, deadline <= finishedAt, rateLimit != nil {
+                            // 已经立即重试过，再遇到零等待的 429 就按指数退避，避免请求循环。
+                            backoff = ProviderBackoffPolicy.updating(
+                                previous: previousBackoff, httpStatus: 429, retryAfter: nil,
+                                succeeded: false, now: finishedAt
+                            )
+                        }
+                        backoffByID[key] = backoff
+                        if backoffByID[key] != previousBackoff { persistBackoff() }
                         var result = diagnostic
                         result.usedCache = refreshedUsage[usage.id]?.state == .unavailable
                         DiagnosticLog.shared.record(result)
@@ -291,6 +374,7 @@ final class UsageStore: ObservableObject {
             }
         }
         persistCache()
+        scheduleDeadlineRefresh()
         DiagnosticLog.shared.write("Refresh finished", category: .refresh)
     }
 

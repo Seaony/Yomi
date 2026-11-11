@@ -27,7 +27,24 @@ enum UsageCollectionError: LocalizedError {
     }
 }
 
-actor UsageCollector {
+nonisolated protocol UsageCollecting: Sendable {
+    func collect(
+        descriptor: ProviderDescriptor,
+        configuration: ProviderConfiguration,
+        secret: String,
+        allowVertexClaudeFallback: Bool,
+        allowBrowserCookieImport: Bool,
+        usageRevision: Int?
+    ) async throws -> ProviderUsage
+
+    func enrichLocalMetadata(
+        to usage: ProviderUsage,
+        descriptor: ProviderDescriptor,
+        allowVertexClaudeFallback: Bool
+    ) async -> ProviderUsage
+}
+
+actor UsageCollector: UsageCollecting {
     private static let claudeWeeklyAmountEstimatorKey = "claude-weekly-amount-estimator.v1"
 
     private let baseSession: URLSession

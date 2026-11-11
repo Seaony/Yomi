@@ -586,7 +586,7 @@ nonisolated enum DoubaoUsageFetcher {
         now: Date
     ) async throws -> ArkProbe {
         let request = try arkRequest(apiKey: apiKey, model: model)
-        let (data, response) = try await session.data(for: request, delegate: DoubaoRedirectDelegate())
+        let (data, response) = try await FetchDiagnostics.data(for: request, session: session, delegate: DoubaoRedirectDelegate())
         guard let http = response as? HTTPURLResponse else { throw UsageCollectionError.unreadableResponse }
         guard http.statusCode == 200 || http.statusCode == 429 else {
             throw DoubaoUsageError.requestFailed(http.statusCode, errorSummary(data, status: http.statusCode))
@@ -619,7 +619,7 @@ nonisolated enum DoubaoUsageFetcher {
     }
 
     private static func execute(_ request: URLRequest, session: URLSession) async throws -> Data {
-        let (data, response) = try await session.data(for: request, delegate: DoubaoRedirectDelegate())
+        let (data, response) = try await FetchDiagnostics.data(for: request, session: session, delegate: DoubaoRedirectDelegate())
         guard let http = response as? HTTPURLResponse else { throw UsageCollectionError.unreadableResponse }
         guard http.statusCode == 200 else {
             throw DoubaoUsageError.requestFailed(http.statusCode, errorSummary(data, status: http.statusCode))

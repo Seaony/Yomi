@@ -196,7 +196,7 @@ nonisolated enum MuseAIUsageFetcher {
             request.setValue("cors", forHTTPHeaderField: "Sec-Fetch-Mode")
             request.setValue("empty", forHTTPHeaderField: "Sec-Fetch-Dest")
         }
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await FetchDiagnostics.data(for: request, session: session)
         guard let http = response as? HTTPURLResponse, let body = String(data: data, encoding: .utf8) else {
             throw UsageCollectionError.unreadableResponse
         }

@@ -86,7 +86,7 @@ nonisolated enum TypeSafeUsageFetcher {
         request.timeoutInterval = 10
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await FetchDiagnostics.data(for: request, session: session)
         guard let http = response as? HTTPURLResponse else { throw TypeSafeUsageError.parseFailed }
         try validate(status: http.statusCode, location: http.value(forHTTPHeaderField: "Location"))
         return try parse(String(decoding: data, as: UTF8.self), now: now)

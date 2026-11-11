@@ -508,8 +508,9 @@ nonisolated enum AmpUsageFetcher {
     }
 
     private static func fetchAPI(token: String, session: URLSession, now: Date) async throws -> Snapshot {
-        let (data, response) = try await session.data(
+        let (data, response) = try await FetchDiagnostics.data(
             for: makeAPIRequest(token: token),
+            session: session,
             delegate: APIRedirectDelegate()
         )
         guard let http = response as? HTTPURLResponse else {
@@ -522,8 +523,9 @@ nonisolated enum AmpUsageFetcher {
 
     private static func fetchWeb(cookie: String, session: URLSession) async throws -> Snapshot {
         let redirectDelegate = WebRedirectDelegate(cookie: cookie)
-        let (data, response) = try await session.data(
+        let (data, response) = try await FetchDiagnostics.data(
             for: makeWebRequest(cookie: cookie),
+            session: session,
             delegate: redirectDelegate
         )
         guard let http = response as? HTTPURLResponse else {

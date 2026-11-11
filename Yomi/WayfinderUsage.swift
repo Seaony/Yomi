@@ -316,7 +316,7 @@ nonisolated enum WayfinderUsageFetcher {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await FetchDiagnostics.data(for: request, session: session)
         } catch {
             if isCancellation(error) { throw CancellationError() }
             throw WayfinderUsageError.gatewayUnreachable

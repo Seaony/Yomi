@@ -177,7 +177,7 @@ nonisolated enum HyperUsageFetcher {
         request.timeoutInterval = timeout
         request.allHTTPHeaderFields = headers
         do {
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await FetchDiagnostics.data(for: request, session: session)
             guard let http = response as? HTTPURLResponse else { throw HyperUsageError.networkError }
             return (data, http)
         } catch is CancellationError {

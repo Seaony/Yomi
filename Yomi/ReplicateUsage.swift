@@ -244,7 +244,7 @@ nonisolated enum ReplicateUsageFetcher {
         request.timeoutInterval = timeout
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
         request.setValue(accept, forHTTPHeaderField: "Accept")
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await FetchDiagnostics.data(for: request, session: session)
         guard let http = response as? HTTPURLResponse else { throw ReplicateUsageError.unreadableResponse }
         if http.statusCode == 401 || http.statusCode == 403 { throw ReplicateUsageError.sessionExpired }
         guard (200..<300).contains(http.statusCode) else { throw ReplicateUsageError.requestFailed(http.statusCode) }

@@ -106,7 +106,7 @@ nonisolated enum GitKrakenUsageFetcher {
             forHTTPHeaderField: "Client-Version"
         )
         if let organization { request.setValue(organization, forHTTPHeaderField: "gk-org-id") }
-        let (data, response) = try await session.data(for: request, delegate: GitKrakenRedirectHandler())
+        let (data, response) = try await FetchDiagnostics.data(for: request, session: session, delegate: GitKrakenRedirectHandler())
         guard let http = response as? HTTPURLResponse else { throw GitKrakenUsageError.parseFailed }
         switch http.statusCode {
         case 200: break

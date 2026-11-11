@@ -61,7 +61,7 @@ nonisolated enum ParallelUsageFetcher {
             delegateQueue: nil
         )
         defer { requestSession.finishTasksAndInvalidate() }
-        let (data, response) = try await requestSession.data(for: request)
+        let (data, response) = try await FetchDiagnostics.data(for: request, session: requestSession)
         guard let http = response as? HTTPURLResponse else { throw ParallelUsageError.invalidResponse }
         if http.statusCode == 401 || http.statusCode == 403 || (300..<400).contains(http.statusCode)
             || http.statusCode == 200

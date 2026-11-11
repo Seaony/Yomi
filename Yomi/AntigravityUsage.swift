@@ -1098,7 +1098,7 @@ nonisolated enum AntigravityUsageFetcher {
             request.setValue(endpoint.token, forHTTPHeaderField: "X-Codeium-Csrf-Token")
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await localSession.data(for: request)
+        let (data, response) = try await FetchDiagnostics.data(for: request, session: localSession)
         guard let http = response as? HTTPURLResponse else {
             throw AntigravityUsageError.localServiceUnavailable
         }

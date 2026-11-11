@@ -641,7 +641,7 @@ private struct ProviderSettingsView: View {
                                 set: { enabled in
                                     store.preferences.setEnabled(enabled, for: descriptor.id)
                                     guard enabled else { return }
-                                    Task { await store.refresh(providerID: descriptor.id) }
+                                    Task { await store.refresh(providerID: descriptor.id, isManual: true) }
                                 }
                             )
                         )
@@ -1651,7 +1651,7 @@ private struct ProviderConfigurationView: View {
     private func saveAndRefresh(allowBrowserCookieImport: Bool = false) {
         guard save() else { return }
         Task {
-            await store.refresh(providerID: descriptor.id, allowBrowserCookieImport: allowBrowserCookieImport)
+            await store.refresh(providerID: descriptor.id, allowBrowserCookieImport: allowBrowserCookieImport, isManual: true)
         }
     }
 
@@ -1847,14 +1847,17 @@ private struct AboutSettingsView: View {
                 SettingsCard(copy.text("诊断", "Diagnostics")) {
                     VStack(alignment: .leading, spacing: 12) {
                         ForEach(store.enabledProviders) { descriptor in
-                            Group {
-                                if let result = DiagnosticLog.shared.latestResult(for: descriptor.id) {
-                                    Text(diagnosticLine(provider: descriptor.name, result: result))
-                                        .foregroundStyle(result.outcome == .success ? SettingsPalette.secondary : SettingsPalette.orange)
-                                        .help(diagnosticLine(provider: descriptor.name, result: result))
-                                } else {
-                                    Text(descriptor.name + " · " + copy.text("等待首次刷新", "Waiting for the first refresh"))
-                                        .foregroundStyle(SettingsPalette.tertiary)
+                            TimelineView(.periodic(from: .now, by: 60)) { context in
+                                let backoff = store.backoffDescription(for: descriptor.id, now: context.date, language: language)
+                                Group {
+                                    if let result = DiagnosticLog.shared.latestResult(for: descriptor.id) {
+                                        Text(diagnosticLine(provider: descriptor.name, result: result, now: context.date))
+                                            .foregroundStyle(result.outcome == .success && backoff == nil ? SettingsPalette.secondary : SettingsPalette.orange)
+                                            .help(diagnosticLine(provider: descriptor.name, result: result, now: context.date))
+                                    } else {
+                                        Text(descriptor.name + " · " + (backoff ?? copy.text("等待首次刷新", "Waiting for the first refresh")))
+                                            .foregroundStyle(backoff == nil ? SettingsPalette.tertiary : SettingsPalette.orange)
+                                    }
                                 }
                             }
                             .lineLimit(1)
@@ -1864,9 +1867,12 @@ private struct AboutSettingsView: View {
                         HStack(spacing: 12) {
                             Button(copied ? copy.text("已复制", "Copied") : copy.text("复制诊断信息", "Copy diagnostics")) {
                                 NSPasteboard.general.clearContents()
-                                copied = NSPasteboard.general.setString(
-                                    DiagnosticLog.shared.report(enabledProviders: store.enabledProviders), forType: .string
-                                )
+                                let limits = store.enabledProviders.compactMap { provider in
+                                    store.backoffDescription(for: provider.id, language: language).map { provider.name + ": " + $0 }
+                                }
+                                let report = DiagnosticLog.shared.report(enabledProviders: store.enabledProviders)
+                                    + (limits.isEmpty ? "" : "\n" + limits.joined(separator: "\n"))
+                                copied = NSPasteboard.general.setString(DiagnosticsRedactor.redact(report), forType: .string)
                             }
                             Button(copy.text("打开日志文件夹", "Open log folder")) {
                                 let directory = DiagnosticLog.shared.directoryURL
@@ -1886,10 +1892,11 @@ private struct AboutSettingsView: View {
         }
     }
 
-    private func diagnosticLine(provider: String, result: ProviderDiagnosticResult) -> String {
+    private func diagnosticLine(provider: String, result: ProviderDiagnosticResult, now: Date) -> String {
         let outcome = result.outcome == .success ? copy.text("成功", "Success") : copy.text("失败", "Failed")
         let time = result.date.formatted(.dateTime.hour().minute().locale(language.locale))
-        var parts = [provider, outcome, result.source, time]
+        let status = store.backoffDescription(for: result.providerID, now: now, language: language) ?? outcome
+        var parts = [provider, status, result.source, time]
         if result.outcome == .failed {
             if let error = result.errorKind { parts.append(error) }
             if let status = result.httpStatus { parts.append("HTTP \(status)") }

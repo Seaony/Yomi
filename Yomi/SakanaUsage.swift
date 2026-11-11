@@ -172,7 +172,7 @@ nonisolated enum SakanaUsageFetcher {
         request.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
         request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await FetchDiagnostics.data(for: request, session: session)
         guard let http = response as? HTTPURLResponse else { throw SakanaUsageError.apiError(0) }
         return (data, http)
     }

@@ -435,7 +435,7 @@ nonisolated enum OllamaUsageFetcher {
 
     private static func response(for request: URLRequest, session: URLSession) async throws -> (Data, HTTPURLResponse) {
         do {
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await FetchDiagnostics.data(for: request, session: session)
             guard let http = response as? HTTPURLResponse else {
                 throw OllamaUsageError.networkError("Invalid response")
             }

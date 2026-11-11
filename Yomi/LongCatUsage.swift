@@ -439,7 +439,7 @@ nonisolated enum LongCatUsageFetcher {
         )
         let data: Data
         let response: URLResponse
-        do { (data, response) = try await session.data(for: request) }
+        do { (data, response) = try await FetchDiagnostics.data(for: request, session: session) }
         catch is CancellationError { throw CancellationError() }
         catch let error as URLError where error.code == .cancelled { throw CancellationError() }
         catch { throw LongCatUsageError.networkError(error.localizedDescription) }

@@ -206,7 +206,7 @@ nonisolated enum HelmcodeUsageFetcher {
         request.setValue("https://cloud.\(tenant.domain)", forHTTPHeaderField: "Origin")
         request.setValue("https://cloud.\(tenant.domain)/dashboard", forHTTPHeaderField: "Referer")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await FetchDiagnostics.data(for: request, session: session)
         guard let http = response as? HTTPURLResponse else { throw HelmcodeUsageError.invalidResponse("HTTP") }
         if (300..<400).contains(http.statusCode) || http.statusCode == 401 || http.statusCode == 403 {
             throw HelmcodeUsageError.invalidSession

@@ -9,6 +9,7 @@ nonisolated final class FetchDiagnostics: NSObject, URLSessionTaskDelegate, @unc
     private var lastStrategySource: String?
     private var successfulSource: String?
     private var lastStatus: Int?
+    private var rateLimitObservation: ProviderRateLimitObservation?
 
     func note(_ source: String) {
         lock.withLock { lastObservedSource = Self.safeSource(source) }
@@ -39,6 +40,19 @@ nonisolated final class FetchDiagnostics: NSObject, URLSessionTaskDelegate, @unc
     }
 
     var httpStatus: Int? { lock.withLock { lastStatus } }
+    var rateLimit: ProviderRateLimitObservation? { lock.withLock { rateLimitObservation } }
+
+    static func data(
+        for request: URLRequest,
+        session: URLSession,
+        delegate: (any URLSessionTaskDelegate)? = nil
+    ) async throws -> (Data, URLResponse) {
+        let trace = current
+        let result = try await session.data(for: request, delegate: delegate)
+        // 使用原会话和代理，只在解析前补记响应，隔离会话也能保留限流信息。
+        trace?.record(request: request, response: result.1)
+        return result
+    }
 
     private static func safeSource(_ value: String) -> String {
         ["API", "OAuth", "Cookie", "CLI", "Local API", "Local", "None"].contains(value) ? value : "None"
@@ -68,7 +82,19 @@ nonisolated final class FetchDiagnostics: NSObject, URLSessionTaskDelegate, @unc
         }
         note(source)
         if let http = response as? HTTPURLResponse {
-            lock.withLock { lastStatus = http.statusCode }
+            lock.withLock {
+                lastStatus = http.statusCode
+                if http.statusCode == 429, rateLimitObservation?.retryAfter == nil {
+                    // 后续可选请求也限流时，保留首次返回的重试时间。
+                    rateLimitObservation = ProviderRateLimitObservation(
+                        retryAfter: http.value(forHTTPHeaderField: "Retry-After")
+                    )
+                }
+            }
         }
     }
+}
+
+nonisolated struct ProviderRateLimitObservation: Equatable, Sendable {
+    let retryAfter: String?
 }
