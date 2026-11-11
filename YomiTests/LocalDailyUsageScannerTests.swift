@@ -15,7 +15,7 @@ struct LocalDailyUsageScannerTests {
         let data = try JSONSerialization.data(withJSONObject: entry)
         try data.dropLast().write(to: file)
 
-        let scanner = LocalDailyUsageScanner()
+        let scanner = LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache"))
         let incomplete = await scan(scanner, provider: provider, home: home, now: now)
         #expect(incomplete == nil)
 
@@ -28,7 +28,7 @@ struct LocalDailyUsageScannerTests {
         #expect(completed?.today?.tokens == 110)
         let repeated = await scan(scanner, provider: provider, home: home, now: now)
         #expect(repeated?.today?.tokens == 110)
-        let restored = await scan(LocalDailyUsageScanner(), provider: provider, home: home, now: now)
+        let restored = await scan(LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")), provider: provider, home: home, now: now)
         #expect(restored?.today?.tokens == 110)
     }
 
@@ -40,7 +40,7 @@ struct LocalDailyUsageScannerTests {
         try writeSession(id: "independent-a", count: 2, now: now.addingTimeInterval(-30), home: home)
         try writeSession(id: "independent-b", count: 2, now: now, home: home)
 
-        let usage = await scan(LocalDailyUsageScanner(), provider: "codex", home: home, now: now)
+        let usage = await scan(LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")), provider: "codex", home: home, now: now)
         #expect(usage?.today?.tokens == 440)
     }
 
@@ -52,7 +52,7 @@ struct LocalDailyUsageScannerTests {
         try writeSession(id: "parent", count: 2, now: now, home: home)
         try writeSession(id: "child", parentID: "parent", count: 3, now: now, home: home)
 
-        let usage = await scan(LocalDailyUsageScanner(), provider: "codex", home: home, now: now)
+        let usage = await scan(LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")), provider: "codex", home: home, now: now)
         #expect(usage?.today?.tokens == 330)
     }
 
@@ -64,7 +64,7 @@ struct LocalDailyUsageScannerTests {
         let entry = claudeEntry(model: "claude-opus-4-20250514", input: 100, output: 10, now: now)
         try writeLines([entry], to: home.appending(path: ".claude/projects/sample/usage.jsonl"))
 
-        let usage = await scan(LocalDailyUsageScanner(), provider: "claude", home: home, now: now)
+        let usage = await scan(LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")), provider: "claude", home: home, now: now)
         let cost = try #require(usage?.today?.valueUSD)
         #expect(abs(cost - 0.00225) < 1e-10)
     }
@@ -77,7 +77,7 @@ struct LocalDailyUsageScannerTests {
         let entry = claudeEntry(model: "claude-sonnet-4-20250514", input: 200_001, output: 10, now: now)
         try writeLines([entry], to: home.appending(path: ".claude/projects/sample/usage.jsonl"))
 
-        let usage = await scan(LocalDailyUsageScanner(), provider: "claude", home: home, now: now)
+        let usage = await scan(LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")), provider: "claude", home: home, now: now)
         let cost = try #require(usage?.today?.valueUSD)
         #expect(abs(cost - (200_001 * 6e-6 + 10 * 2.25e-5)) < 1e-10)
     }
@@ -94,7 +94,7 @@ struct LocalDailyUsageScannerTests {
           "context_over_200k":{"input":20,"cache_read":2,"cache_write":25,"output":75}
         }}}}}
         """#.utf8)) : nil
-        let usage = await LocalDailyUsageScanner().scan(
+        let usage = await LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")).scan(
             providerID: ProviderID(rawValue: "codex"), currentWeekStart: now.addingTimeInterval(-86400),
             now: now, homeDirectory: home, pricingCatalog: catalog
         )
@@ -114,12 +114,12 @@ struct LocalDailyUsageScannerTests {
             "turn_id=priced websocket request: {\"type\":\"response.create\",\"model\":\"gpt-6-astra\",\"service_tier\":\"\(tier)\"}",
             now: now, home: home
         )
-        let scanner = LocalDailyUsageScanner()
+        let scanner = LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache"))
         let usage = await scan(scanner, provider: "codex", home: home, now: now)
         let cost = try #require(usage?.today?.valueUSD)
         let standard = input == 250_000 ? 1.675 : 4.325
         #expect(abs(cost - standard * (tier == "default" ? 1 : 2)) < 1e-10)
-        let restored = await scan(LocalDailyUsageScanner(), provider: "codex", home: home, now: now)
+        let restored = await scan(LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")), provider: "codex", home: home, now: now)
         #expect(restored?.today?.valueUSD == usage?.today?.valueUSD)
     }
 
@@ -129,12 +129,12 @@ struct LocalDailyUsageScannerTests {
         defer { try? FileManager.default.removeItem(at: home) }
         let now = Date()
         try writePricedSession(model: model, input: 300_000, now: now, home: home)
-        let standard = await scan(LocalDailyUsageScanner(), provider: "codex", home: home, now: now)
+        let standard = await scan(LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")), provider: "codex", home: home, now: now)
         try writeTurnLog(
             "turn_id=priced websocket request: {\"type\":\"response.create\",\"model\":\"\(model)\",\"service_tier\":\"fast\"}",
             now: now, home: home
         )
-        let fast = await scan(LocalDailyUsageScanner(), provider: "codex", home: home, now: now)
+        let fast = await scan(LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")), provider: "codex", home: home, now: now)
         let standardCost = try #require(standard?.today?.valueUSD)
         let fastCost = try #require(fast?.today?.valueUSD)
         #expect(abs(fastCost - standardCost) < 1e-10)
@@ -146,12 +146,12 @@ struct LocalDailyUsageScannerTests {
         defer { try? FileManager.default.removeItem(at: home) }
         let now = Date()
         try writePricedSession(model: model, input: input, now: now, home: home)
-        let standard = await scan(LocalDailyUsageScanner(), provider: "codex", home: home, now: now)
+        let standard = await scan(LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")), provider: "codex", home: home, now: now)
         try writeTurnLog(
             "turn_id=priced websocket request: {\"type\":\"response.create\",\"model\":\"\(model)\",\"service_tier\":\"fast\"}",
             now: now, home: home
         )
-        let fast = await scan(LocalDailyUsageScanner(), provider: "codex", home: home, now: now)
+        let fast = await scan(LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")), provider: "codex", home: home, now: now)
         let standardCost = try #require(standard?.today?.valueUSD)
         let fastCost = try #require(fast?.today?.valueUSD)
         #expect(abs(fastCost - standardCost * 2) < 1e-10)
@@ -189,7 +189,7 @@ struct LocalDailyUsageScannerTests {
             context(second: 9), usage(second: 10),
         ]
         let file = home.appending(path: ".codex/sessions/resumed-tier.jsonl")
-        let scanner = LocalDailyUsageScanner()
+        let scanner = LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache"))
         if prefixCount > 0 {
             try writeLines(Array(records.prefix(prefixCount)), to: file)
             _ = await scan(scanner, provider: "codex", home: home, now: now)
@@ -223,11 +223,11 @@ struct LocalDailyUsageScannerTests {
         let file = home.appending(path: ".codex/sessions/archived.jsonl")
         let original = try Data(contentsOf: file)
 
-        let scanner = LocalDailyUsageScanner()
+        let scanner = LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache"))
         #expect(await scan(scanner, provider: "codex", home: home, now: now)?.today?.tokens == 220)
         try FileManager.default.moveItem(at: file, to: home.appending(path: ".codex/sessions/archived.jsonl.zst"))
         #expect(await scan(scanner, provider: "codex", home: home, now: now)?.today?.tokens == 220)
-        #expect(await scan(LocalDailyUsageScanner(), provider: "codex", home: home, now: now)?.today?.tokens == 220)
+        #expect(await scan(LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")), provider: "codex", home: home, now: now)?.today?.tokens == 220)
 
         try original.write(to: file)
         #expect(await scan(scanner, provider: "codex", home: home, now: now)?.today?.tokens == 220)
@@ -244,7 +244,7 @@ struct LocalDailyUsageScannerTests {
         try writeSession(id: "2026/locked", count: 2, now: now, home: home)
         let directory = home.appending(path: lockedPath)
 
-        let scanner = LocalDailyUsageScanner()
+        let scanner = LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache"))
         let before = await scan(scanner, provider: "codex", home: home, now: now)?.today?.tokens
         #expect(before == 220)
         try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: directory.path)
@@ -265,7 +265,7 @@ struct LocalDailyUsageScannerTests {
         ]]
         try writeLines([entry], to: home.appending(path: ".claude/projects/sample/usage.jsonl"))
 
-        let usage = await scan(LocalDailyUsageScanner(), provider: "claude", home: home, now: now)
+        let usage = await scan(LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")), provider: "claude", home: home, now: now)
         let cost = try #require(usage?.today?.valueUSD)
         #expect(abs(cost - (100 * 1e-5 + 1_000 * cacheReadRate + 40 * 1.25e-5 + 10 * 5e-5)) < 1e-12)
     }
@@ -298,7 +298,7 @@ struct LocalDailyUsageScannerTests {
             at: home.appending(path: ".config/claude/projects"), withDestinationURL: physical
         )
 
-        let usage = await scan(LocalDailyUsageScanner(), provider: "claude", home: home, now: now)
+        let usage = await scan(LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")), provider: "claude", home: home, now: now)
         #expect(usage?.today?.tokens == 110)
     }
 
@@ -316,7 +316,7 @@ struct LocalDailyUsageScannerTests {
             at: home.appending(path: ".codex/archived_sessions"), withDestinationURL: physical
         )
 
-        let usage = await scan(LocalDailyUsageScanner(), provider: "codex", home: home, now: now)
+        let usage = await scan(LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")), provider: "codex", home: home, now: now)
         #expect(usage?.today?.tokens == 220)
     }
 
@@ -345,7 +345,7 @@ struct LocalDailyUsageScannerTests {
         try writeLines([audit, unrelated, result], to: session.appending(path: "audit.jsonl"))
         try writeLines([transcript, unrelatedCopy], to: projects.appending(path: "transcript.jsonl"))
 
-        let usage = await scan(LocalDailyUsageScanner(), provider: "claude", home: home, now: now)
+        let usage = await scan(LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")), provider: "claude", home: home, now: now)
         #expect(usage?.today?.tokens == 330)
     }
 
@@ -373,7 +373,7 @@ struct LocalDailyUsageScannerTests {
             to: home.appending(path: ".codex/sessions/child.jsonl")
         )
 
-        let scanner = LocalDailyUsageScanner()
+        let scanner = LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache"))
         #expect(await scan(scanner, provider: "codex", home: home, now: firstNow)?.last30Days?.tokens == 330)
         try FileManager.default.moveItem(at: parent, to: home.appending(path: ".codex/sessions/parent.jsonl.zst"))
         let later = await scan(scanner, provider: "codex", home: home, now: firstNow.addingTimeInterval(2 * 86400))
@@ -392,7 +392,7 @@ struct LocalDailyUsageScannerTests {
         entry["request_id"] = "req-1"
         try writeLines([entry], to: sessions.appending(path: "s1/audit.jsonl"))
 
-        let scanner = LocalDailyUsageScanner()
+        let scanner = LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache"))
         #expect(await scan(scanner, provider: "claude", home: home, now: now)?.today?.tokens == 110)
         try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: sessions.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: sessions.path) }

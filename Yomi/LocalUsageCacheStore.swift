@@ -13,8 +13,8 @@ nonisolated final class LocalUsageCacheStore {
     private let database: OpaquePointer
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    init?() {
-        let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+    init?(directoryURL: URL? = nil) {
+        let root = directoryURL ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
             .appending(path: "Yomi/local-usage", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         for stale in ["usage-v1.sqlite", "usage-v1.sqlite-wal", "usage-v1.sqlite-shm"] {

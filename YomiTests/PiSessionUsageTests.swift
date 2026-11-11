@@ -132,7 +132,7 @@ struct PiSessionUsageTests {
             usage: ["input": 10, "output": 5]
         ) + "\n"
         try Data(session.utf8).write(to: directory.appending(path: "a.jsonl"))
-        let scanner = LocalDailyUsageScanner()
+        let scanner = LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache"))
         func scan() async -> Int64? {
             await scanner.scan(
                 providerID: ProviderID(rawValue: "pi"), currentWeekStart: now.addingTimeInterval(-86_400), now: now,
@@ -160,7 +160,7 @@ struct PiSessionUsageTests {
             usage: ["input": 10, "output": 5]
         ) + "\n"
         try Data(session.utf8).write(to: directory.appending(path: "a.jsonl"))
-        let scanner = LocalDailyUsageScanner()
+        let scanner = LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache"))
         func scan() async -> Int64? {
             await scanner.scan(
                 providerID: ProviderID(rawValue: "pi"), currentWeekStart: now.addingTimeInterval(-86_400), now: now,
@@ -191,14 +191,14 @@ struct PiSessionUsageTests {
             ))
         }
 
-        let generic = await LocalDailyUsageScanner().scan(
+        let generic = await LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")).scan(
             providerID: ProviderID(rawValue: "pi"), currentWeekStart: now.addingTimeInterval(-86_400), now: now,
             homeDirectory: home, pricingCatalog: try catalog("claude-sonnet-4-6")
         )
         #expect(generic?.today?.tokens == 1100)
         #expect(generic?.today?.valueUSD == nil)
 
-        let regional = await LocalDailyUsageScanner().scan(
+        let regional = await LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache")).scan(
             providerID: ProviderID(rawValue: "pi"), currentWeekStart: now.addingTimeInterval(-86_400), now: now,
             homeDirectory: home, pricingCatalog: try catalog("eu.anthropic.claude-sonnet-4-6")
         )
@@ -223,7 +223,7 @@ struct PiSessionUsageTests {
         // 分叉出的会话文件带着同一条历史，不能重复计算。
         try Data(session.utf8).write(to: directory.appending(path: "b.jsonl"))
 
-        let scanner = LocalDailyUsageScanner()
+        let scanner = LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache"))
         let priced = await scanner.scan(
             providerID: ProviderID(rawValue: "pi"), currentWeekStart: now.addingTimeInterval(-86_400), now: now,
             homeDirectory: home

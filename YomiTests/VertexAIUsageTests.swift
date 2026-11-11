@@ -274,7 +274,7 @@ struct VertexAIUsageTests {
         try Data(lines.utf8).write(to: project.appending(path: "usage.jsonl"))
         let weekStart = now.addingTimeInterval(-7 * 24 * 60 * 60)
 
-        let scanner = LocalDailyUsageScanner()
+        let scanner = LocalDailyUsageScanner(cacheDirectory: home.appending(path: "cache"))
         let claude = await scanner.scan(
             providerID: ProviderID(rawValue: "claude"),
             currentWeekStart: weekStart,

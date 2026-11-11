@@ -703,7 +703,8 @@ actor LocalDailyUsageScanner {
     private var piFileCache: [String: (size: UInt64, modified: Int64, usage: PiSessionFileUsage)] = [:]
     private var activeVertexCacheProvider: String?
     private var loadedProviders: Set<String> = []
-    private let cacheStore = LocalUsageCacheStore()
+    private let cacheDirectory: URL?
+    private lazy var cacheStore = LocalUsageCacheStore(directoryURL: cacheDirectory)
     private let priorityTurnStore = CodexPriorityTurnStore()
     private let cacheEncoder = JSONEncoder()
     private let cacheDecoder = JSONDecoder()
@@ -713,6 +714,10 @@ actor LocalDailyUsageScanner {
         return formatter
     }()
     private let dateFormatter = ISO8601DateFormatter()
+
+    init(cacheDirectory: URL? = nil) {
+        self.cacheDirectory = cacheDirectory
+    }
 
     func scan(
         providerID: ProviderID,
