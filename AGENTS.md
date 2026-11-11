@@ -24,23 +24,13 @@ Yomi 是使用 SwiftUI 与 AppKit 构建的原生 macOS 应用，用悬浮侧边
 - `Yomi/ProviderRecipes.swift`：部分 Provider 的 HTTP 接口地址、请求方法与认证方式。
 - `Yomi/*Usage.swift`：Provider 专用采集与解析，例如 `CursorUsage.swift`、`KimiUsage.swift`。
 - `Yomi/LocalDailyUsageScanner.swift`：本地 Token 用量与金额统计。
-- `Yomi/UsageRailView.swift`：主界面悬浮侧边栏。
-- `Yomi/ProviderDetailCard.swift`：Provider 详情卡片。
-- `Yomi/SettingsView.swift`：设置页面和 Provider 配置入口。
 - `Yomi/AppPreferences.swift`：外观、颜色、语言偏好与中英文文案。
-- `Yomi/UpdateController.swift`：Sparkle 自动更新。
-- `Yomi/ProviderCatalog.swift`：内置 Provider 列表。
 - `Yomi/ProviderPreferences.swift`：Provider 启用状态与密钥的钥匙串存储。
 - `Yomi/UsageParser.swift`：接口返回解析与缓存恢复。
-- `Yomi/ModelPricingCatalog.swift`：模型价格表。
-- `Yomi/LocalUsageCacheStore.swift`：本地用量缓存。
-- `Yomi/BrowserCookieAccess.swift`：浏览器 Cookie 读取。
-- `YomiTests/`：单元测试。
 - `scripts/`、`docs/RELEASING.md`：未签名版本发布脚本与说明；发布会推送标签并创建 GitHub Release。
 
 ## 实现约束
 
-- 修改前先搜索并阅读同类实现，保持现有组件、命名和布局方式。
 - 只修改当前需求涉及的代码，不顺带重构或格式化无关文件。
 - Provider 额度、账号等级和重置时间应与参考仓库 CodexBar 的实现逻辑对齐，查阅其中 `Sources/CodexBarCore/Providers/` 下对应 Provider 的代码；可以使用其依赖的开源库，但禁止把 CodexBar 本身作为依赖。
 - 不得从聊天内容、代码文本或任意包含百分号的日志中推断额度；额度必须来自对应 Provider 的可靠数据源。
@@ -53,7 +43,7 @@ Yomi 是使用 SwiftUI 与 AppKit 构建的原生 macOS 应用，用悬浮侧边
 
 ## 验证
 
-修改代码后至少执行：
+修改代码后至少执行下面的检查；涉及解析、缓存或统计逻辑时，把最后的 `build` 换成 `test` 再跑一次单元测试：
 
 ```bash
 git diff --check
@@ -65,17 +55,6 @@ xcodebuild \
   build
 ```
 
-涉及解析、缓存或统计逻辑时，再运行单元测试：
-
-```bash
-xcodebuild \
-  -project Yomi.xcodeproj \
-  -scheme Yomi \
-  -configuration Debug \
-  -derivedDataPath /tmp/YomiDerivedData \
-  test
-```
-
 构建产物位于：
 
 ```text
@@ -85,4 +64,3 @@ xcodebuild \
 - 每次完成代码修改后，重新启动上述最新 Debug 构建供用户检查。
 - 未经用户明确允许，不使用 UI 自动化工具进行视觉验收。
 - commit、push 和发布新版本不用逐次征求用户确认：改动验证通过后直接提交并推送，值得发版时自行运行 `scripts/publish-unsigned-release.sh` 发布，事后汇报。
-- 未经用户要求，不建分支、不创建 worktree。
