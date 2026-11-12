@@ -724,7 +724,7 @@ private struct ProviderRailItem: View {
     private var railValue: String? {
         if showsTodayTokens {
             guard let tokens = usage.today?.tokens else { return "—" }
-            return compactTokenCount(tokens, language: language)
+            return compactTokenCount(tokens)
         }
         guard headlineWindow != nil else { return nil }
         return "\(Int((remainingFraction * 100).rounded()))%"

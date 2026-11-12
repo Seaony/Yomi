@@ -78,7 +78,7 @@ struct ProviderDetailCard: View {
 
     private var headlineValue: String {
         if let requests = usage.todayRequests?.requests {
-            return compactTokenCount(requests, language: language)
+            return compactTokenCount(requests)
         }
         guard let tokens = usage.today?.tokens else { return "—" }
         return formatDetailTokensInMillions(tokens)
@@ -126,7 +126,7 @@ struct ProviderDetailCard: View {
 
     private var last30DaysValue: String {
         if let requests = usage.last30DaysRequests?.requests {
-            return compactTokenCount(requests, language: language)
+            return compactTokenCount(requests)
                 + " " + copy.text("次请求", "requests")
         }
         guard let tokens = usage.last30Days?.tokens else { return "—" }
@@ -1000,32 +1000,27 @@ func cachedUsageStatus(_ usage: ProviderUsage, language: AppLanguage) -> String?
     return status
 }
 
-func compactTokenCount(_ value: Int64, language: AppLanguage) -> String {
-    if language == .simplifiedChinese {
-        // 整数部分到四位就不显示小数，免得“5964.0万”在侧边栏里放不下。
-        func scaled(_ unit: Double, _ suffix: String) -> String {
-            let amount = Double(value) / unit
-            return String(format: amount >= 999.95 ? "%.0f%@" : "%.1f%@", amount, suffix)
-        }
-        // 9999.5 万以上会四舍五入成“10000万”，直接进位到亿。
-        if value >= 99_995_000 {
-            return scaled(100_000_000, "亿")
-        }
-        if value >= 10_000 {
-            return scaled(10_000, "万")
-        }
-    } else {
-        if value >= 1_000_000_000 {
-            return String(format: "%.1fB", Double(value) / 1_000_000_000)
-        }
-        if value >= 1_000_000 {
-            return String(format: "%.1fM", Double(value) / 1_000_000)
-        }
-        if value >= 1_000 {
-            return String(format: "%.1fK", Double(value) / 1_000)
-        }
+func compactTokenCount(_ value: Int64) -> String {
+    guard value >= 1_000 else {
+        return value.formatted(.number.grouping(.automatic))
     }
-    return value.formatted(.number.grouping(.automatic))
+    let units: [(value: Int64, suffix: String)] = [
+        (1_000, "K"), (1_000_000, "M"), (1_000_000_000, "B"),
+    ]
+    var unitIndex = value >= 1_000_000_000 ? 2 : value >= 1_000_000 ? 1 : 0
+    while true {
+        let amount = Double(value) / Double(units[unitIndex].value)
+        let rounded = amount < 100 ? (amount * 10).rounded() / 10 : amount.rounded()
+        if rounded >= 1_000, unitIndex < units.count - 1 {
+            unitIndex += 1
+            continue
+        }
+        return String(
+            format: rounded < 100 ? "%.1f%@" : "%.0f%@",
+            locale: Locale(identifier: "en_US_POSIX"),
+            rounded, units[unitIndex].suffix
+        )
+    }
 }
 
 private func compactDollarValue(_ value: Double) -> String {
