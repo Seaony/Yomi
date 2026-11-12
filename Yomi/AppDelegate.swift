@@ -67,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         isTerminating = true
         fullscreenRailController?.stop()
         revealStripPanel?.orderOut(nil)
+        store.serviceStatusMonitor.stop()
         providerDetailCloseTask?.cancel()
         providerDetailSizeObserver = nil
         NotificationCenter.default.removeObserver(self)

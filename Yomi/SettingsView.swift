@@ -270,6 +270,7 @@ private struct GeneralSettingsView: View {
     @AppStorage("refresh-interval") private var refreshInterval = 300.0
     @AppStorage("show-provider-names") private var showProviderNames = true
     @AppStorage(FullscreenCollapsePolicy.settingKey) private var collapseInFullscreen = FullscreenCollapsePolicy.defaultEnabled
+    @AppStorage(ProviderServiceStatusMonitor.settingKey) private var showServiceIncidents = ProviderServiceStatusMonitor.defaultEnabled
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
     @State private var railBackgroundHex = ""
@@ -437,6 +438,12 @@ private struct GeneralSettingsView: View {
                             title: copy.text("全屏时收起", "Collapse in full screen"),
                             hint: copy.text("全屏时收成细条，鼠标移到细条上即可展开", "Collapses to a thin bar in full screen. Hover it to expand."),
                             isOn: $collapseInFullscreen
+                        )
+                        Divider().padding(.vertical, 8)
+                        SettingsToggleRow(
+                            title: copy.text("显示服务故障", "Show service incidents"),
+                            hint: copy.text("在圆环和详情卡中显示服务商故障", "Show provider incidents in rings and detail cards"),
+                            isOn: $showServiceIncidents
                         )
                         Divider().padding(.vertical, 8)
                         SettingsToggleRow(

@@ -11,6 +11,7 @@ final class UsageStore: ObservableObject {
 
     let notifications: QuotaNotificationController
     let preferences: ProviderPreferences
+    let serviceStatusMonitor: ProviderServiceStatusMonitor
     private let collector: any UsageCollecting
     private let defaults: UserDefaults
     private let cacheKey = "usage-cache.v3"
@@ -22,6 +23,7 @@ final class UsageStore: ObservableObject {
     private let backoffKey = "provider-backoff.v1"
     private var preferenceObserver: AnyCancellable?
     private var credentialObserver: AnyCancellable?
+    private var serviceStatusObserver: AnyCancellable?
     private var usageRevisions: [ProviderID: Int] = [:]
     private var pendingFullRefresh: RefreshRequest?
     private var pendingProviderIDs: [ProviderID: RefreshRequest] = [:]
@@ -46,12 +48,14 @@ final class UsageStore: ObservableObject {
     init(
         preferences: ProviderPreferences? = nil,
         collector: any UsageCollecting = UsageCollector(),
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        serviceStatusMonitor: ProviderServiceStatusMonitor? = nil
     ) {
         self.preferences = preferences ?? .shared
         self.collector = collector
         self.defaults = defaults
         self.notifications = QuotaNotificationController(defaults: defaults)
+        self.serviceStatusMonitor = serviceStatusMonitor ?? ProviderServiceStatusMonitor(defaults: defaults)
         backoffByID = defaults.data(forKey: backoffKey).flatMap {
             try? JSONDecoder().decode([String: ProviderBackoffState].self, from: $0)
         } ?? [:]
@@ -60,6 +64,10 @@ final class UsageStore: ObservableObject {
             .dropFirst()
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
+                Task { @MainActor [weak self] in
+                    await Task.yield()
+                    self?.serviceStatusMonitor.providersDidChange()
+                }
             }
         credentialObserver = self.preferences.usageInvalidated
             .sink { [weak self] id in
@@ -68,6 +76,9 @@ final class UsageStore: ObservableObject {
                 self.usageRevisions.removeValue(forKey: id)
                 self.persistCache()
             }
+        serviceStatusObserver = self.serviceStatusMonitor.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
     }
 
     deinit {
@@ -86,6 +97,10 @@ final class UsageStore: ObservableObject {
         max(60, defaults.object(forKey: "refresh-interval") as? Double ?? 300)
     }
 
+    func serviceStatus(for id: ProviderID) -> ProviderServiceStatus? {
+        serviceStatusMonitor.status(for: id)
+    }
+
     func backoffDescription(for id: ProviderID, now: Date = Date(), language: AppLanguage) -> String? {
         let remaining = ProviderBackoffPolicy.remaining(state: backoffByID[id.rawValue], now: now)
         guard remaining > 0 else { return nil }
@@ -95,6 +110,10 @@ final class UsageStore: ObservableObject {
 
     func start() {
         guard refreshLoop == nil else { return }
+        serviceStatusMonitor.start(
+            providerIDs: { [weak self] in self?.enabledProviders.map(\.id) ?? [] },
+            usageInterval: { [weak self] in self?.currentRefreshInterval ?? 300 }
+        )
         refreshLoop = Task { [weak self] in
             await self?.refresh()
             while !Task.isCancelled {

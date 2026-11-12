@@ -62,10 +62,12 @@ struct ProviderDetailCard: View {
     let refreshInterval: () -> TimeInterval
     let refresh: () -> Void
     var openDailyBill: (() -> Void)? = nil
+    var serviceStatus: ProviderServiceStatus? = nil
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.appLanguage) private var language
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isRefreshHovering = false
+    @State private var isStatusLinkHovering = false
 
     private var copy: AppCopy { AppCopy(language: language) }
     private var isOverview: Bool { descriptor.id == ProviderCatalog.overview.id }
@@ -355,6 +357,7 @@ struct ProviderDetailCard: View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             VStack(alignment: .leading, spacing: 4) {
                 headerContent
+                serviceIncidentBanner
                 if UsageFreshness.isStale(
                     updatedAt: usage.updatedAt,
                     refreshInterval: refreshInterval(),
@@ -366,6 +369,44 @@ struct ProviderDetailCard: View {
                         .help(usage.message.map { DiagnosticsRedactor.redact(copy.usageMessage($0)) } ?? "")
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var serviceIncidentBanner: some View {
+        if let status = serviceStatus, status.hasIssue {
+            let title = status.title ?? copy.text("暂无事件标题", "No incident title")
+            let color: Color = switch status.severity {
+            case .minor: .orange
+            case .major, .critical: .red
+            default: .secondary
+            }
+            let prefix = switch status.severity {
+            case .minor: copy.text("服务部分异常：", "Partial outage:")
+            case .major, .critical: copy.text("服务中断：", "Outage:")
+            case .maintenance: copy.text("计划维护：", "Scheduled maintenance:")
+            default: ""
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text(prefix).fixedSize()
+                Text(title)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .help(title)
+                if status.severity != .maintenance {
+                    Button { NSWorkspace.shared.open(status.pageURL) } label: {
+                        Text(copy.text("状态页 ›", "Status ›"))
+                            .underline(isStatusLinkHovering)
+                    }
+                    .buttonStyle(ServiceIncidentLinkStyle())
+                    .fixedSize()
+                    .pointerStyle(.link)
+                    .onHover { isStatusLinkHovering = $0 }
+                }
+            }
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(color)
         }
     }
 
@@ -560,6 +601,12 @@ struct ProviderDetailCard: View {
     }
 }
 
+private struct ServiceIncidentLinkStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.opacity(configuration.isPressed ? 0.55 : 1)
+    }
+}
+
 struct ProviderDetailPanelView: View {
     @ObservedObject var store: UsageStore
     @ObservedObject private var appPreferences = AppPreferences.shared
@@ -589,7 +636,8 @@ struct ProviderDetailPanelView: View {
                     )
                 }
             },
-            openDailyBill: openDailyBill
+            openDailyBill: openDailyBill,
+            serviceStatus: store.serviceStatus(for: presentation.descriptor.id)
         )
         .padding(
             railSide == .right ? .trailing : .leading,

@@ -134,7 +134,8 @@ struct UsageRailView: View {
                                         descriptor,
                                         providerAnchorY[descriptor.id] ?? fallbackY
                                     )
-                                }
+                                },
+                                serviceStatus: store.serviceStatus(for: descriptor.id)
                             )
                         }
                         .buttonStyle(.plain)
@@ -686,6 +687,7 @@ private struct ProviderRailItem: View {
     let animationDelay: Double
     let showName: Bool
     let hoverChanged: (Bool) -> Void
+    var serviceStatus: ProviderServiceStatus? = nil
 
     @State private var animatedFraction = 0.0
     @State private var refreshProgress = 0.0
@@ -698,6 +700,14 @@ private struct ProviderRailItem: View {
 
     private var tint: Color {
         ProviderBrandColors.color(for: descriptor.id)
+    }
+
+    private var serviceBadgeColor: Color? {
+        switch serviceStatus?.severity {
+        case .minor: .orange
+        case .major, .critical: .red
+        default: nil
+        }
     }
 
     private var remainingFraction: Double {
@@ -815,7 +825,15 @@ private struct ProviderRailItem: View {
                 height: UsageRailLayout.providerRingDiameter
             )
             .overlay(alignment: .bottomTrailing) {
-                if let status = cachedUsageStatus(usage, language: language) {
+                if let color = serviceBadgeColor, let status = serviceStatus {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 6, height: 6)
+                        .overlay(Circle().stroke(AppTheme.railBackground(for: colorScheme), lineWidth: 1))
+                        .accessibilityElement()
+                        .accessibilityLabel(status.title ?? AppCopy(language: language).text("服务异常", "Service incident"))
+                        .help(status.title ?? AppCopy(language: language).text("服务异常", "Service incident"))
+                } else if let status = cachedUsageStatus(usage, language: language) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: UsageRailLayout.scaled(11), weight: .semibold))
                         .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.65))
