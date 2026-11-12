@@ -153,10 +153,6 @@ nonisolated final class DiagnosticLog: @unchecked Sendable {
         write(safe.logLine, category: .provider, date: result.date)
     }
 
-    func latestResult(for providerID: ProviderID) -> ProviderDiagnosticResult? {
-        lock.withLock { latestResults[providerID] }
-    }
-
     func report(
         enabledProviders: [ProviderDescriptor],
         bundle: Bundle = .main,

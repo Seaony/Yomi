@@ -301,7 +301,7 @@ private struct AboutSettingsView: View {
                 VStack(spacing: SettingsSpace.xs) {
                     Text("CodeEdge").font(.system(size: 20, weight: .semibold))
                         .foregroundStyle(CodeEdgeSettingsTheme.primaryText)
-                    Text(copy.text("跨 Provider 用量一览", "Usage across all your providers"))
+                    Text(copy.text("用到极限，心里有数", "Code to the edge."))
                     Text(versionText).monospacedDigit()
                 }
                 .font(.callout)
@@ -318,34 +318,21 @@ private struct AboutSettingsView: View {
                     Button(role: .destructive) { NSApp.terminate(nil) } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "power")
-                            Text(copy.text("退出 CodeEdge", "Quit CodeEdge"))
+                            Text(copy.text("退出", "Quit"))
                         }
                     }
                 }
-                CodeEdgeFormSection(title: copy.text("诊断", "Diagnostics")) {
-                    ForEach(store.enabledProviders) { descriptor in
-                        TimelineView(.periodic(from: .now, by: 60)) { context in
-                            let backoff = store.backoffDescription(for: descriptor.id, now: context.date, language: language)
-                            Group {
-                                if let result = DiagnosticLog.shared.latestResult(for: descriptor.id) {
-                                    Text(diagnosticLine(provider: descriptor.name, result: result, now: context.date))
-                                        .foregroundStyle(result.outcome == .success && backoff == nil ? CodeEdgeSettingsTheme.secondaryText : CodeEdgeSettingsTheme.warning)
-                                        .help(diagnosticLine(provider: descriptor.name, result: result, now: context.date))
-                                } else {
-                                    Text(descriptor.name + " · " + (backoff ?? copy.text("等待首次刷新", "Waiting for the first refresh")))
-                                        .foregroundStyle(backoff == nil ? CodeEdgeSettingsTheme.tertiaryText : CodeEdgeSettingsTheme.warning)
-                                }
-                            }
-                            .font(.system(size: 12))
-                            .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
+                CodeEdgeSeparator()
+                VStack(spacing: SettingsSpace.sm) {
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: SettingsSpace.sm) { diagnosticActions }
-                        VStack(alignment: .leading, spacing: SettingsSpace.sm) { diagnosticActions }
+                        VStack(spacing: SettingsSpace.sm) { diagnosticActions }
                     }
-                } footer: {
                     Text(copy.text("仅包含应用、系统、刷新状态和脱敏日志。", "Includes app, system, refresh status and redacted logs only."))
+                        .font(.system(size: 12))
+                        .foregroundStyle(CodeEdgeSettingsTheme.secondaryText)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -380,19 +367,6 @@ private struct AboutSettingsView: View {
             }
         }
     }
-    private func diagnosticLine(provider: String, result: ProviderDiagnosticResult, now: Date) -> String {
-        let outcome = result.outcome == .success ? copy.text("成功", "Success") : copy.text("失败", "Failed")
-        let time = result.date.formatted(.dateTime.hour().minute().locale(language.locale))
-        let status = store.backoffDescription(for: result.providerID, now: now, language: language) ?? outcome
-        var parts = [provider, status, result.source, time]
-        if result.outcome == .failed {
-            if let error = result.errorKind { parts.append(error) }
-            if let status = result.httpStatus { parts.append("HTTP \(status)") }
-        }
-        if result.usedCache { parts.append(copy.text("已回退缓存", "Using cached data")) }
-        return DiagnosticsRedactor.redact(parts.joined(separator: " · "))
-    }
-
     private var versionText: String {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"

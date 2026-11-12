@@ -131,8 +131,6 @@ struct DiagnosticsTests {
         log.record(ProviderDiagnosticResult(providerID: id, source: "OAuth", date: Date(), duration: 0.23,
                                             outcome: .failed, errorKind: "Bearer private-bearer",
                                             httpStatus: 401, usedCache: true))
-        let record = try #require(log.latestResult(for: id))
-        #expect(!record.errorKind!.contains("private-bearer"))
         let descriptor = try #require(ProviderCatalog.byID[id])
         let report = log.report(enabledProviders: [descriptor])
         #expect(report.contains("provider=codex"))
