@@ -251,6 +251,9 @@ struct ProviderDetailCard: View {
         if isOverview {
             overviewChart
                 .transition(sectionTransition)
+            if let models = usage.todayByModel, !models.isEmpty {
+                modelBreakdown(models)
+            }
         } else {
             if let models = usage.todayByModel, !models.isEmpty {
                 modelBreakdown(models)

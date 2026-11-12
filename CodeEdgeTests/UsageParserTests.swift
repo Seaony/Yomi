@@ -331,6 +331,173 @@ final class UsageParserTests: XCTestCase {
         XCTAssertEqual(yesterdayPoint.providerBreakdown?.map(\.usage.tokens), [30, 20])
     }
 
+    func testOverviewTodayByModelMergesProvidersAndSortsByTokens() throws {
+        let codexShared = ModelTokenUsage(
+            model: "shared-model", inputTokens: 100, cacheReadTokens: 20,
+            cacheWriteTokens: 0, outputTokens: 10, inputIncludesCache: true, valueUSD: 1
+        )
+        let claudeShared = ModelTokenUsage(
+            model: "shared-model", inputTokens: 30, cacheReadTokens: 10,
+            cacheWriteTokens: 5, outputTokens: 5, inputIncludesCache: false, valueUSD: 0.5
+        )
+        let claudeOther = ModelTokenUsage(
+            model: "claude-model", inputTokens: 200, cacheReadTokens: 0,
+            cacheWriteTokens: 0, outputTokens: 0, inputIncludesCache: false, valueUSD: 2
+        )
+        let rows = UsageStore.overviewTodayByModel(usages: [
+            ProviderUsage(
+                id: ProviderID(rawValue: "codex"), state: .ready, windows: [],
+                today: codexShared.usage, todayByModel: [codexShared]
+            ),
+            ProviderUsage(
+                id: ProviderID(rawValue: "claude"), state: .ready, windows: [],
+                today: DailyTokenUsage(tokens: 250, valueUSD: 2.5),
+                todayByModel: [claudeShared, claudeOther]
+            ),
+        ])
+
+        XCTAssertEqual(rows.map(\.model), ["claude-model", "shared-model"])
+        XCTAssertEqual(rows.map(\.tokens), [200, 160])
+        let shared = try XCTUnwrap(rows.last)
+        XCTAssertEqual(shared.valueUSD, 1.5)
+        XCTAssertFalse(shared.inputIncludesCache)
+        XCTAssertEqual(shared.cacheReadTokens, 30)
+        XCTAssertEqual(shared.cacheWriteTokens, 5)
+    }
+
+    func testOverviewTodayByModelIncludesProvidersWithoutModelDetails() throws {
+        let model = ModelTokenUsage(
+            model: "gpt-model", inputTokens: 100, cacheReadTokens: 0,
+            cacheWriteTokens: 0, outputTokens: 20, inputIncludesCache: false, valueUSD: 1.2
+        )
+        let usages = [
+            ProviderUsage(
+                id: ProviderID(rawValue: "codex"), state: .ready, windows: [],
+                today: model.usage, todayByModel: [model]
+            ),
+            ProviderUsage(
+                id: ProviderID(rawValue: "groq"), state: .ready, windows: [],
+                today: DailyTokenUsage(tokens: 50, valueUSD: 0.5)
+            ),
+        ]
+        let rows = UsageStore.overviewTodayByModel(usages: usages)
+        let unknown = try XCTUnwrap(rows.first { $0.model == ModelUsageBreakdown.unknownModel })
+
+        XCTAssertEqual(unknown.inputTokens, 50)
+        XCTAssertEqual(unknown.cacheReadTokens, 0)
+        XCTAssertEqual(unknown.cacheWriteTokens, 0)
+        XCTAssertEqual(unknown.outputTokens, 0)
+        XCTAssertFalse(unknown.inputIncludesCache)
+        XCTAssertEqual(unknown.valueUSD, 0.5)
+        XCTAssertEqual(rows.reduce(Int64.zero) { $0 + $1.tokens }, usages.compactMap(\.today).reduce(0) { $0 + $1.tokens })
+        XCTAssertEqual(rows.compactMap(\.valueUSD).reduce(0, +), 1.7, accuracy: 0.000001)
+    }
+
+    func testOverviewTodayByModelPreservesRequestCostsWithoutCountingRequestsAsTokens() throws {
+        let rows = UsageStore.overviewTodayByModel(usages: [
+            ProviderUsage(
+                id: ProviderID(rawValue: "opencodego"), state: .ready, windows: [],
+                todayRequests: DailyRequestUsage(requests: 15, valueUSD: 3)
+            ),
+        ])
+        let unknown = try XCTUnwrap(rows.first)
+
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(unknown.model, ModelUsageBreakdown.unknownModel)
+        XCTAssertEqual(unknown.tokens, 0)
+        XCTAssertEqual(unknown.valueUSD, 3)
+        XCTAssertNil(unknown.partialValueUSD)
+    }
+
+    func testOverviewTodayByModelPreservesPartiallyPricedUsage() throws {
+        let rows = UsageStore.overviewTodayByModel(usages: [
+            ProviderUsage(
+                id: ProviderID(rawValue: "groq"), state: .ready, windows: [],
+                today: DailyTokenUsage(tokens: 50, valueUSD: nil, partialValueUSD: 0.5),
+                todayByModel: []
+            ),
+        ])
+        let unknown = try XCTUnwrap(rows.first)
+
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(unknown.model, ModelUsageBreakdown.unknownModel)
+        XCTAssertEqual(unknown.tokens, 50)
+        XCTAssertNil(unknown.valueUSD)
+        XCTAssertEqual(unknown.partialValueUSD, 0.5)
+    }
+
+    func testOverviewTodayByModelExcludesYesterdayAfterCurrentDayFiltering() throws {
+        let now = Date(timeIntervalSince1970: 1_788_000_000)
+        let yesterday = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: -1, to: now))
+        let model = ModelTokenUsage(
+            model: "yesterday-model", inputTokens: 100, cacheReadTokens: 0,
+            cacheWriteTokens: 0, outputTokens: 0, inputIncludesCache: false, valueUSD: 1
+        )
+        let cached = ProviderUsage(
+            id: ProviderID(rawValue: "codex"), state: .unavailable, windows: [],
+            today: model.usage, todayDate: yesterday, updatedAt: yesterday,
+            todayByModel: [model]
+        )
+        let current = UsageStore.usageForCurrentDay(cached, now: now)
+
+        XCTAssertNil(current.todayByModel)
+        XCTAssertTrue(UsageStore.overviewTodayByModel(usages: [current]).isEmpty)
+    }
+
+    func testOverviewTodayByModelIsEmptyWithoutTodayUsage() {
+        XCTAssertTrue(UsageStore.overviewTodayByModel(usages: []).isEmpty)
+        XCTAssertTrue(UsageStore.overviewTodayByModel(usages: [
+            ProviderUsage(
+                id: ProviderID(rawValue: "codex"), state: .unavailable, windows: [],
+                last30Days: DailyTokenUsage(tokens: 100, valueUSD: 1)
+            ),
+        ]).isEmpty)
+    }
+
+    func testOverviewTodayByModelOmitsZeroUsage() {
+        XCTAssertTrue(UsageStore.overviewTodayByModel(usages: [
+            ProviderUsage(
+                id: ProviderID(rawValue: "deepseek"), state: .ready, windows: [],
+                today: DailyTokenUsage(tokens: 0, valueUSD: 0)
+            ),
+        ]).isEmpty)
+    }
+
+    @MainActor
+    func testOverviewUsageIncludesOnlyEnabledProviderModelsAndOmitsEmptyBreakdown() throws {
+        let suiteName = "UsageParserTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(TestUserDefaults(suiteName: suiteName))
+        defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suiteName) }
+        let configurations = ProviderCatalog.all.map { descriptor in
+            var configuration = ProviderConfiguration(descriptor: descriptor)
+            configuration.isEnabled = descriptor.id.rawValue == "codex"
+            return configuration
+        }
+        defaults.set(try JSONEncoder().encode(configurations), forKey: "providers.v1")
+        let store = UsageStore(preferences: ProviderPreferences(defaults: defaults), defaults: defaults)
+        let model = ModelTokenUsage(
+            model: "gpt-model", inputTokens: 100, cacheReadTokens: 0,
+            cacheWriteTokens: 0, outputTokens: 20, inputIncludesCache: false, valueUSD: 1.2
+        )
+        store.showPreviewUsage([
+            ProviderUsage(
+                id: ProviderID(rawValue: "codex"), state: .ready, windows: [],
+                today: model.usage, todayDate: Date(), todayByModel: [model]
+            ),
+            ProviderUsage(
+                id: ProviderID(rawValue: "claude"), state: .ready, windows: [],
+                today: DailyTokenUsage(tokens: 500, valueUSD: 5), todayDate: Date()
+            ),
+        ])
+
+        XCTAssertEqual(store.overviewUsage.todayByModel, [model])
+        XCTAssertEqual(store.overviewUsage.today?.tokens, model.tokens)
+        XCTAssertEqual(store.overviewUsage.today?.valueUSD, model.valueUSD)
+
+        store.showPreviewUsage([])
+        XCTAssertNil(store.overviewUsage.todayByModel)
+    }
+
     func testYesterdayCacheDoesNotBecomeTodaysUsage() throws {
         let now = Date(timeIntervalSince1970: 1_788_000_000)
         let calendar = Calendar.current

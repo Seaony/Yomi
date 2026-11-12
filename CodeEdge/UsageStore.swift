@@ -574,6 +574,7 @@ final class UsageStore: ObservableObject {
             $0.today ?? $0.todayRequests.map { DailyTokenUsage(tokens: 0, valueUSD: $0.valueUSD) }
         })
         let daily = Self.overviewDailyUsage(usages: usages)
+        let todayByModel = Self.overviewTodayByModel(usages: usages)
         let last30Days = Self.combinedLast30DaysUsage(usages)
         let isFullRefresh = !enabledProviders.isEmpty
             && enabledProviders.allSatisfy { usage(for: $0.id).state == .loading }
@@ -591,8 +592,32 @@ final class UsageStore: ObservableObject {
                 : usages.compactMap(\.updatedAt).max(),
             message: hasUsage
                 ? (hasStaleUsage ? AppLocalization.text("部分 Provider 数据未能刷新", "Some provider data could not be refreshed") : nil)
-                : AppLocalization.text("等待首次用量数据", "Waiting for usage data")
+                : AppLocalization.text("等待首次用量数据", "Waiting for usage data"),
+            todayByModel: todayByModel.isEmpty ? nil : todayByModel
         )
+    }
+
+    nonisolated static func overviewTodayByModel(usages: [ProviderUsage]) -> [ModelTokenUsage] {
+        let rows = usages.flatMap { usage -> [ModelTokenUsage] in
+            if let models = usage.todayByModel, !models.isEmpty { return models }
+            guard let today = usage.today
+                ?? usage.todayRequests.map({ DailyTokenUsage(tokens: 0, valueUSD: $0.valueUSD) }) else {
+                return []
+            }
+            return [ModelTokenUsage(
+                model: ModelUsageBreakdown.unknownModel,
+                inputTokens: today.tokens,
+                cacheReadTokens: 0,
+                cacheWriteTokens: 0,
+                outputTokens: 0,
+                inputIncludesCache: false,
+                valueUSD: today.valueUSD,
+                partialValueUSD: today.partialValueUSD
+            )]
+        }
+        return ModelUsageBreakdown.merged(rows).filter {
+            $0.tokens > 0 || ($0.valueUSD ?? $0.partialValueUSD ?? 0) != 0
+        }
     }
 
     private nonisolated static func combinedUsage(_ usages: [DailyTokenUsage]) -> DailyTokenUsage? {
