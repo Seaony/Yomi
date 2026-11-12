@@ -255,8 +255,8 @@ struct ClaudeUsageTests {
     func restoredCacheShowsRenamedPlan() throws {
         struct Cached: Encodable { let usage: ProviderUsage; let revision: Int }
         let suite = "yomi-claude-plan-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = try #require(TestUserDefaults(suiteName: suite))
+        defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suite) }
         let id = ProviderID(rawValue: "claude")
         let cached = ProviderUsage(id: id, state: .ready, windows: [], plan: "Max 20x", updatedAt: Date())
         defaults.set(try JSONEncoder().encode([Cached(usage: cached, revision: 0)]), forKey: "usage-cache.v3")

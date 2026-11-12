@@ -150,8 +150,8 @@ final class UsageParserTests: XCTestCase {
     @MainActor
     func testUsageStoreKeepsOnlyOneCachedCodexWeeklyWindow() throws {
         let suiteName = "UsageParserTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let defaults = try XCTUnwrap(TestUserDefaults(suiteName: suiteName))
+        defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suiteName) }
 
         let cachedUsage = ProviderUsage(
             id: ProviderID(rawValue: "codex"),
@@ -374,8 +374,8 @@ final class UsageParserTests: XCTestCase {
     @MainActor
     func testRestoringOldOpenCodeGoCacheRemovesRequestCountsFromTokenTotals() throws {
         let suiteName = "UsageParserTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let defaults = try XCTUnwrap(TestUserDefaults(suiteName: suiteName))
+        defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suiteName) }
         // 旧版 OpenCode Go 把请求数存在 Token 字段里；缓存格式本身用当前的 v3。
         let legacy = Data(#"[{"usage":{"id":"opencodego","state":"ready","windows":[],"balance":"$12","today":{"tokens":2,"valueUSD":1},"last30Days":{"tokens":3,"valueUSD":2}},"revision":0}]"#.utf8)
         defaults.set(legacy, forKey: "usage-cache.v3")

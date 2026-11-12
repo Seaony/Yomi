@@ -19,7 +19,7 @@ struct QuotaNotificationControllerTests {
     @Test
     func startsDisabledWithoutAskingOrCheckingSystemPermissions() async throws {
         let (defaults, suite) = try makeDefaults()
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suite) }
         let center = RecordingQuotaNotificationCenter()
         let controller = QuotaNotificationController(defaults: defaults, center: center)
         await controller.refreshAuthorizationStatus()
@@ -37,7 +37,7 @@ struct QuotaNotificationControllerTests {
     @Test
     func onlyExplicitPermissionActionRequestsAndDenialDoesNotReprompt() async throws {
         let (defaults, suite) = try makeDefaults()
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suite) }
         let center = RecordingQuotaNotificationCenter()
         center.permissionGranted = false
         center.status = .denied
@@ -55,7 +55,7 @@ struct QuotaNotificationControllerTests {
     @Test
     func explicitPermissionFailureUsesSafeCopyAndCanBeRetriedByUser() async throws {
         let (defaults, suite) = try makeDefaults()
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suite) }
         let center = RecordingQuotaNotificationCenter()
         center.requestError = NSError(domain: "private.person@example.com", code: 1)
         let controller = QuotaNotificationController(defaults: defaults, center: center, language: { .english })
@@ -71,7 +71,7 @@ struct QuotaNotificationControllerTests {
     @Test
     func writesDeduplicationBeforeDeliveryAndRestoresItAcrossRestart() async throws {
         let (defaults, suite) = try makeDefaults()
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suite) }
         defaults.set(true, forKey: QuotaNotificationController.Keys.lowQuotaEnabled)
         let center = RecordingQuotaNotificationCenter()
         center.beforeDelivery = { _ in
@@ -97,7 +97,7 @@ struct QuotaNotificationControllerTests {
     @Test
     func firstSuccessfulSampleAfterFailedStartupStillDoesNotNotify() async throws {
         let (defaults, suite) = try makeDefaults()
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suite) }
         defaults.set(true, forKey: QuotaNotificationController.Keys.lowQuotaEnabled)
         let center = RecordingQuotaNotificationCenter()
         let first = QuotaNotificationController(defaults: defaults, center: center)
@@ -113,7 +113,7 @@ struct QuotaNotificationControllerTests {
     @Test
     func providerMuteIsIndependentAndDoesNotQueueOldThresholds() async throws {
         let (defaults, suite) = try makeDefaults()
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suite) }
         defaults.set(true, forKey: QuotaNotificationController.Keys.lowQuotaEnabled)
         let center = RecordingQuotaNotificationCenter()
         let controller = QuotaNotificationController(defaults: defaults, center: center)
@@ -131,7 +131,7 @@ struct QuotaNotificationControllerTests {
     @Test
     func systemPermissionRestorationIsRecognizedWithoutRequestingAgain() async throws {
         let (defaults, suite) = try makeDefaults()
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suite) }
         defaults.set(true, forKey: QuotaNotificationController.Keys.lowQuotaEnabled)
         let center = RecordingQuotaNotificationCenter()
         center.permissionGranted = false
@@ -156,7 +156,7 @@ struct QuotaNotificationControllerTests {
     @Test
     func selectedThresholdsAreSanitizedAndSaved() throws {
         let (defaults, suite) = try makeDefaults()
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suite) }
         let controller = QuotaNotificationController(defaults: defaults, center: RecordingQuotaNotificationCenter())
         controller.setThresholds([20, 20, 10, 0, -1, 100])
         #expect(controller.selectedThresholds == [20, 10])
@@ -216,7 +216,7 @@ struct QuotaNotificationControllerTests {
 
     private func makeDefaults() throws -> (UserDefaults, String) {
         let suite = "quota-notifications-test-\(UUID().uuidString)"
-        return (try #require(UserDefaults(suiteName: suite)), suite)
+        return (try #require(TestUserDefaults(suiteName: suite)), suite)
     }
 }
 

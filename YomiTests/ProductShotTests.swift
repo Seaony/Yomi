@@ -36,8 +36,8 @@ struct ProductShotTests {
 
     private func renderInterface(dark: Bool, language: AppLanguage) async throws -> (NSImage, NSImage) {
         let suite = "yomi-product-shots-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = try #require(TestUserDefaults(suiteName: suite))
+        defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suite) }
         defaults.set(true, forKey: "show-provider-names")
         defaults.set(UsageRailSide.right.rawValue, forKey: UsageRailSide.storageKey)
         let configurations = ProviderCatalog.all.map { descriptor in

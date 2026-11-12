@@ -7,8 +7,8 @@ struct UsageStoreBackoffTests {
     @Test
     func restoresProviderDeadlineAndReportsItsRemainingTime() throws {
         let name = "backoff-store-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let defaults = try #require(TestUserDefaults(suiteName: name))
+        defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: name) }
         let now = Date()
         let state = ProviderBackoffState(consecutiveRateLimits: 2, retryAt: now.addingTimeInterval(120))
         defaults.set(try JSONEncoder().encode(["codex": state]), forKey: "provider-backoff.v1")
@@ -22,8 +22,8 @@ struct UsageStoreBackoffTests {
     @Test
     func preservesExistingFixedIntervalsAndFiveMinuteDefault() throws {
         let name = "adaptive-store-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let defaults = try #require(TestUserDefaults(suiteName: name))
+        defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: name) }
         let store = UsageStore(preferences: ProviderPreferences(defaults: defaults), defaults: defaults)
         #expect(store.currentRefreshInterval == 300)
         for interval in [60.0, 300, 900, 1800] {
@@ -52,7 +52,7 @@ struct UsageStoreBackoffTests {
     @Test
     func retriesAnExpiredBackoffAfterTheOtherProvidersFinish() async throws {
         let fixture = try fixture(enabled: ["codex", "claude"])
-        defer { fixture.defaults.removePersistentDomain(forName: fixture.name) }
+        defer { TestUserDefaultsCleanup.cleanup(fixture.defaults, suiteName: fixture.name) }
         let collector = BackoffFixtureCollector(replies: [
             "codex": [.init(status: 429, retryAfter: "0"), .init()],
             "claude": [.init(delay: .milliseconds(80))],
@@ -60,6 +60,7 @@ struct UsageStoreBackoffTests {
         let store = UsageStore(preferences: fixture.preferences, collector: collector, defaults: fixture.defaults)
         await store.refresh()
         await waitForCalls(collector, provider: "codex", count: 2)
+        await waitForRefreshCompletion(store)
         #expect(await collector.calls(for: "codex") == 2)
         #expect(await collector.calls(for: "claude") == 1)
         #expect(store.backoffByID["codex"] == nil)
@@ -68,13 +69,14 @@ struct UsageStoreBackoffTests {
     @Test
     func repeatedImmediateRateLimitsReturnToExponentialBackoff() async throws {
         let fixture = try fixture(enabled: ["codex"])
-        defer { fixture.defaults.removePersistentDomain(forName: fixture.name) }
+        defer { TestUserDefaultsCleanup.cleanup(fixture.defaults, suiteName: fixture.name) }
         let collector = BackoffFixtureCollector(replies: [
             "codex": [.init(status: 429, retryAfter: "0"), .init(status: 429, retryAfter: "0")],
         ])
         let store = UsageStore(preferences: fixture.preferences, collector: collector, defaults: fixture.defaults)
         await store.refresh()
         await waitForCalls(collector, provider: "codex", count: 2)
+        await waitForRefreshCompletion(store)
         try await Task.sleep(for: .milliseconds(30))
         #expect(await collector.calls(for: "codex") == 2)
         let state = try #require(store.backoffByID["codex"])
@@ -85,7 +87,7 @@ struct UsageStoreBackoffTests {
     @Test
     func automaticRefreshKeepsCacheAndManualRefreshBypassesBackoff() async throws {
         let fixture = try fixture(enabled: ["codex"])
-        defer { fixture.defaults.removePersistentDomain(forName: fixture.name) }
+        defer { TestUserDefaultsCleanup.cleanup(fixture.defaults, suiteName: fixture.name) }
         let state = ProviderBackoffState(consecutiveRateLimits: 1, retryAt: Date().addingTimeInterval(600))
         fixture.defaults.set(try JSONEncoder().encode(["codex": state]), forKey: "provider-backoff.v1")
         let collector = BackoffFixtureCollector(replies: [:])
@@ -107,20 +109,21 @@ struct UsageStoreBackoffTests {
     @Test
     func resetBoundaryRefreshesTheProviderWithoutWaitingForTheFixedLoop() async throws {
         let fixture = try fixture(enabled: ["codex"])
-        defer { fixture.defaults.removePersistentDomain(forName: fixture.name) }
+        defer { TestUserDefaultsCleanup.cleanup(fixture.defaults, suiteName: fixture.name) }
         let collector = BackoffFixtureCollector(replies: [
             "codex": [.init(resetAt: Date().addingTimeInterval(-1), updatedAt: Date().addingTimeInterval(-2)), .init()],
         ])
         let store = UsageStore(preferences: fixture.preferences, collector: collector, defaults: fixture.defaults)
         await store.refresh()
         await waitForCalls(collector, provider: "codex", count: 2)
+        await waitForRefreshCompletion(store)
         #expect(await collector.calls(for: "codex") == 2)
     }
 
     @Test
     func queuedManualRefreshKeepsItsBypassWithoutRequestingBrowserAccess() async throws {
         let fixture = try fixture(enabled: ["codex", "claude"])
-        defer { fixture.defaults.removePersistentDomain(forName: fixture.name) }
+        defer { TestUserDefaultsCleanup.cleanup(fixture.defaults, suiteName: fixture.name) }
         let state = ProviderBackoffState(consecutiveRateLimits: 1, retryAt: Date().addingTimeInterval(600))
         fixture.defaults.set(try JSONEncoder().encode(["codex": state]), forKey: "provider-backoff.v1")
         let collector = BackoffFixtureCollector(replies: ["claude": [.init(delay: .milliseconds(80))]])
@@ -137,7 +140,7 @@ struct UsageStoreBackoffTests {
     @Test
     func distinctResetDatesCannotRefreshTheSameProviderAgainDuringCooldown() async throws {
         let fixture = try fixture(enabled: ["codex"])
-        defer { fixture.defaults.removePersistentDomain(forName: fixture.name) }
+        defer { TestUserDefaultsCleanup.cleanup(fixture.defaults, suiteName: fixture.name) }
         let now = Date()
         let collector = BackoffFixtureCollector(replies: [
             "codex": [
@@ -148,13 +151,14 @@ struct UsageStoreBackoffTests {
         let store = UsageStore(preferences: fixture.preferences, collector: collector, defaults: fixture.defaults)
         await store.refresh()
         await waitForCalls(collector, provider: "codex", count: 2)
+        await waitForRefreshCompletion(store)
         try await Task.sleep(for: .milliseconds(40))
         #expect(await collector.calls(for: "codex") == 2)
     }
 
     private func fixture(enabled: Set<String>) throws -> (name: String, defaults: UserDefaults, preferences: ProviderPreferences) {
         let name = "backoff-integration-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name))
+        let defaults = try #require(TestUserDefaults(suiteName: name))
         let configurations = ProviderCatalog.all.map { descriptor in
             var configuration = ProviderConfiguration(descriptor: descriptor)
             configuration.isEnabled = enabled.contains(descriptor.id.rawValue)
@@ -162,6 +166,14 @@ struct UsageStoreBackoffTests {
         }
         defaults.set(try JSONEncoder().encode(configurations), forKey: "providers.v1")
         return (name, defaults, ProviderPreferences(defaults: defaults))
+    }
+
+    private func waitForRefreshCompletion(_ store: UsageStore) async {
+        for _ in 0..<300 {
+            if !store.isRefreshing { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        Issue.record("自动刷新未在清理测试偏好前完成")
     }
 
     private func waitForCalls(_ collector: BackoffFixtureCollector, provider: String, count: Int) async {

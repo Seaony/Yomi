@@ -267,7 +267,7 @@ private final class Fixture {
         initiallyEnabled: Bool? = nil,
         mode: StatusFetchProbe.Mode = .success(.minor)
     ) {
-        defaults = UserDefaults(suiteName: suite)!
+        defaults = TestUserDefaults(suiteName: suite)!
         if let initiallyEnabled { defaults.set(initiallyEnabled, forKey: ProviderServiceStatusMonitor.settingKey) }
         let probe = StatusFetchProbe(mode: mode)
         self.probe = probe
@@ -282,7 +282,7 @@ private final class Fixture {
 
     func stop() {
         monitor.stop()
-        defaults.removePersistentDomain(forName: suite)
+        TestUserDefaultsCleanup.cleanup(defaults, suiteName: suite)
     }
 }
 

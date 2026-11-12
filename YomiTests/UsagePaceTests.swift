@@ -187,8 +187,8 @@ struct UsagePaceTests {
     @Test @MainActor
     func oldUsageCacheWithoutDurationStillRestores() throws {
         let suite = "usage-pace-cache-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = try #require(TestUserDefaults(suiteName: suite))
+        defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suite) }
         let oldCache = Data(#"[{"usage":{"id":"codex","state":"ready","windows":[{"id":"codex-weekly","label":"Weekly","usedFraction":0.5}]},"revision":0}]"#.utf8)
         defaults.set(oldCache, forKey: "usage-cache.v3")
         let store = UsageStore(preferences: ProviderPreferences(defaults: defaults), defaults: defaults)
