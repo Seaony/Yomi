@@ -4,3 +4,6 @@ build/
 *.xcuserstate
 xcuserdata/
 
+
+# 开着覆盖率跑测试时在仓库根目录留下的文件
+*.profraw
