@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var selectedProviderLocalY: CGFloat?
     private var providerDetailCloseTask: Task<Void, Never>?
     private var providerDetailSizeObserver: AnyCancellable?
+    private var appearanceObserver: AnyCancellable?
     private var settingsWindow: NSWindow?
     private var dailyBillPanel: NSPanel?
     private var verticalPosition: CGFloat = 0.5
@@ -38,6 +39,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         guard !Self.isRunningTests else { return }
+        // 外观只在这里统一设置。preferredColorScheme 管不到自建面板，
+        // 从深色切回系统时也不会复位窗口，所以直接改整个 App 的外观，系统模式时交还给 macOS。
+        appearanceObserver = AppPreferences.shared.$appearance.sink { appearance in
+            NSApp.appearance = switch appearance {
+            case .system: nil
+            case .light: NSAppearance(named: .aqua)
+            case .dark: NSAppearance(named: .darkAqua)
+            }
+        }
         restorePanelPosition()
         createPanel()
         startFullscreenRailController()
@@ -707,7 +717,6 @@ private struct DailyBillWindowContent: View {
             language: preferences.language,
             colorScheme: preferences.appearance.colorScheme ?? colorScheme
         )
-        .preferredColorScheme(preferences.appearance.colorScheme)
     }
 }
 

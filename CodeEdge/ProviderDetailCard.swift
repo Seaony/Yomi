@@ -672,7 +672,6 @@ struct ProviderDetailPanelView: View {
         )
         .environment(\.appLanguage, appPreferences.language)
         .environment(\.locale, appPreferences.language.locale)
-        .preferredColorScheme(appPreferences.appearance.colorScheme)
     }
 }
 

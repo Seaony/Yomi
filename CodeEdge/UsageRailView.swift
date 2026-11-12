@@ -57,7 +57,6 @@ struct FullscreenRevealStrip: View {
             .accessibilityLabel(AppCopy(language: preferences.language).text("展开 CodeEdge", "Expand CodeEdge"))
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { reveal() }
-            .preferredColorScheme(preferences.appearance.colorScheme)
     }
 }
 
@@ -230,7 +229,6 @@ struct UsageRailView: View {
         .fontDesign(.rounded)
         .environment(\.appLanguage, appPreferences.language)
         .environment(\.locale, appPreferences.language.locale)
-        .preferredColorScheme(appPreferences.appearance.colorScheme)
     }
 
     private func reportContentHeight(providerRows: [ProviderID: CGFloat]) {
@@ -723,9 +721,13 @@ private struct ProviderRailItem: View {
         return 1 - window.clampedFraction
     }
 
+    private var isOverview: Bool {
+        descriptor.id == ProviderCatalog.overview.id
+    }
+
     // 总览和 Pi 没有额度，显示今天的 Token 数。
     private var showsTodayTokens: Bool {
-        descriptor.id == ProviderCatalog.overview.id || descriptor.id.rawValue == "pi"
+        isOverview || descriptor.id.rawValue == "pi"
     }
 
     private var railValue: String? {
@@ -812,19 +814,23 @@ private struct ProviderRailItem: View {
         VStack(spacing: UsageRailLayout.scaled(5)) {
             TimelineView(.periodic(from: .now, by: 60)) { context in
                 ZStack {
-                    ring
-                        .opacity(UsageFreshness.shouldDim(
-                            usage: usage,
-                            refreshInterval: refreshInterval(),
-                            now: context.date
-                        ) ? 0.45 : 1)
+                    // 总览没有额度，不画圆环，直接把 Logo 放大到圆环大小；刷新时 Logo 变淡作为反馈。
+                    if !isOverview {
+                        ring
+                            .opacity(UsageFreshness.shouldDim(
+                                usage: usage,
+                                refreshInterval: refreshInterval(),
+                                now: context.date
+                            ) ? 0.45 : 1)
+                    }
                     ProviderIconView(provider: descriptor)
                         .frame(
-                            width: UsageRailLayout.scaled(32),
-                            height: UsageRailLayout.scaled(32)
+                            width: isOverview ? UsageRailLayout.providerRingDiameter : UsageRailLayout.scaled(32),
+                            height: isOverview ? UsageRailLayout.providerRingDiameter : UsageRailLayout.scaled(32)
                         )
                         .foregroundStyle(tint)
                         .symbolEffect(.pulse, isActive: usage.state == .loading)
+                        .opacity(isOverview && usage.state == .loading ? 0.5 : 1)
                 }
             }
             .frame(

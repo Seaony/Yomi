@@ -44,7 +44,8 @@ struct ProviderIconView: View {
 
     var body: some View {
         if provider.id == ProviderCatalog.overview.id {
-            Image(nsImage: NSApp.applicationIconImage)
+            // 总览用不带背景的海豹 Logo，完整 App 图标的渐变底放在竖栏里太突兀。
+            Image("AppLogo")
                 .resizable()
                 .interpolation(.high)
                 .scaledToFit()

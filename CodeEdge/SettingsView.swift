@@ -210,7 +210,6 @@ struct SettingsView: View {
         .background(SettingsPalette.panel)
         .environment(\.appLanguage, appPreferences.language)
         .environment(\.locale, appPreferences.language.locale)
-        .preferredColorScheme(appPreferences.appearance.colorScheme)
         .animation(
             reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.9),
             value: selection
