@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     let store = UsageStore.shared
     let updates = UpdateController()
+    let settingsNavigation = SettingsNavigation()
+    private var showSettings: (() -> Void)?
 
     private var panel: FloatingPanel?
     private var railHostingView: NSHostingView<UsageRailView>?
@@ -83,37 +85,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NotificationCenter.default.removeObserver(self)
     }
 
+    func configureSettings(opener: @escaping () -> Void) {
+        showSettings = opener
+    }
+
+    func registerSettingsWindow(_ window: NSWindow) {
+        guard settingsWindow !== window else { return }
+        if let settingsWindow {
+            NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: settingsWindow)
+        }
+        settingsWindow = window
+        window.titlebarSeparatorStyle = .none
+        window.initialFirstResponder = nil
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(windowWillClose(_:)), name: NSWindow.willCloseNotification, object: window
+        )
+    }
+
     func openSettings(providerID: ProviderID? = nil) {
         closeProviderDetail()
-        if settingsWindow == nil {
-            let root = SettingsView(
-                store: store,
-                updates: updates,
-                initialProviderID: providerID
-            )
-            let controller = NSHostingController(rootView: root)
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 1_080, height: 680),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-                backing: .buffered,
-                defer: false
-            )
-            window.contentViewController = controller
-            window.title = settingsWindowTitle
-            window.titleVisibility = .hidden
-            window.titlebarAppearsTransparent = true
-            window.titlebarSeparatorStyle = .none
-            window.isMovableByWindowBackground = true
-            window.minSize = NSSize(width: 920, height: 600)
-            window.isReleasedWhenClosed = false
-            window.delegate = self
-            window.center()
-            settingsWindow = window
-        }
-
+        settingsNavigation.show(providerID: providerID)
         NSApp.setActivationPolicy(.regular)
+        showSettings?()
         NSApp.activate()
-        settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
     func closeSettingsIfNeeded() {
@@ -165,12 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func languageChanged() {
-        settingsWindow?.title = settingsWindowTitle
         dailyBillPanel?.title = AppLocalization.text("今日 AI 账单", "Today's AI bill")
-    }
-
-    private var settingsWindowTitle: String {
-        AppLocalization.text("CodeEdge 设置", "CodeEdge Settings")
     }
 
     private func createPanel() {

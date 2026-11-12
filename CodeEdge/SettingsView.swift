@@ -1,270 +1,87 @@
 import AppKit
+import Combine
 import ServiceManagement
 import SwiftUI
 
-private enum SettingsPalette {
-    static let panel = adaptive(light: rgb(0xF1F1F4), dark: rgb(0x0A0A0C))
-    static let card = adaptive(light: rgb(0xFFFFFF), dark: rgb(0x17171A))
-    static let inset = adaptive(light: rgb(0xF4F4F7), dark: rgb(0x101012))
-    static let control = adaptive(light: rgb(0xEAEAEF), dark: rgb(0x1C1C1F))
-    static let controlHover = adaptive(light: rgb(0xE0E0E6), dark: rgb(0x26262A))
-    static let selected = adaptive(light: rgb(0xE4EFFF), dark: rgb(0x202634))
-    static let line = adaptive(
-        light: rgb(0x000000, alpha: 0.09),
-        dark: rgb(0xFFFFFF, alpha: 0.07)
-    )
-    static let primary = adaptive(light: rgb(0x16161A), dark: rgb(0xFFFFFF))
-    static let secondary = adaptive(
-        light: rgb(0x000000, alpha: 0.68),
-        dark: rgb(0xFFFFFF, alpha: 0.60)
-    )
-    static let tertiary = adaptive(
-        light: rgb(0x000000, alpha: 0.50),
-        dark: rgb(0xFFFFFF, alpha: 0.44)
-    )
-    static let blue = Color(nsColor: rgb(0x0A84FF))
-    static let green = adaptive(light: rgb(0x1F9E46), dark: rgb(0x30D158))
-    static let orange = Color(nsColor: rgb(0xFF9F0A))
-    static let red = Color(nsColor: rgb(0xFF453A))
+@MainActor
+final class SettingsNavigation: ObservableObject {
+    @Published var selection: SettingsView.Section = .general
+    @Published var selectedProviderID: ProviderID?
+    @Published var searchText = ""
 
-    private static func adaptive(light: NSColor, dark: NSColor) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
-        })
-    }
-
-    private static func rgb(_ hex: UInt32, alpha: CGFloat = 1) -> NSColor {
-        NSColor(
-            srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
-            green: CGFloat((hex >> 8) & 0xFF) / 255,
-            blue: CGFloat(hex & 0xFF) / 255,
-            alpha: alpha
-        )
-    }
-}
-
-private struct SettingsPressButtonStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.98)
-            .opacity(configuration.isPressed ? 0.78 : 1)
-            .animation(
-                reduceMotion ? nil : .easeOut(duration: 0.12),
-                value: configuration.isPressed
-            )
-            .pointerStyle(.link)
-    }
-}
-
-private struct SettingsCard<Content: View>: View {
-    let title: String
-    @ViewBuilder let content: Content
-
-    init(_ title: String, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(SettingsPalette.secondary)
-            content
-        }
-        .padding(17)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(SettingsPalette.card)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(SettingsPalette.line, lineWidth: 1)
-        }
-    }
-}
-
-private struct SettingsChoiceButton: View {
-    let title: String
-    let systemImage: String?
-    let selected: Bool
-    var expands = false
-    let action: () -> Void
-
-    @State private var hovered = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 7) {
-                if let systemImage {
-                    Image(systemName: systemImage)
-                }
-                Text(title)
-                    .lineLimit(1)
-            }
-            .font(.system(size: 12.5, weight: .semibold))
-            .foregroundStyle(selected ? Color.white : SettingsPalette.secondary)
-            .frame(maxWidth: expands ? .infinity : nil)
-            .padding(.horizontal, 13)
-            .padding(.vertical, 8)
-            .background(
-                selected
-                    ? SettingsPalette.blue
-                    : (hovered ? SettingsPalette.controlHover : SettingsPalette.control)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        }
-        .buttonStyle(SettingsPressButtonStyle())
-        .onHover { hovered = $0 }
-        .animation(.easeOut(duration: 0.12), value: hovered)
-    }
-}
-
-private struct SettingsToggleRow: View {
-    let title: String
-    let hint: String
-    @Binding var isOn: Bool
-
-    var body: some View {
-        Toggle(isOn: $isOn) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(SettingsPalette.primary)
-                Text(hint)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(SettingsPalette.tertiary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .toggleStyle(.switch)
-        .tint(SettingsPalette.blue)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 7)
-        .pointerStyle(.link)
+    func show(providerID: ProviderID?) {
+        guard let providerID else { return }
+        selectedProviderID = providerID
+        searchText = ""
+        selection = .providers
     }
 }
 
 struct SettingsView: View {
     enum Section: Hashable, CaseIterable {
-        case general
-        case providers
-        case about
+        case general, notifications, providers, about
     }
 
     @ObservedObject var store: UsageStore
     @ObservedObject var updates: UpdateController
+    @ObservedObject var navigation: SettingsNavigation
     @ObservedObject private var appPreferences = AppPreferences.shared
-    let initialProviderID: ProviderID?
-
-    @State private var selection: Section = .general
-    @State private var selectedProviderID: ProviderID?
-    @State private var searchText = ""
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var copy: AppCopy { AppCopy(language: appPreferences.language) }
 
-    init(
-        store: UsageStore,
-        updates: UpdateController,
-        initialProviderID: ProviderID? = nil
-    ) {
-        self.store = store
-        self.updates = updates
-        self.initialProviderID = initialProviderID
-        _selectedProviderID = State(initialValue: initialProviderID)
-        _selection = State(initialValue: initialProviderID == nil ? .general : .providers)
-    }
-
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            sidebar
-
-            Group {
-                switch selection {
-                case .general:
-                    GeneralSettingsView(notifications: store.notifications)
-                case .providers:
-                    ProviderSettingsView(
-                        store: store,
-                        selectedProviderID: $selectedProviderID,
-                        searchText: $searchText
-                    )
-                case .about:
-                    AboutSettingsView(updateController: updates, store: store)
-                }
-            }
-            .id(selection)
-            .transition(
-                reduceMotion
-                    ? .identity
-                    : .opacity.combined(with: .scale(scale: 0.99, anchor: .top))
+        TabView(selection: $navigation.selection) {
+            GeneralSettingsView()
+                .tabItem { Label(copy.text("通用", "General"), systemImage: "gearshape") }
+                .tag(Section.general)
+            QuotaNotificationSettingsView(notifications: store.notifications)
+                .tabItem { Label(copy.text("提醒", "Notifications"), systemImage: "bell") }
+                .tag(Section.notifications)
+            ProviderSettingsView(
+                store: store,
+                selectedProviderID: $navigation.selectedProviderID,
+                searchText: $navigation.searchText
             )
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .frame(height: 640)
+            .tabItem { Label("Providers", systemImage: "square.grid.2x2") }
+            .tag(Section.providers)
+            AboutSettingsView(updateController: updates, store: store)
+                .tabItem { Label(copy.text("关于", "About"), systemImage: "info.circle") }
+                .tag(Section.about)
         }
-        .padding(16)
-        .frame(minWidth: 920, minHeight: 600)
-        .foregroundStyle(SettingsPalette.primary)
-        .tint(SettingsPalette.blue)
-        .background(SettingsPalette.panel)
+        .frame(width: navigation.selection == .providers ? 900 : 560)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(CodeEdgeSettingsTheme.background)
+        .buttonStyle(CodeEdgeFlatButtonStyle())
+        .toggleStyle(CodeEdgeFormSwitchStyle())
+        .controlSize(.small)
+        .tint(CodeEdgeSettingsTheme.accent)
+        .foregroundStyle(CodeEdgeSettingsTheme.primaryText)
         .environment(\.appLanguage, appPreferences.language)
         .environment(\.locale, appPreferences.language.locale)
-        .animation(
-            reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.9),
-            value: selection
-        )
     }
+}
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            ForEach(Section.allCases, id: \.self) { item in
-                Button {
-                    selection = item
-                } label: {
-                    HStack(spacing: 9) {
-                        Image(systemName: symbol(for: item))
-                            .frame(width: 16)
-                        Text(title(for: item))
-                        Spacer(minLength: 0)
-                    }
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(
-                        selection == item ? SettingsPalette.primary : SettingsPalette.tertiary
-                    )
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(selection == item ? SettingsPalette.control : Color.clear)
-                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-                    .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-                }
-                .buttonStyle(SettingsPressButtonStyle())
-            }
+// 短页按内容收缩，长页限制高度；滚动内容不进入工具栏。
+private struct SettingsScrollablePage<Content: View>: View {
+    @ViewBuilder let content: Content
+    @State private var contentHeight: CGFloat = 640
 
-            Spacer()
+    var body: some View {
+        ScrollView {
+            content
+                .frame(maxWidth: .infinity)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
-        .frame(width: 184)
-    }
-
-    private func title(for section: Section) -> String {
-        switch section {
-        case .general: copy.text("通用", "General")
-        case .providers: "Providers"
-        case .about: copy.text("关于", "About")
-        }
-    }
-
-    private func symbol(for section: Section) -> String {
-        switch section {
-        case .general: "slider.horizontal.3"
-        case .providers: "square.grid.2x2"
-        case .about: "info.circle"
-        }
+        .frame(height: min(640, contentHeight))
+        .clipped()
+        .scrollBounceBehavior(.basedOnSize)
+        .codeEdgeSettingsPageTop()
+        .background(CodeEdgeSettingsTheme.background)
     }
 }
 
 private struct GeneralSettingsView: View {
-    let notifications: QuotaNotificationController
     @ObservedObject private var appPreferences = AppPreferences.shared
     @AppStorage("refresh-interval") private var refreshInterval = 300.0
     @AppStorage("show-provider-names") private var showProviderNames = true
@@ -273,221 +90,122 @@ private struct GeneralSettingsView: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
     @State private var railBackgroundHex = ""
+    @FocusState private var hexFocused: Bool
     @Environment(\.appLanguage) private var language
     @Environment(\.colorScheme) private var colorScheme
 
     private var copy: AppCopy { AppCopy(language: language) }
-
     private var railBackgroundColor: Binding<Color> {
         Binding(
-            get: {
-                appPreferences.railBackgroundColor
-                    ?? AppTheme.railBackground(for: colorScheme)
-            },
+            get: { appPreferences.railBackgroundColor ?? AppTheme.railBackground(for: colorScheme) },
             set: { appPreferences.setRailBackgroundColor($0) }
         )
     }
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 12) {
-                SettingsCard(copy.text("语言", "Language")) {
-                    HStack(spacing: 7) {
-                        SettingsChoiceButton(
-                            title: "English",
-                            systemImage: "character.book.closed",
-                            selected: appPreferences.language == .english,
-                            expands: true
-                        ) {
-                            appPreferences.language = .english
-                        }
-                        SettingsChoiceButton(
-                            title: "简体中文",
-                            systemImage: "character.book.closed.zh",
-                            selected: appPreferences.language == .simplifiedChinese,
-                            expands: true
-                        ) {
-                            appPreferences.language = .simplifiedChinese
-                        }
+        SettingsScrollablePage {
+            CodeEdgeSettingsForm {
+                CodeEdgeFormSection(title: copy.text("外观与语言", "Appearance and language")) {
+                    CodeEdgeSideRow(copy.text("外观", "Appearance")) {
+                        CodeEdgeChoiceButtons(
+                            options: AppAppearance.allCases, selection: $appPreferences.appearance,
+                            title: appearanceTitle, symbol: appearanceSymbol
+                        )
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel(copy.text("外观", "Appearance"))
                     }
-                    Text(copy.text(
-                        "切换设置、悬浮栏和详情卡片的显示语言。",
-                        "Changes the language across settings, the floating rail, and detail cards."
-                    ))
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(SettingsPalette.tertiary)
+                    CodeEdgeSideRow(copy.text("语言", "Language")) {
+                        CodeEdgeChoiceButtons(
+                            options: [AppLanguage.english, .simplifiedChinese], selection: $appPreferences.language,
+                            title: { $0 == .english ? "English" : "简体中文" },
+                            symbol: { $0 == .english ? "character.book.closed" : "character.book.closed.zh" }
+                        )
+                        .environment(\.locale, Locale(identifier: "en"))
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel(copy.text("语言", "Language"))
+                    }
+                } footer: {
+                    VStack(alignment: .leading, spacing: SettingsSpace.xs) {
+                        Text(copy.text("系统模式会自动跟随 macOS 的外观设置。", "System mode follows the current macOS appearance."))
+                        Text(copy.text("切换设置、悬浮栏和详情卡片的显示语言。", "Changes the language across settings, the floating rail, and detail cards."))
+                    }
                 }
-
-                SettingsCard(copy.text("外观", "Appearance")) {
-                    HStack(spacing: 7) {
-                        SettingsChoiceButton(
-                            title: copy.text("系统", "System"),
-                            systemImage: "circle.lefthalf.filled",
-                            selected: appPreferences.appearance == .system,
-                            expands: true
-                        ) {
-                            appPreferences.appearance = .system
-                        }
-                        SettingsChoiceButton(
-                            title: copy.text("深色", "Dark"),
-                            systemImage: "moon.fill",
-                            selected: appPreferences.appearance == .dark,
-                            expands: true
-                        ) {
-                            appPreferences.appearance = .dark
-                        }
-                        SettingsChoiceButton(
-                            title: copy.text("浅色", "Light"),
-                            systemImage: "sun.max.fill",
-                            selected: appPreferences.appearance == .light,
-                            expands: true
-                        ) {
-                            appPreferences.appearance = .light
-                        }
-                    }
-                    Text(copy.text(
-                        "系统模式会自动跟随 macOS 的外观设置。",
-                        "System mode follows the current macOS appearance."
-                    ))
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(SettingsPalette.tertiary)
-
-                    Rectangle().fill(SettingsPalette.line).frame(height: 1)
-
-                    HStack(spacing: 10) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(copy.text("悬浮侧边栏背景", "Floating rail background"))
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(SettingsPalette.primary)
-                            Text(copy.text(
-                                "自定义悬浮侧边栏的背景颜色",
-                                "Customize the floating rail background color"
-                            ))
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(SettingsPalette.tertiary)
-                        }
-
-                        Spacer()
-
-                        if appPreferences.railBackgroundColorHex != nil {
-                            Button(copy.text("恢复默认", "Reset")) {
-                                appPreferences.setRailBackgroundColor(nil)
+                CodeEdgeFormSection(title: copy.text("悬浮侧边栏背景", "Floating rail background")) {
+                    CodeEdgeSideRow(copy.text("背景颜色", "Background color")) {
+                        HStack(spacing: SettingsSpace.sm) {
+                            if appPreferences.railBackgroundColorHex != nil {
+                                Button(copy.text("恢复默认", "Reset")) { appPreferences.setRailBackgroundColor(nil) }
                             }
-                            .buttonStyle(SettingsPressButtonStyle())
-                            .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(SettingsPalette.secondary)
-                        }
-
-                        TextField("#RRGGBB", text: $railBackgroundHex)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 11.5, weight: .medium, design: .monospaced))
-                            .frame(width: 76)
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 7)
-                            .background(SettingsPalette.inset)
-                            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                            .onChange(of: railBackgroundHex) { _, value in
-                                guard let normalized = appPreferences.setRailBackgroundColor(hex: value),
-                                      normalized != value
-                                else { return }
-                                railBackgroundHex = normalized
-                            }
-
-                        ColorPicker(
-                            "",
-                            selection: railBackgroundColor,
-                            supportsOpacity: false
-                        )
-                        .labelsHidden()
-                        .pointerStyle(.link)
-                    }
-                    .onAppear {
-                        railBackgroundHex = appPreferences.railBackgroundColorHex ?? ""
-                    }
-                    .onChange(of: appPreferences.railBackgroundColorHex) { _, value in
-                        railBackgroundHex = value ?? ""
-                    }
-                }
-
-                SettingsCard(copy.text("刷新间隔", "Refresh interval")) {
-                    HStack(spacing: 7) {
-                        ForEach(refreshOptions, id: \.0) { interval, chinese, english in
-                            SettingsChoiceButton(
-                                title: copy.text(chinese, english),
-                                systemImage: nil,
-                                selected: refreshInterval == interval
-                            ) {
-                                refreshInterval = interval
-                            }
+                            TextField("#RRGGBB", text: $railBackgroundHex)
+                                .font(.system(size: 13, design: .monospaced))
+                                .focused($hexFocused)
+                                .codeEdgeSettingsField(focused: hexFocused)
+                                .frame(width: 98)
+                                .accessibilityLabel(copy.text("悬浮侧边栏背景 #RRGGBB", "Floating rail background #RRGGBB"))
+                                .onChange(of: railBackgroundHex) { _, value in
+                                    guard let normalized = appPreferences.setRailBackgroundColor(hex: value), normalized != value else { return }
+                                    railBackgroundHex = normalized
+                                }
+                            ColorPicker(copy.text("悬浮侧边栏背景", "Floating rail background"), selection: railBackgroundColor, supportsOpacity: false)
+                                .labelsHidden()
+                                .pointerStyle(.link)
                         }
                     }
-                    Text(copy.text(
-                        "更短的间隔会更快同步额度变化，但会增加网络请求。",
-                        "Shorter intervals update quotas sooner and make more network requests."
-                    ))
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(SettingsPalette.tertiary)
+                } footer: {
+                    Text(copy.text("自定义悬浮侧边栏的背景颜色", "Customize the floating rail background color"))
+                }
+                .onAppear { railBackgroundHex = appPreferences.railBackgroundColorHex ?? "" }
+                .onChange(of: appPreferences.railBackgroundColorHex) { _, value in railBackgroundHex = value ?? "" }
+
+                CodeEdgeFormSection(title: copy.text("刷新", "Refresh")) {
+                    CodeEdgeSideRow(copy.text("刷新间隔", "Refresh interval")) {
+                        CodeEdgeChoiceButtons(
+                            options: [60.0, 300, 900, 1_800], selection: $refreshInterval,
+                            title: { interval in
+                                let minutes = Int(interval / 60)
+                                return copy.text("\(minutes) 分钟", "\(minutes) min")
+                            }, symbol: { _ in "clock" }
+                        )
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel(copy.text("刷新间隔", "Refresh interval"))
+                    }
+                } footer: {
+                    Text(copy.text("更短的间隔会更快同步额度变化，但会增加网络请求。", "Shorter intervals update quotas sooner and make more network requests."))
                 }
 
-                QuotaNotificationSettingsView(notifications: notifications)
-
-                SettingsCard(copy.text("行为", "Behavior")) {
-                    VStack(spacing: 0) {
-                        SettingsToggleRow(
-                            title: copy.text("全屏时收起", "Collapse in full screen"),
-                            hint: copy.text("全屏时收成细条，鼠标移到细条上即可展开", "Collapses to a thin bar in full screen. Hover it to expand."),
-                            isOn: $collapseInFullscreen
-                        )
-                        Divider().padding(.vertical, 8)
-                        SettingsToggleRow(
-                            title: copy.text("显示服务故障", "Show service incidents"),
-                            hint: copy.text("在圆环和详情卡中显示服务商故障", "Show provider incidents in rings and detail cards"),
-                            isOn: $showServiceIncidents
-                        )
-                        Divider().padding(.vertical, 8)
-                        SettingsToggleRow(
-                            title: copy.text("登录后自动启动", "Launch at login"),
-                            hint: copy.text(
-                                "登录 macOS 后自动运行 CodeEdge",
-                                "Start CodeEdge automatically after signing in to macOS"
-                            ),
-                            isOn: $launchAtLogin
-                        )
-                        .onChange(of: launchAtLogin) { _, enabled in
-                            updateLoginItem(enabled)
-                        }
-
-                        Rectangle().fill(SettingsPalette.line).frame(height: 1)
-
-                        SettingsToggleRow(
-                            title: copy.text("显示 Provider 名称", "Show provider names"),
-                            hint: copy.text(
-                                "在悬浮栏圆环下方显示名称",
-                                "Show names below provider rings in the floating rail"
-                            ),
-                            isOn: $showProviderNames
-                        )
-                    }
-
-                    if let loginError {
-                        Text(loginError)
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(SettingsPalette.red)
+                CodeEdgeFormSection(title: copy.text("行为", "Behavior")) {
+                    Toggle(copy.text("全屏时收起", "Collapse in full screen"), isOn: $collapseInFullscreen)
+                    Toggle(copy.text("显示服务故障", "Show service incidents"), isOn: $showServiceIncidents)
+                    Toggle(copy.text("登录后自动启动", "Launch at login"), isOn: $launchAtLogin)
+                        .onChange(of: launchAtLogin) { _, enabled in updateLoginItem(enabled) }
+                    Toggle(copy.text("显示 Provider 名称", "Show provider names"), isOn: $showProviderNames)
+                } footer: {
+                    VStack(alignment: .leading, spacing: SettingsSpace.xs) {
+                        Text(copy.text("全屏时收成细条，鼠标移到细条上即可展开", "Collapses to a thin bar in full screen. Hover it to expand."))
+                        Text(copy.text("在圆环和详情卡中显示服务商故障", "Show provider incidents in rings and detail cards"))
+                        Text(copy.text("登录 macOS 后自动运行 CodeEdge", "Start CodeEdge automatically after signing in to macOS"))
+                        Text(copy.text("在悬浮栏圆环下方显示名称", "Show names below provider rings in the floating rail"))
+                        if let loginError { Text(loginError).foregroundStyle(CodeEdgeSettingsTheme.error) }
                     }
                 }
-
             }
-            .padding(.bottom, 4)
         }
     }
 
-    private var refreshOptions: [(Double, String, String)] {
-        [
-            (60, "1 分钟", "1 min"),
-            (300, "5 分钟", "5 min"),
-            (900, "15 分钟", "15 min"),
-            (1_800, "30 分钟", "30 min"),
-        ]
+    private func appearanceTitle(_ appearance: AppAppearance) -> String {
+        switch appearance {
+        case .system: copy.text("系统", "System")
+        case .light: copy.text("浅色", "Light")
+        case .dark: copy.text("深色", "Dark")
+        }
+    }
+
+    private func appearanceSymbol(_ appearance: AppAppearance) -> String {
+        switch appearance {
+        case .system: "circle.lefthalf.filled"
+        case .light: "sun.max.fill"
+        case .dark: "moon.fill"
+        }
     }
 
     private func updateLoginItem(_ enabled: Bool) {
@@ -511,46 +229,47 @@ private struct QuotaNotificationSettingsView: View {
     private var copy: AppCopy { AppCopy(language: language) }
 
     var body: some View {
-        SettingsCard(copy.text("额度提醒", "Quota notifications")) {
-            VStack(spacing: 0) {
-                SettingsToggleRow(title: copy.text("剩余额度较低", "Low remaining quota"),
-                                  hint: copy.text("跨过所选档位时提醒，每个周期一次", "Notify once per threshold in each quota cycle"),
-                                  isOn: $lowQuotaEnabled)
-                SettingsToggleRow(title: copy.text("额度用完", "Quota depleted"),
-                                  hint: copy.text("额度耗尽时提醒", "Notify when a quota is exhausted"),
-                                  isOn: $depletedEnabled)
-                SettingsToggleRow(title: copy.text("额度重置或恢复", "Quota reset or restored"),
-                                  hint: copy.text("确认新周期开始后提醒", "Notify when a new quota cycle is confirmed"),
-                                  isOn: $resetEnabled)
-            }
-            if lowQuotaEnabled {
-                HStack(spacing: 12) {
-                    Text(copy.text("剩余提醒阈值", "Remaining thresholds"))
-                        .foregroundStyle(SettingsPalette.secondary)
-                    ForEach(QuotaNotificationController.thresholdChoices, id: \.self) { threshold in
-                        Toggle("\(threshold)%", isOn: Binding(
-                            get: { notifications.selectedThresholds.contains(threshold) },
-                            set: { enabled in
-                                var values = notifications.selectedThresholds
-                                if enabled { values.append(threshold) }
-                                else { values.removeAll { $0 == threshold } }
-                                if !values.isEmpty { notifications.setThresholds(values) }
-                            }
-                        ))
-                        .toggleStyle(.checkbox)
-                        .pointerStyle(.link)
+        SettingsScrollablePage {
+            CodeEdgeSettingsForm {
+                CodeEdgeFormSection(title: copy.text("额度提醒", "Quota notifications")) {
+                    Toggle(copy.text("剩余额度较低", "Low remaining quota"), isOn: $lowQuotaEnabled)
+                    Toggle(copy.text("额度用完", "Quota depleted"), isOn: $depletedEnabled)
+                    Toggle(copy.text("额度重置或恢复", "Quota reset or restored"), isOn: $resetEnabled)
+                } footer: {
+                    VStack(alignment: .leading, spacing: SettingsSpace.xs) {
+                        Text(copy.text("跨过所选档位时提醒，每个周期一次", "Notify once per threshold in each quota cycle"))
+                        Text(copy.text("额度耗尽时提醒", "Notify when a quota is exhausted"))
+                        Text(copy.text("确认新周期开始后提醒", "Notify when a new quota cycle is confirmed"))
+                        if notifications.authorizationDenied {
+                            Text(copy.text("通知权限已关闭，请在系统设置 → 通知 → CodeEdge 中允许通知。", "Notifications are disabled. Allow CodeEdge notifications in System Settings → Notifications."))
+                                .foregroundStyle(CodeEdgeSettingsTheme.warning)
+                        } else if let error = notifications.permissionError {
+                            Text(error).foregroundStyle(CodeEdgeSettingsTheme.warning)
+                        }
                     }
                 }
-                .font(.system(size: 12))
-            }
-            if notifications.authorizationDenied {
-                Text(copy.text("通知权限已关闭，请在系统设置 → 通知 → CodeEdge 中允许通知。", "Notifications are disabled. Allow CodeEdge notifications in System Settings → Notifications."))
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(SettingsPalette.orange)
-            } else if let error = notifications.permissionError {
-                Text(error)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(SettingsPalette.orange)
+                if lowQuotaEnabled {
+                    CodeEdgeFormSection(title: copy.text("剩余提醒阈值", "Remaining thresholds")) {
+                        HStack(spacing: SettingsSpace.lg) {
+                            ForEach(QuotaNotificationController.thresholdChoices, id: \.self) { threshold in
+                                Toggle("\(threshold)%", isOn: Binding(
+                                    get: { notifications.selectedThresholds.contains(threshold) },
+                                    set: { enabled in
+                                        var values = notifications.selectedThresholds
+                                        if enabled { values.append(threshold) }
+                                        else { values.removeAll { $0 == threshold } }
+                                        if !values.isEmpty { notifications.setThresholds(values) }
+                                    }
+                                ))
+                                .toggleStyle(.checkbox)
+                                // 复选框不使用表单的固定标题列。
+                                .labeledContentStyle(.automatic)
+                                .fixedSize()
+                                .pointerStyle(.link)
+                            }
+                        }
+                    }
+                }
             }
         }
         .task { await notifications.refreshAuthorizationStatus() }
@@ -562,1366 +281,102 @@ private struct QuotaNotificationSettingsView: View {
     }
 }
 
-private struct ProviderQuotaMuteToggle: View {
-    @ObservedObject var notifications: QuotaNotificationController
-    let providerID: ProviderID
-    @Environment(\.appLanguage) private var language
-
-    var body: some View {
-        let copy = AppCopy(language: language)
-        SettingsToggleRow(title: copy.text("静音此 Provider", "Mute this provider"),
-                          hint: copy.text("保留额度显示，停止此 Provider 的额度通知", "Keep quota data visible without quota notifications"),
-                          isOn: Binding(get: { notifications.isMuted(providerID) },
-                                        set: { notifications.setMuted($0, for: providerID) }))
-    }
-}
-
-private struct ProviderSettingsView: View {
-    @ObservedObject var store: UsageStore
-    @Binding var selectedProviderID: ProviderID?
-    @Binding var searchText: String
-    @Environment(\.appLanguage) private var language
-
-    private var copy: AppCopy { AppCopy(language: language) }
-
-    private var filtered: [ProviderDescriptor] {
-        guard !searchText.isEmpty else { return ProviderCatalog.all }
-        return ProviderCatalog.all.filter {
-            $0.name.localizedCaseInsensitiveContains(searchText)
-                || $0.id.rawValue.localizedCaseInsensitiveContains(searchText)
-        }
-    }
-
-    var body: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 12) {
-                providerList
-
-                Group {
-                    if let id = selectedProviderID,
-                       let descriptor = ProviderCatalog.byID[id] {
-                        ProviderConfigurationView(store: store, descriptor: descriptor)
-                            .id(id)
-                    } else {
-                        ContentUnavailableView(
-                            copy.text("选择一个 Provider", "Select a provider"),
-                            systemImage: "square.grid.2x2",
-                            description: Text(copy.text(
-                                "可以在这里启用并配置数据来源。",
-                                "Enable it and configure its data source here."
-                            ))
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(SettingsPalette.card)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .strokeBorder(SettingsPalette.line, lineWidth: 1)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .frame(maxHeight: .infinity)
-        }
-    }
-
-    private var providerList: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(SettingsPalette.tertiary)
-                TextField(copy.text("搜索 Provider", "Search providers"), text: $searchText)
-                    .textFieldStyle(.plain)
-            }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 9)
-            .background(SettingsPalette.inset)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 4) {
-                    ForEach(filtered) { descriptor in
-                        ProviderSettingsRow(
-                            descriptor: descriptor,
-                            usage: store.usage(for: descriptor.id),
-                            selected: selectedProviderID == descriptor.id,
-                            select: { selectedProviderID = descriptor.id },
-                            isEnabled: Binding(
-                                get: {
-                                    store.preferences.configuration(for: descriptor.id).isEnabled
-                                },
-                                set: { enabled in
-                                    store.preferences.setEnabled(enabled, for: descriptor.id)
-                                    guard enabled else { return }
-                                    Task { await store.refresh(providerID: descriptor.id, isManual: true) }
-                                }
-                            )
-                        )
-                    }
-                }
-            }
-        }
-        .padding(12)
-        .frame(width: 252)
-        .frame(maxHeight: .infinity)
-        .background(SettingsPalette.card)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(SettingsPalette.line, lineWidth: 1)
-        }
-    }
-}
-
-private struct ProviderSettingsRow: View {
-    let descriptor: ProviderDescriptor
-    let usage: ProviderUsage
-    let selected: Bool
-    let select: () -> Void
-    @Binding var isEnabled: Bool
-    @Environment(\.appLanguage) private var language
-
-    @State private var hovered = false
-
-    private var copy: AppCopy { AppCopy(language: language) }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Button(action: select) {
-                HStack(spacing: 9) {
-                    ProviderIconView(provider: descriptor)
-                        .frame(width: 20, height: 20)
-                        .foregroundStyle(
-                            isEnabled
-                                ? ProviderBrandColors.color(for: descriptor.id)
-                                : SettingsPalette.tertiary
-                        )
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(descriptor.name)
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(isEnabled ? SettingsPalette.primary : SettingsPalette.secondary)
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(isEnabled ? statusColor : SettingsPalette.tertiary)
-                                .frame(width: 5, height: 5)
-                            Text(statusText)
-                                .font(.system(size: 10.5))
-                                .foregroundStyle(
-                                    SettingsPalette.tertiary.opacity(isEnabled ? 1 : 0.72)
-                                )
-                                .lineLimit(1)
-                        }
-                    }
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .pointerStyle(.link)
-
-            Toggle("", isOn: $isEnabled)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .tint(SettingsPalette.blue)
-                .pointerStyle(.link)
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 8)
-        .background(
-            selected
-                ? SettingsPalette.selected
-                : (hovered ? SettingsPalette.inset : Color.clear)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .onHover { hovered = $0 }
-        .onTapGesture(perform: select)
-        .animation(.easeOut(duration: 0.12), value: hovered)
-    }
-
-    private var statusText: String {
-        if let date = usage.updatedAt, usage.state == .ready {
-            return copy.text("已更新", "Updated")
-                + " · \(date.formatted(date: .omitted, time: .shortened))"
-        }
-        return usage.message.map(copy.usageMessage) ?? copy.text("未读取", "Not loaded")
-    }
-
-    private var statusColor: Color {
-        switch usage.state {
-        case .ready: SettingsPalette.green
-        case .loading: SettingsPalette.blue
-        case .unavailable: SettingsPalette.orange
-        case .failed: SettingsPalette.red
-        }
-    }
-}
-
-private struct ProviderConfigurationView: View {
-    @ObservedObject var store: UsageStore
-    let descriptor: ProviderDescriptor
-
-    @State private var configuration: ProviderConfiguration
-    @State private var secret: String
-    @State private var managementSecret: String
-    @State private var secondarySecret: String
-    @State private var stepFunManualToken: String
-    @State private var bedrockAuthMode: String
-    @State private var bedrockProfile: String
-    @State private var bedrockRegion: String
-    @State private var deepSeekProfiles: [DeepSeekPlatformTokenImporter.TokenInfo]
-    @State private var saveMessage: String?
-    @State private var credentialReadError: String?
-    @Environment(\.appLanguage) private var language
-
-    private var copy: AppCopy { AppCopy(language: language) }
-
-    init(store: UsageStore, descriptor: ProviderDescriptor) {
-        self.store = store
-        self.descriptor = descriptor
-        let providerID = descriptor.id.rawValue
-        var configuration = store.preferences.configuration(for: descriptor.id)
-        var readError: String?
-        func readSecret(_ key: String? = nil) -> String {
-            do {
-                return try store.preferences.editableSecret(for: descriptor.id, key: key)
-            } catch {
-                readError = error.localizedDescription
-                return ""
-            }
-        }
-        let secret = readSecret()
-        if descriptor.id.rawValue == "moonshot" {
-            if !secret.isEmpty, configuration.endpoint.isEmpty {
-                configuration.endpoint = MoonshotUsageRegion.china.rawValue
-            }
-            if configuration.account.isEmpty {
-                configuration.account = MoonshotUsageFetcher.resolvedRegion(
-                    configured: configuration.endpoint.isEmpty ? nil : configuration.endpoint,
-                    environment: ProcessInfo.processInfo.environment
-                ).rawValue
-            }
-        }
-        if descriptor.id.rawValue == "windsurf", configuration.account.isEmpty {
-            configuration.account = WindsurfSessionSource.automatic.rawValue
-        }
-        if (descriptor.id.rawValue == "longcat"
-            || descriptor.id.rawValue == "zoommate"
-            || descriptor.id.rawValue == "notion"),
-           configuration.source == .account || configuration.source == .token {
-            configuration.source = .automatic
-        }
-        _configuration = State(initialValue: configuration)
-        _secret = State(initialValue: secret)
-        _managementSecret = State(initialValue: providerID == "openrouter"
-            ? readSecret("management-api-key")
-            : "")
-        _secondarySecret = State(initialValue: providerID == "doubao" || providerID == "bedrock"
-            ? readSecret("secret-access-key")
-            : providerID == "futureagi" ? readSecret("secret-key") : "")
-        let storedBedrockAuthMode = providerID == "bedrock"
-            ? readSecret("aws-auth-mode")
-            : ""
-        let initialBedrockAuthMode: String
-        if providerID != "bedrock" {
-            initialBedrockAuthMode = BedrockAuthMode.keys.rawValue
-        } else if storedBedrockAuthMode.isEmpty {
-            initialBedrockAuthMode = BedrockCredentialResolver.inferredAuthMode(
-                configured: nil,
-                environment: ProcessInfo.processInfo.environment
-            ).rawValue
-        } else {
-            initialBedrockAuthMode = storedBedrockAuthMode
-        }
-        _bedrockAuthMode = State(initialValue: initialBedrockAuthMode)
-        _bedrockProfile = State(initialValue: providerID == "bedrock"
-            ? readSecret("aws-profile")
-            : "")
-        _bedrockRegion = State(initialValue: providerID == "bedrock"
-            ? readSecret("aws-region")
-            : "")
-        let storedStepFunManualToken = providerID == "stepfun"
-            ? readSecret("manual-token")
-            : ""
-        _stepFunManualToken = State(initialValue: providerID == "stepfun"
-            && configuration.source == .token
-            && storedStepFunManualToken.isEmpty
-            ? secret
-            : storedStepFunManualToken)
-        _deepSeekProfiles = State(initialValue: [])
-        _credentialReadError = State(initialValue: readError)
-        _saveMessage = State(initialValue: readError)
-    }
-
-    var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 12) {
-                SettingsCard(copy.text("概览", "Overview")) {
-                    HStack(spacing: 12) {
-                        ProviderIconView(provider: descriptor)
-                            .frame(width: 28, height: 28)
-                            .foregroundStyle(ProviderBrandColors.color(for: descriptor.id))
-                            .frame(width: 48, height: 48)
-                            .background(SettingsPalette.inset)
-                            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(descriptor.name)
-                                .font(.system(size: 18, weight: .bold, design: .rounded))
-                            Text(
-                                "\(copy.usageLabel(descriptor.primaryLabel)) · "
-                                    + copy.usageLabel(descriptor.secondaryLabel)
-                            )
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(SettingsPalette.tertiary)
-                        }
-                        Spacer()
-                        Toggle(copy.text("启用", "Enabled"), isOn: $configuration.isEnabled)
-                            .toggleStyle(.switch)
-                            .tint(SettingsPalette.blue)
-                            .pointerStyle(.link)
-                    }
-                }
-
-                SettingsCard(copy.text("额度提醒", "Quota notifications")) {
-                    ProviderQuotaMuteToggle(notifications: store.notifications, providerID: descriptor.id)
-                }
-
-                SettingsCard(copy.text("数据来源", "Data source")) {
-                    SettingsLabeledRow(title: copy.text("读取方式", "Source")) {
-                        Picker("", selection: $configuration.source) {
-                            ForEach(availableSources, id: \.self) { source in
-                                Text(sourceTitle(source)).tag(source)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .frame(width: 180)
-                    }
-
-                    if configuration.source == .endpoint
-                        || descriptor.id.rawValue == "azureopenai"
-                        || descriptor.id.rawValue == "deepgram"
-                        || descriptor.id.rawValue == "chutes"
-                        || descriptor.id.rawValue == "siliconflow"
-                        || descriptor.id.rawValue == "clawrouter"
-                        || descriptor.id.rawValue == "sub2api"
-                        || descriptor.id.rawValue == "wayfinder"
-                        || descriptor.id.rawValue == "llmman"
-                        || descriptor.id.rawValue == "aixy"
-                        || descriptor.id.rawValue == "bifrost"
-                        || descriptor.id.rawValue == "llmproxy"
-                        || descriptor.id.rawValue == "litellm" {
-                        SettingsTextField(
-                            title: descriptor.id.rawValue == "azureopenai"
-                                ? copy.text("Azure Endpoint", "Azure endpoint")
-                                : descriptor.id.rawValue == "deepgram"
-                                ? copy.text("Deepgram API URL（可选）", "Deepgram API URL (optional)")
-                                : descriptor.id.rawValue == "chutes"
-                                ? copy.text("Chutes API URL（可选）", "Chutes API URL (optional)")
-                                : descriptor.id.rawValue == "siliconflow"
-                                ? copy.text("SiliconFlow API URL（可选）", "SiliconFlow API URL (optional)")
-                                : descriptor.id.rawValue == "clawrouter"
-                                ? copy.text("ClawRouter Base URL（可选）", "ClawRouter Base URL (optional)")
-                                : descriptor.id.rawValue == "sub2api"
-                                ? "sub2api Base URL"
-                                : descriptor.id.rawValue == "wayfinder"
-                                ? copy.text(
-                                    "Gateway URL（默认 http://127.0.0.1:8088）",
-                                    "Gateway URL (default: http://127.0.0.1:8088)"
-                                )
-                                : descriptor.id.rawValue == "llmproxy"
-                                ? "LLM Proxy Base URL"
-                                : descriptor.id.rawValue == "litellm"
-                                ? "LiteLLM Base URL"
-                                : descriptor.id.rawValue == "llmman"
-                                ? copy.text("llmman 地址（可选）", "llmman address (optional)")
-                                : descriptor.id.rawValue == "aixy"
-                                ? copy.text("Aixy Base URL（可选）", "Aixy Base URL (optional)")
-                                : descriptor.id.rawValue == "bifrost"
-                                ? copy.text("Bifrost Base URL（或 BIFROST_BASE_URL）", "Bifrost Base URL (or BIFROST_BASE_URL)")
-                                : copy.text("接口地址", "Endpoint URL"),
-                            text: $configuration.endpoint
-                        )
-                        if descriptor.id.rawValue == "siliconflow" {
-                            Text(copy.text(
-                                "默认中国区 https://api.siliconflow.cn（人民币）；国际账号填 https://api.siliconflow.com（美元）。留空时也会读取 SILICONFLOW_BASE_URL。",
-                                "China https://api.siliconflow.cn (CNY) is the default. International accounts use https://api.siliconflow.com (USD). When blank, SILICONFLOW_BASE_URL is also read."
-                            ))
-                                .font(.system(size: 10.5))
-                                .foregroundStyle(SettingsPalette.tertiary)
-                        }
-                    }
-                    if configuration.source == .command {
-                        SettingsTextField(
-                            title: descriptor.id.rawValue == "doubao"
-                                ? copy.text("arkcli 可执行文件路径（可选）", "arkcli executable path (optional)")
-                                : descriptor.id.rawValue == "codex"
-                                ? copy.text("Codex CLI 可执行文件路径（可选）", "Codex CLI executable path (optional)")
-                                : descriptor.id.rawValue == "claude"
-                                ? copy.text("Claude CLI 可执行文件路径（可选）", "Claude CLI executable path (optional)")
-                                : descriptor.id.rawValue == "coderabbit"
-                                ? copy.text("CodeRabbit CLI 可执行文件路径（可选）", "CodeRabbit CLI executable path (optional)")
-                                : copy.text(
-                                    "输出 JSON 或百分比的命令",
-                                    "Command that outputs JSON or percentages"
-                                ),
-                            text: $configuration.command
-                        )
-                    }
-                    if descriptor.id.rawValue == "doubao" {
-                        SettingsTextField(
-                            title: copy.text("Region（默认 cn-beijing）", "Region (default: cn-beijing)"),
-                            text: $configuration.account
-                        )
-                    }
-                    if descriptor.id.rawValue == "moonshot" {
-                        SettingsLabeledRow(title: copy.text("API 区域", "API region")) {
-                            Picker("", selection: $configuration.account) {
-                                Text(copy.text("国际", "International"))
-                                    .tag(MoonshotUsageRegion.international.rawValue)
-                                Text(copy.text("中国大陆", "China"))
-                                    .tag(MoonshotUsageRegion.china.rawValue)
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.menu)
-                            .frame(width: 180)
-                            .onChange(of: configuration.account) { _, newRegion in
-                                guard !configuration.endpoint.isEmpty,
-                                      configuration.endpoint != newRegion
-                                else { return }
-                                secret = ""
-                            }
-                        }
-                        Text(copy.text(
-                            "切换区域后需要输入该区域对应的 API Key。自动模式也会读取 MOONSHOT_REGION。",
-                            "Switching regions requires that region's API key. Automatic mode also reads MOONSHOT_REGION."
-                        ))
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(SettingsPalette.tertiary)
-                    }
-                    if descriptor.id.rawValue == "notion" {
-                        SettingsTextField(
-                            title: copy.text("Workspace ID（可选）", "Workspace ID (optional)"),
-                            text: $configuration.account
-                        )
-                        Text(copy.text(
-                            "留空时优先选择首个 Business 或 Enterprise workspace。",
-                            "When left blank, the first Business or Enterprise workspace is preferred."
-                        ))
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(SettingsPalette.tertiary)
-                    }
-                    if descriptor.id.rawValue == "workbuddy" {
-                        SettingsTextField(
-                            title: copy.text("User-Agent（可选）", "User-Agent (optional)"),
-                            text: $configuration.account
-                        )
-                        Text(copy.text(
-                            "粘贴与 Cookie 来自同一请求的 User-Agent 值。",
-                            "Paste the User-Agent value from the same request as the Cookie."
-                        ))
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(SettingsPalette.tertiary)
-                    }
-                    if descriptor.id.rawValue == "windsurf", configuration.source != .account {
-                        SettingsLabeledRow(title: copy.text("会话来源", "Session source")) {
-                            Picker("", selection: $configuration.account) {
-                                Text(copy.text("自动", "Automatic"))
-                                    .tag(WindsurfSessionSource.automatic.rawValue)
-                                Text(copy.text("手动", "Manual"))
-                                    .tag(WindsurfSessionSource.manual.rawValue)
-                                Text(copy.text("关闭", "Off"))
-                                    .tag(WindsurfSessionSource.off.rawValue)
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.menu)
-                            .frame(width: 180)
-                        }
-                    }
-                    if descriptor.id.rawValue == "deepseek", deepSeekProfiles.count > 1 {
-                        SettingsLabeledRow(title: copy.text("Chrome Profile", "Chrome profile")) {
-                            Picker("", selection: $configuration.account) {
-                                Text(copy.text("未选择", "Not selected")).tag("")
-                                ForEach(deepSeekProfiles, id: \.id) { profile in
-                                    Text(profile.sourceLabel).tag(profile.id)
-                                }
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.menu)
-                            .frame(width: 180)
-                        }
-                    }
-                    if configuration.source == .account
-                        && descriptor.id.rawValue != "antigravity"
-                        && descriptor.id.rawValue != "augment"
-                        && descriptor.id.rawValue != "codex"
-                        && descriptor.id.rawValue != "t3chat"
-                        && descriptor.id.rawValue != "zed"
-                        && descriptor.id.rawValue != "windsurf"
-                        && descriptor.id.rawValue != "muse"
-                        || descriptor.id.rawValue == "openai"
-                        || descriptor.id.rawValue == "azureopenai"
-                        || descriptor.id.rawValue == "opencode"
-                        || descriptor.id.rawValue == "opencodego"
-                        || descriptor.id.rawValue == "alibaba"
-                        || descriptor.id.rawValue == "alibabatokenplan"
-                        || descriptor.id.rawValue == "fireworks"
-                        || descriptor.id.rawValue == "copilot"
-                        || descriptor.id.rawValue == "devin"
-                        || descriptor.id.rawValue == "kilo"
-                        || descriptor.id.rawValue == "kimi"
-                        || descriptor.id.rawValue == "zai"
-                        || descriptor.id.rawValue == "minimax"
-                        || descriptor.id.rawValue == "jetbrains"
-                        || descriptor.id.rawValue == "deepgram"
-                        || descriptor.id.rawValue == "xai"
-                        || descriptor.id.rawValue == "exa"
-                        || descriptor.id.rawValue == "cosmic"
-                        || descriptor.id.rawValue == "flora"
-                        || descriptor.id.rawValue == "v0"
-                        || descriptor.id.rawValue == "gitkraken"
-                        || descriptor.id.rawValue == "claudeplatform"
-                        || descriptor.id.rawValue == "helmcode" && configuration.source == .cookie
-                        || descriptor.id.rawValue == "stepfun" && configuration.source != .token
-                        || descriptor.id.rawValue == "claude" && configuration.source == .cookie {
-                        SettingsTextField(
-                            title: configurationAccountLabel,
-                            text: $configuration.account
-                        )
-                    }
-                }
-
-                if showsAuthenticationCard {
-                    SettingsCard(copy.text("认证", "Authentication")) {
-                        if descriptor.id.rawValue == "bedrock" {
-                            SettingsLabeledRow(title: copy.text("认证方式", "Authentication")) {
-                                Picker("", selection: $bedrockAuthMode) {
-                                    Text(copy.text("Access keys", "Access keys"))
-                                        .tag(BedrockAuthMode.keys.rawValue)
-                                    Text(copy.text("AWS Profile", "AWS profile"))
-                                        .tag(BedrockAuthMode.profile.rawValue)
-                                }
-                                .labelsHidden()
-                                .pickerStyle(.menu)
-                                .frame(width: 180)
-                            }
-                            if bedrockAuthMode == BedrockAuthMode.profile.rawValue {
-                                SettingsTextField(
-                                    title: copy.text("Profile 名称", "Profile name"),
-                                    text: $bedrockProfile
-                                )
-                            } else {
-                                SecureField("Access Key ID", text: $secret)
-                                    .textFieldStyle(.plain)
-                                    .padding(.horizontal, 11)
-                                    .padding(.vertical, 9)
-                                    .background(SettingsPalette.inset)
-                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                SecureField("Secret Access Key", text: $secondarySecret)
-                                    .textFieldStyle(.plain)
-                                    .padding(.horizontal, 11)
-                                    .padding(.vertical, 9)
-                                    .background(SettingsPalette.inset)
-                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            }
-                            SettingsTextField(
-                                title: copy.text("Region（可选）", "Region (optional)"),
-                                text: $bedrockRegion
-                            )
-                        } else {
-                            SecureField(secretLabel, text: authenticationSecret)
-                                .textFieldStyle(.plain)
-                                .padding(.horizontal, 11)
-                                .padding(.vertical, 9)
-                                .background(SettingsPalette.inset)
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        }
-
-                        if !descriptor.environmentKeys.isEmpty {
-                            Text(copy.text("自动模式也会读取：", "Automatic mode also reads: ")
-                                + descriptor.environmentKeys.joined(separator: ", "))
-                                .font(.system(size: 10.5))
-                                .foregroundStyle(SettingsPalette.tertiary)
-                                .textSelection(.enabled)
-                        }
-                        if descriptor.id.rawValue == "groq" {
-                            Text(copy.text(
-                                "用量与支出会自动读取 console.groq.com 浏览器会话；API Key 为可选，仅用于补充 Enterprise Prometheus 指标。",
-                                "Usage and spend come from the console.groq.com browser session automatically; the optional API key only adds Enterprise Prometheus metrics."
-                            ))
-                                .font(.system(size: 10.5))
-                                .foregroundStyle(SettingsPalette.tertiary)
-                        }
-                        if descriptor.id.rawValue == "openrouter" {
-                            SecureField(
-                                copy.text("管理 API Key（可选）", "Management API key (optional)"),
-                                text: $managementSecret
-                            )
-                            .textFieldStyle(.plain)
-                            .padding(.horizontal, 11)
-                            .padding(.vertical, 9)
-                            .background(SettingsPalette.inset)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                            Text(copy.text(
-                                "上方 API Key 必填，可使用普通或管理密钥。官方接口上的管理密钥会读取最近 30 个完整 UTC 日活动；这里的可选管理密钥只用于单独指定活动凭据，也可设置 OPENROUTER_MANAGEMENT_API_KEY。",
-                                "The API key above is required and accepts a regular or Management key. Management keys on the official API load the last 30 completed UTC days of Activity. This optional key only selects a separate Activity credential; OPENROUTER_MANAGEMENT_API_KEY is also supported."
-                            ))
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(SettingsPalette.tertiary)
-                        }
-                        if descriptor.id.rawValue == "doubao" {
-                            SecureField(
-                                copy.text("Secret Access Key（可选）", "Secret Access Key (optional)"),
-                                text: $secondarySecret
-                            )
-                            .textFieldStyle(.plain)
-                            .padding(.horizontal, 11)
-                            .padding(.vertical, 9)
-                            .background(SettingsPalette.inset)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        }
-                        if descriptor.id.rawValue == "futureagi" {
-                            SecureField(
-                                copy.text("Secret Key（或 FI_SECRET_KEY）", "Secret key (or FI_SECRET_KEY)"),
-                                text: $secondarySecret
-                            )
-                            .textFieldStyle(.plain)
-                            .padding(.horizontal, 11)
-                            .padding(.vertical, 9)
-                            .background(SettingsPalette.inset)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        }
-                    }
-                }
-
-                SettingsCard(copy.text("状态", "Status")) {
-                    let usage = store.usage(for: descriptor.id)
-                    HStack(spacing: 8) {
-                        Circle()
-                            .fill(statusColor(usage.state))
-                            .frame(width: 7, height: 7)
-                        Text(stateText(usage.state))
-                            .font(.system(size: 12.5, weight: .semibold))
-                        Spacer()
-                        Button(copy.text("刷新此 Provider", "Refresh provider")) {
-                            saveAndRefresh(allowBrowserCookieImport: true)
-                        }
-                        .buttonStyle(SettingsPressButtonStyle())
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(SettingsPalette.blue)
-                    }
-                    if let message = usage.message {
-                        Text(copy.usageMessage(message))
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(SettingsPalette.tertiary)
-                    }
-                }
-
-                HStack {
-                    if let saveMessage {
-                        Text(saveMessage)
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(SettingsPalette.tertiary)
-                    }
-                    Spacer()
-                    Button(copy.text("保存", "Save")) { saveAndRefresh() }
-                        .buttonStyle(SettingsPressButtonStyle())
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 9)
-                        .background(SettingsPalette.blue)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .keyboardShortcut(.defaultAction)
-                }
-                .padding(.horizontal, 2)
-            }
-            .padding(.bottom, 4)
-        }
-        .task(id: descriptor.id) {
-            guard descriptor.id.rawValue == "deepseek" else { return }
-            let profiles = await Task.detached(priority: .utility) {
-                DeepSeekPlatformTokenImporter.importTokens()
-            }.value
-            guard !Task.isCancelled else { return }
-            deepSeekProfiles = profiles
-        }
-    }
-
-    private var secretLabel: String {
-        if descriptor.id.rawValue == "langdock" {
-            return copy.text("Cookie 标头（包含 auth_token）", "Cookie header (including auth_token)")
-        }
-        if descriptor.id.rawValue == "xapi" {
-            return copy.text("Cookie 标头（包含 auth_token 和 ct0）", "Cookie header (including auth_token and ct0)")
-        }
-        if descriptor.id.rawValue == "raycast" {
-            return copy.text("Cookie 标头（包含 __raycast_session）", "Cookie header (including __raycast_session)")
-        }
-        if ["museai", "tinyapi", "lithosai", "workbuddy", "parallel", "replicate", "typesafe", "helmcode"].contains(descriptor.id.rawValue) {
-            return copy.text("Cookie 标头", "Cookie header")
-        }
-        if descriptor.id.rawValue == "opendesign" {
-            return copy.text("Cookie 标头（amr-api.open-design.ai，可选）", "Cookie header (amr-api.open-design.ai, optional)")
-        }
-        if descriptor.id.rawValue == "traecn" {
-            return copy.text("Cookie 标头（api.trae.cn，可选）", "Cookie header (api.trae.cn, optional)")
-        }
-        if descriptor.id.rawValue == "abliteration" {
-            return "abliteration.ai API Key"
-        }
-        if descriptor.id.rawValue == "siliconflow" {
-            return "SiliconFlow API Key"
-        }
-        if descriptor.id.rawValue == "tripo" {
-            return "Tripo API Key"
-        }
-        if descriptor.id.rawValue == "chatbox" {
-            return "Chatbox AI License Key"
-        }
-        if descriptor.id.rawValue == "futureagi" {
-            return copy.text("API Key（或 FI_API_KEY）", "API key (or FI_API_KEY)")
-        }
-        if descriptor.id.rawValue == "munito" {
-            return copy.text("Munito 管理 API Key（需读取账户数据权限）", "Munito admin API key (Read account data permission)")
-        }
-        if descriptor.id.rawValue == "soniox" {
-            return copy.text("Soniox 组织 API Key", "Soniox organization API key")
-        }
-        if descriptor.id.rawValue == "claudeplatform" {
-            return copy.text("Cookie 标头（包含 sessionKey）", "Cookie header (including sessionKey)")
-        }
-        if descriptor.id.rawValue == "bifrost" {
-            return copy.text("Bifrost 虚拟 Key", "Bifrost virtual key")
-        }
-        if descriptor.id.rawValue == "nous" {
-            return copy.text("Portal 访问令牌（可选）", "Portal access token (optional)")
-        }
-        if descriptor.id.rawValue == "muse" {
-            return configuration.source == .token
-                ? copy.text("Muse 登录令牌（dca:）", "Muse login token (dca:)")
-                : copy.text("Muse 登录令牌（dca:，可选）", "Muse login token (dca:, optional)")
-        }
-        if descriptor.id.rawValue == "hyper" {
-            return configuration.source == .cookie
-                ? copy.text("Cookie 标头", "Cookie header")
-                : "Hyper API Key"
-        }
-        if descriptor.id.rawValue == "aerostack" {
-            return copy.text("Aerostack 账户 JWT", "Aerostack account JWT")
-        }
-        if descriptor.id.rawValue == "exa" {
-            return copy.text("Exa 服务密钥", "Exa service key")
-        }
-        if descriptor.id.rawValue == "cosmic" {
-            return copy.text("个人访问令牌", "Personal Access Token")
-        }
-        if descriptor.id.rawValue == "fal" {
-            return "fal API Key (billing:usage:read)"
-        }
-        if descriptor.id.rawValue == "llmman" {
-            return copy.text("API Key（可选）", "API key (optional)")
-        }
-        if descriptor.id.rawValue == "codex" {
-            return switch configuration.source {
-            case .token: "Codex PAT"
-            case .cookie: copy.text("ChatGPT Cookie", "ChatGPT Cookie")
-            default: copy.text("Codex PAT（可选）", "Codex PAT (optional)")
-            }
-        }
-        if descriptor.id.rawValue == "antigravity" {
-            return copy.text("OAuth 凭证 JSON（可选）", "OAuth credentials JSON (optional)")
-        }
-        if descriptor.id.rawValue == "t3chat", configuration.source == .cookie {
-            return copy.text("Cookie 或完整 cURL", "Cookie or full cURL")
-        }
-        if descriptor.id.rawValue == "ollama", configuration.source == .cookie {
-            return copy.text("Cookie 标头或会话值", "Cookie header or session value")
-        }
-        if descriptor.id.rawValue == "ollama", configuration.source == .token {
-            return copy.text("Ollama API Key", "Ollama API key")
-        }
-        if descriptor.id.rawValue == "ollama", configuration.source == .automatic {
-            return copy.text("API Key 或 Cookie（可选）", "API key or Cookie (optional)")
-        }
-        if descriptor.id.rawValue == "openrouter" {
-            return copy.text("OpenRouter API Key（必填）", "OpenRouter API key (required)")
-        }
-        if descriptor.id.rawValue == "elevenlabs" {
-            return "API Key (xi-...)"
-        }
-        if descriptor.id.rawValue == "warp" {
-            return "Warp API Key"
-        }
-        if descriptor.id.rawValue == "windsurf" {
-            return copy.text("Windsurf 会话 JSON 包", "Windsurf session JSON bundle")
-        }
-        if descriptor.id.rawValue == "perplexity" {
-            return copy.text("Cookie 标头或会话值", "Cookie header or session value")
-        }
-        if descriptor.id.rawValue == "sakana" {
-            return copy.text("Cookie 标头", "Cookie header")
-        }
-        if descriptor.id.rawValue == "abacus" {
-            return copy.text("Cookie 标头或 cURL", "Cookie header or cURL")
-        }
-        if descriptor.id.rawValue == "mimo" {
-            return copy.text("Cookie 标头或完整 cURL", "Cookie header or full cURL")
-        }
-        if descriptor.id.rawValue == "deepinfra" {
-            return "DeepInfra API Key"
-        }
-        if descriptor.id.rawValue == "venice" {
-            return "Venice API Key"
-        }
-        if descriptor.id.rawValue == "deepgram" {
-            return "Deepgram API Key"
-        }
-        if descriptor.id.rawValue == "poe" {
-            return "Poe API Key"
-        }
-        if descriptor.id.rawValue == "mistral" {
-            return copy.text("Cookie 标头或完整 cURL", "Cookie header or full cURL")
-        }
-        if descriptor.id.rawValue == "qoder" {
-            return copy.text("Cookie 标头或完整 cURL", "Cookie header or full cURL")
-        }
-        if descriptor.id.rawValue == "longcat" {
-            return copy.text("Cookie 标头", "Cookie header")
-        }
-        if descriptor.id.rawValue == "zoommate", configuration.source == .cookie {
-            return copy.text("ZoomMate 完整 cURL", "Full ZoomMate cURL")
-        }
-        if descriptor.id.rawValue == "notion", configuration.source == .cookie {
-            return copy.text(
-                "token_v2、Cookie 标头或完整 cURL",
-                "token_v2, Cookie header, or full cURL"
-            )
-        }
-        if descriptor.id.rawValue == "stepfun" {
-            return configuration.source == .token
-                ? "Oasis-Token"
-                : copy.text("密码", "Password")
-        }
-        if descriptor.id.rawValue == "deepseek" {
-            return switch configuration.source {
-            case .cookie: "DeepSeek Platform userToken"
-            case .automatic: copy.text("DeepSeek API Key（可选）", "DeepSeek API key (optional)")
-            default: "DeepSeek API Key"
-            }
-        }
-        if descriptor.id.rawValue == "chutes" {
-            return "Chutes API Key"
-        }
-        if descriptor.id.rawValue == "neuralwatt" {
-            return "Neuralwatt API Key"
-        }
-        if descriptor.id.rawValue == "xai" {
-            return "xAI Management API Key"
-        }
-        if descriptor.id.rawValue == "aiand" {
-            return "ai& API Key"
-        }
-        if descriptor.id.rawValue == "zenmux" {
-            return "ZenMux Management API Key"
-        }
-        if descriptor.id.rawValue == "sub2api" {
-            return copy.text("备用 API Key", "Fallback API key")
-        }
-        if descriptor.id.rawValue == "llmproxy" {
-            return "LLM Proxy API Key"
-        }
-        if descriptor.id.rawValue == "litellm" {
-            return "LiteLLM API Key"
-        }
-        if descriptor.id.rawValue == "ibmbob" {
-            return "IBM Bob API Key"
-        }
-        if descriptor.id.rawValue == "grok" {
-            return switch configuration.source {
-            case .token: copy.text("SuperGrok Bearer 令牌", "SuperGrok bearer token")
-            case .cookie: copy.text("grok.com Cookie 标头", "grok.com Cookie header")
-            default: copy.text(
-                "SuperGrok Bearer 令牌或 grok.com Cookie（可选）",
-                "SuperGrok bearer token or grok.com Cookie (optional)"
-            )
-            }
-        }
-        if descriptor.id.rawValue == "groq" {
-            return "Groq API Key (gsk_...)"
-        }
-        if descriptor.id.rawValue == "doubao" {
-            return "API Key / Access Key ID"
-        }
-        return configuration.source == .cookie
-            ? copy.text("Cookie 内容", "Cookie contents")
-            : copy.text("访问令牌或密钥", "Access token or key")
-    }
-
-    private var availableSources: [ProviderSource] {
-        [.automatic] + descriptor.preferredSources
-    }
-
-    private func sourceTitle(_ source: ProviderSource) -> String {
-        if ["langdock", "xapi", "museai", "tinyapi", "raycast", "lithosai", "workbuddy", "parallel", "claudeplatform"].contains(descriptor.id.rawValue) {
-            return source == .automatic
-                ? copy.text("自动（使用已填 Cookie）", "Auto (configured Cookie)")
-                : copy.text("手动 Cookie", "Manual Cookie")
-        }
-        if descriptor.id.rawValue == "muse" {
-            return switch source {
-            case .account: copy.text("本地 auth.json", "Local auth.json")
-            case .token: copy.text("登录令牌", "Login token")
-            default: source.title(language: language)
-            }
-        }
-        if descriptor.id.rawValue == "codex" {
-            return switch source {
-            case .automatic: copy.text("自动", "Auto")
-            case .cookie: "Web"
-            case .command: "CLI"
-            case .account: "OAuth"
-            case .token: "API"
-            case .endpoint: source.title(language: language)
-            }
-        }
-        if descriptor.id.rawValue == "claude" {
-            return switch source {
-            case .automatic: copy.text("自动", "Auto")
-            case .account: "OAuth API"
-            case .token: copy.text("API（Admin Key）", "API (Admin key)")
-            case .cookie: copy.text("网页 API（Cookie）", "Web API (cookies)")
-            case .command: "CLI (PTY)"
-            case .endpoint: source.title(language: language)
-            }
-        }
-        if descriptor.id.rawValue == "windsurf" {
-            return switch source {
-            case .automatic: copy.text("自动", "Auto")
-            case .cookie: copy.text("网页接口（IndexedDB）", "Web API (IndexedDB)")
-            case .account: copy.text("本地（SQLite 缓存）", "Local (SQLite cache)")
-            default: source.title(language: language)
-            }
-        }
-        if descriptor.id.rawValue == "abacus" {
-            return configuration.source == .automatic
-                ? copy.text("自动导入浏览器 Cookie", "Automatic browser cookies")
-                : copy.text("手动 Cookie", "Manual Cookie")
-        }
-        if descriptor.id.rawValue == "mimo" {
-            return configuration.source == .automatic
-                ? copy.text("自动导入浏览器 Cookie", "Automatic browser cookies")
-                : copy.text("手动 Cookie", "Manual Cookie")
-        }
-        if descriptor.id.rawValue == "mistral" {
-            return source == .automatic
-                ? copy.text("自动导入浏览器 Cookie", "Automatic browser cookies")
-                : copy.text("手动 Cookie", "Manual Cookie")
-        }
-        if descriptor.id.rawValue == "qoder" {
-            return source == .automatic
-                ? copy.text("自动导入浏览器 Cookie", "Automatic browser cookies")
-                : copy.text("手动 Cookie", "Manual Cookie")
-        }
-        if descriptor.id.rawValue == "longcat" {
-            return source == .automatic
-                ? copy.text("自动导入浏览器 Cookie", "Automatic browser cookies")
-                : copy.text("手动 Cookie", "Manual Cookie")
-        }
-        if descriptor.id.rawValue == "zoommate" {
-            return source == .automatic
-                ? copy.text("自动导入 Chrome 会话", "Automatic Chrome session")
-                : copy.text("手动 cURL", "Manual cURL")
-        }
-        if descriptor.id.rawValue == "notion" {
-            return source == .automatic
-                ? copy.text("自动导入 Chrome Cookie", "Automatic Chrome cookies")
-                : copy.text("手动 Cookie", "Manual Cookie")
-        }
-        if descriptor.id.rawValue == "deepseek" {
-            return switch source {
-            case .automatic: copy.text("自动", "Auto")
-            case .token: "API"
-            case .cookie: "Web"
-            default: source.title(language: language)
-            }
-        }
-        if descriptor.id.rawValue == "doubao" {
-            return switch source {
-            case .command: "arkcli"
-            case .token: copy.text("API 凭据", "API credentials")
-            default: source.title(language: language)
-            }
-        }
-        if descriptor.id.rawValue == "ibmbob", source == .token {
-            return "API Key"
-        }
-        if descriptor.id.rawValue == "gemini" {
-            return switch source {
-            case .account: "Gemini CLI"
-            case .cookie: copy.text("Gemini 应用（浏览器会话）", "Gemini app (browser session)")
-            default: source.title(language: language)
-            }
-        }
-        if descriptor.id.rawValue == "grok" {
-            return switch source {
-            case .automatic: copy.text("自动", "Auto")
-            case .account: "Grok CLI"
-            case .token: "SuperGrok OAuth"
-            case .cookie: copy.text("grok.com 浏览器会话", "grok.com browser session")
-            default: source.title(language: language)
-            }
-        }
-        if descriptor.id.rawValue == "groq" {
-            return switch source {
-            case .automatic: copy.text(
-                "自动（Console，失败时 Enterprise 指标）",
-                "Auto (Console, then Enterprise metrics)"
-            )
-            case .cookie: copy.text("Console（浏览器会话）", "Console (browser session)")
-            case .token: "Enterprise Prometheus"
-            default: source.title(language: language)
-            }
-        }
-        guard descriptor.id.rawValue == "amp" else { return source.title(language: language) }
-        return switch source {
-        case .account: copy.text("Amp 命令行工具", "Amp CLI")
-        case .token: copy.text("访问令牌", "Access token")
-        case .cookie: copy.text("浏览器会话", "Browser session")
-        default: source.title(language: language)
-        }
-    }
-
-    private var showsAuthenticationCard: Bool {
-        if descriptor.id.rawValue == "coderabbit" { return false }
-        if descriptor.id.rawValue == "pi" { return false }
-        if descriptor.id.rawValue == "helmcode" { return configuration.source == .cookie }
-        if descriptor.id.rawValue == "zed" { return configuration.source == .cookie }
-        if descriptor.id.rawValue == "gemini" { return configuration.source == .cookie }
-        if descriptor.id.rawValue == "codex" {
-            return configuration.source == .automatic
-                || configuration.source == .token
-                || configuration.source == .cookie
-        }
-        if descriptor.id.rawValue == "claude" {
-            return configuration.source != .account && configuration.source != .command
-        }
-        if descriptor.id.rawValue == "amp", configuration.source == .account { return false }
-        if descriptor.id.rawValue == "muse", configuration.source == .account { return false }
-        if descriptor.id.rawValue == "windsurf" {
-            return configuration.source != .account
-                && configuration.account == WindsurfSessionSource.manual.rawValue
-        }
-        if descriptor.id.rawValue == "abacus" { return configuration.source == .cookie }
-        if descriptor.id.rawValue == "mimo" { return configuration.source == .cookie }
-        if descriptor.id.rawValue == "mistral" { return configuration.source == .cookie }
-        if descriptor.id.rawValue == "qoder" { return configuration.source == .cookie }
-        if descriptor.id.rawValue == "longcat" { return configuration.source == .cookie }
-        if descriptor.id.rawValue == "zoommate" { return configuration.source == .cookie }
-        if descriptor.id.rawValue == "notion" { return configuration.source == .cookie }
-        if descriptor.id.rawValue == "wayfinder" { return false }
-        if descriptor.id.rawValue == "doubao" { return configuration.source != .command }
-        if descriptor.id.rawValue == "grok" { return configuration.source != .account }
-        return true
-    }
-
-    private var configurationAccountLabel: String {
-        switch descriptor.id.rawValue {
-        case "openai": copy.text("Project ID（可选）", "Project ID (optional)")
-        case "azureopenai": copy.text("Deployment 名称", "Deployment name")
-        case "claude": copy.text("Organization ID（可选）", "Organization ID (optional)")
-        case "opencode": copy.text("Workspace ID（可选）", "Workspace ID (optional)")
-        case "opencodego": copy.text("Workspace ID（可选）", "Workspace ID (optional)")
-        case "alibaba": copy.text("区域（intl 或 cn）", "Region (intl or cn)")
-        case "alibabatokenplan": copy.text(
-            "区域（intl、cn、intl-personal 或 cn-personal）",
-            "Region (intl, cn, intl-personal, or cn-personal)"
-        )
-        case "fireworks": copy.text("账号 slug（可选）", "Account slug (optional)")
-        case "copilot": copy.text("企业主机（可选）", "Enterprise host (optional)")
-        case "devin": copy.text("组织 slug 或 URL（可选）", "Organization slug or URL (optional)")
-        case "kilo": copy.text("Organization ID（可选）", "Organization ID (optional)")
-        case "kimi": copy.text("区域（china 或 international）", "Region (china or international)")
-        case "zai": copy.text("API 区域（global 或 bigmodel-cn）", "API region (global or bigmodel-cn)")
-        case "minimax": copy.text("MiniMax 区域（global 或 cn）", "MiniMax region (global or cn)")
-        case "jetbrains": copy.text("IDE 配置目录（可选）", "IDE configuration directory (optional)")
-        case "deepgram": copy.text("Project ID（可选；留空汇总全部项目）", "Project ID (optional; blank aggregates all projects)")
-        case "xai": copy.text("Team ID", "Team ID")
-        case "exa": copy.text("API Key ID（或 EXA_API_KEY_ID）", "API key ID (or EXA_API_KEY_ID)")
-        case "cosmic": copy.text("Project ID（或 COSMIC_PROJECT_ID）", "Project ID (or COSMIC_PROJECT_ID)")
-        case "flora": copy.text("Workspace ID（或 FLORA_WORKSPACE_ID）", "Workspace ID (or FLORA_WORKSPACE_ID)")
-        case "v0": copy.text("项目范围（可选）", "Scope (optional)")
-        case "gitkraken": copy.text("API 组织 ID（可选）", "API organization ID (optional)")
-        case "claudeplatform": copy.text("Organization ID（可选）", "Organization ID (optional)")
-        case "helmcode": copy.text("Cookie 租户（nanBuilders；留空使用 Helmcode Cloud）", "Cookie tenant (nanBuilders; blank for Helmcode Cloud)")
-        case "stepfun": copy.text("用户名", "Username")
-        default: copy.text("账号标识（可选）", "Account identifier (optional)")
-        }
-    }
-
-    private func saveAndRefresh(allowBrowserCookieImport: Bool = false) {
-        guard save() else { return }
-        Task {
-            await store.refresh(providerID: descriptor.id, allowBrowserCookieImport: allowBrowserCookieImport, isManual: true)
-        }
-    }
-
-    @discardableResult
-    private func save() -> Bool {
-        if let credentialReadError {
-            saveMessage = copy.text(
-                "凭据读取失败，请重新打开此 Provider 设置后再保存：\(credentialReadError)",
-                "Credentials could not be read. Reopen this provider's settings before saving: \(credentialReadError)"
-            )
-            return false
-        }
-        do {
-            try store.preferences.validateConfiguration()
-            if descriptor.id.rawValue == "moonshot" {
-                configuration.endpoint = secret.isEmpty ? "" : configuration.account
-            }
-            try store.preferences.setSecret(secret, for: descriptor.id)
-            if descriptor.id.rawValue == "openrouter" {
-                try store.preferences.setAuxiliarySecret(
-                    managementSecret,
-                    for: descriptor.id,
-                    key: "management-api-key"
-                )
-            }
-            if descriptor.id.rawValue == "doubao" {
-                try store.preferences.setAuxiliarySecret(
-                    secondarySecret,
-                    for: descriptor.id,
-                    key: "secret-access-key"
-                )
-            }
-            if descriptor.id.rawValue == "futureagi" {
-                try store.preferences.setAuxiliarySecret(
-                    secondarySecret,
-                    for: descriptor.id,
-                    key: "secret-key"
-                )
-            }
-            if descriptor.id.rawValue == "bedrock" {
-                try store.preferences.setAuxiliarySecret(
-                    secondarySecret,
-                    for: descriptor.id,
-                    key: "secret-access-key"
-                )
-                try store.preferences.setAuxiliarySecret(
-                    bedrockProfile,
-                    for: descriptor.id,
-                    key: "aws-profile"
-                )
-                try store.preferences.setAuxiliarySecret(
-                    bedrockRegion,
-                    for: descriptor.id,
-                    key: "aws-region"
-                )
-                try store.preferences.setAuxiliarySecret(
-                    bedrockAuthMode,
-                    for: descriptor.id,
-                    key: "aws-auth-mode"
-                )
-            }
-            if descriptor.id.rawValue == "stepfun" {
-                try store.preferences.setAuxiliarySecret(
-                    stepFunManualToken,
-                    for: descriptor.id,
-                    key: "manual-token"
-                )
-            }
-            store.preferences.update(configuration)
-            saveMessage = copy.text("已保存", "Saved")
-            return true
-        } catch {
-            saveMessage = error.localizedDescription
-            return false
-        }
-    }
-
-    private var authenticationSecret: Binding<String> {
-        descriptor.id.rawValue == "stepfun" && configuration.source == .token
-            ? $stepFunManualToken
-            : $secret
-    }
-
-    private func stateText(_ state: ProviderUsage.State) -> String {
-        switch state {
-        case .ready: copy.text("可用", "Available")
-        case .loading: copy.text("读取中", "Loading")
-        case .unavailable: copy.text("缓存数据", "Cached data")
-        case .failed: copy.text("读取失败", "Failed")
-        }
-    }
-
-    private func statusColor(_ state: ProviderUsage.State) -> Color {
-        switch state {
-        case .ready: SettingsPalette.green
-        case .loading: SettingsPalette.blue
-        case .unavailable: SettingsPalette.orange
-        case .failed: SettingsPalette.red
-        }
-    }
-}
-
-private struct SettingsLabeledRow<Content: View>: View {
-    let title: String
-    @ViewBuilder let content: Content
-
-    init(title: String, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.content = content()
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Text(title)
-                .font(.system(size: 12.5, weight: .semibold))
-            Spacer()
-            content
-        }
-    }
-}
-
-private struct SettingsTextField: View {
-    let title: String
-    @Binding var text: String
-
-    var body: some View {
-        TextField(title, text: $text)
-            .textFieldStyle(.plain)
-            .padding(.horizontal, 11)
-            .padding(.vertical, 9)
-            .background(SettingsPalette.inset)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-}
-
 private struct AboutSettingsView: View {
     @ObservedObject var updateController: UpdateController
     @ObservedObject var store: UsageStore
     @State private var copied = false
     @Environment(\.appLanguage) private var language
-
     private var copy: AppCopy { AppCopy(language: language) }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
+        SettingsScrollablePage {
+            VStack(spacing: SettingsSpace.lg) {
                 Image(nsImage: NSApp.applicationIconImage)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
-                    .frame(width: 88, height: 88)
-
-                VStack(spacing: 5) {
-                    Text("CodeEdge")
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .resizable().interpolation(.high).scaledToFit()
+                    .frame(width: 96, height: 96)
+                    .accessibilityHidden(true)
+                VStack(spacing: SettingsSpace.xs) {
+                    Text("CodeEdge").font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(CodeEdgeSettingsTheme.primaryText)
                     Text(copy.text("跨 Provider 用量一览", "Usage across all your providers"))
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(SettingsPalette.tertiary)
-                    Text(versionText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(SettingsPalette.tertiary)
+                    Text(versionText).monospacedDigit()
                 }
+                .font(.callout)
+                .foregroundStyle(CodeEdgeSettingsTheme.secondaryText)
                 .multilineTextAlignment(.center)
-
-                HStack(spacing: 10) {
-                    Button {
-                        updateController.checkForUpdates()
-                    } label: {
-                        Label(copy.text("检查更新", "Check for Updates"), systemImage: "arrow.clockwise")
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(SettingsPalette.primary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(SettingsPalette.control)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                HStack(spacing: SettingsSpace.sm) {
+                    Button { updateController.checkForUpdates() } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                            Text(copy.text("检查更新", "Check for Updates"))
+                        }
                     }
-                    .buttonStyle(SettingsPressButtonStyle())
                     .disabled(!updateController.canCheckForUpdates)
-
-                    Button {
-                        NSApp.terminate(nil)
-                    } label: {
-                        Label(copy.text("退出 CodeEdge", "Quit CodeEdge"), systemImage: "power")
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(SettingsPalette.red)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(SettingsPalette.control)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    Button(role: .destructive) { NSApp.terminate(nil) } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "power")
+                            Text(copy.text("退出 CodeEdge", "Quit CodeEdge"))
+                        }
                     }
-                    .buttonStyle(SettingsPressButtonStyle())
                 }
-                SettingsCard(copy.text("诊断", "Diagnostics")) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(store.enabledProviders) { descriptor in
-                            TimelineView(.periodic(from: .now, by: 60)) { context in
-                                let backoff = store.backoffDescription(for: descriptor.id, now: context.date, language: language)
-                                Group {
-                                    if let result = DiagnosticLog.shared.latestResult(for: descriptor.id) {
-                                        Text(diagnosticLine(provider: descriptor.name, result: result, now: context.date))
-                                            .foregroundStyle(result.outcome == .success && backoff == nil ? SettingsPalette.secondary : SettingsPalette.orange)
-                                            .help(diagnosticLine(provider: descriptor.name, result: result, now: context.date))
-                                    } else {
-                                        Text(descriptor.name + " · " + (backoff ?? copy.text("等待首次刷新", "Waiting for the first refresh")))
-                                            .foregroundStyle(backoff == nil ? SettingsPalette.tertiary : SettingsPalette.orange)
-                                    }
+                CodeEdgeFormSection(title: copy.text("诊断", "Diagnostics")) {
+                    ForEach(store.enabledProviders) { descriptor in
+                        TimelineView(.periodic(from: .now, by: 60)) { context in
+                            let backoff = store.backoffDescription(for: descriptor.id, now: context.date, language: language)
+                            Group {
+                                if let result = DiagnosticLog.shared.latestResult(for: descriptor.id) {
+                                    Text(diagnosticLine(provider: descriptor.name, result: result, now: context.date))
+                                        .foregroundStyle(result.outcome == .success && backoff == nil ? CodeEdgeSettingsTheme.secondaryText : CodeEdgeSettingsTheme.warning)
+                                        .help(diagnosticLine(provider: descriptor.name, result: result, now: context.date))
+                                } else {
+                                    Text(descriptor.name + " · " + (backoff ?? copy.text("等待首次刷新", "Waiting for the first refresh")))
+                                        .foregroundStyle(backoff == nil ? CodeEdgeSettingsTheme.tertiaryText : CodeEdgeSettingsTheme.warning)
                                 }
                             }
-                            .lineLimit(1)
-                            .truncationMode(.tail)
                             .font(.system(size: 12))
+                            .fixedSize(horizontal: false, vertical: true)
                         }
-                        HStack(spacing: 12) {
-                            Button {
-                                NSPasteboard.general.clearContents()
-                                let limits = store.enabledProviders.compactMap { provider in
-                                    store.backoffDescription(for: provider.id, language: language).map { provider.name + ": " + $0 }
-                                }
-                                let report = DiagnosticLog.shared.report(enabledProviders: store.enabledProviders)
-                                    + (limits.isEmpty ? "" : "\n" + limits.joined(separator: "\n"))
-                                copied = NSPasteboard.general.setString(DiagnosticsRedactor.redact(report), forType: .string)
-                            } label: {
-                                Label(copied ? copy.text("已复制", "Copied") : copy.text("复制诊断信息", "Copy diagnostics"), systemImage: "doc.on.doc")
-                                    .font(.system(size: 12.5, weight: .semibold))
-                                    .foregroundStyle(SettingsPalette.primary)
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 8)
-                                    .background(SettingsPalette.control)
-                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            }
-                            .buttonStyle(SettingsPressButtonStyle())
-                            Button {
-                                let directory = DiagnosticLog.shared.directoryURL
-                                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                                NSWorkspace.shared.open(directory)
-                            } label: {
-                                Label(copy.text("打开日志文件夹", "Open log folder"), systemImage: "folder")
-                                    .font(.system(size: 12.5, weight: .semibold))
-                                    .foregroundStyle(SettingsPalette.primary)
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 8)
-                                    .background(SettingsPalette.control)
-                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            }
-                            .buttonStyle(SettingsPressButtonStyle())
-                        }
-                        Text(copy.text("仅包含应用、系统、刷新状态和脱敏日志。", "Includes app, system, refresh status and redacted logs only."))
-                            .font(.system(size: 11))
-                            .foregroundStyle(SettingsPalette.tertiary)
                     }
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: SettingsSpace.sm) { diagnosticActions }
+                        VStack(alignment: .leading, spacing: SettingsSpace.sm) { diagnosticActions }
+                    }
+                } footer: {
+                    Text(copy.text("仅包含应用、系统、刷新状态和脱敏日志。", "Includes app, system, refresh status and redacted logs only."))
                 }
             }
-            .padding(4)
-            .frame(maxWidth: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, SettingsSpace.xl)
+            .padding(.vertical, SettingsSpace.section)
         }
     }
 
+    @ViewBuilder private var diagnosticActions: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            let limits = store.enabledProviders.compactMap { provider in
+                store.backoffDescription(for: provider.id, language: language).map { provider.name + ": " + $0 }
+            }
+            let report = DiagnosticLog.shared.report(enabledProviders: store.enabledProviders)
+                + (limits.isEmpty ? "" : "\n" + limits.joined(separator: "\n"))
+            copied = NSPasteboard.general.setString(DiagnosticsRedactor.redact(report), forType: .string)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "doc.on.doc")
+                Text(copied ? copy.text("已复制", "Copied") : copy.text("复制诊断信息", "Copy diagnostics"))
+            }
+        }
+        Button {
+            let directory = DiagnosticLog.shared.directoryURL
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            NSWorkspace.shared.open(directory)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "folder")
+                Text(copy.text("打开日志文件夹", "Open log folder"))
+            }
+        }
+    }
     private func diagnosticLine(provider: String, result: ProviderDiagnosticResult, now: Date) -> String {
         let outcome = result.outcome == .success ? copy.text("成功", "Success") : copy.text("失败", "Failed")
         let time = result.date.formatted(.dateTime.hour().minute().locale(language.locale))
