@@ -177,7 +177,7 @@ struct GrokUsageTests {
                 """#.utf8))
             })
         #expect(usage.windows.count == 1)
-        #expect(usage.windows[0].label == "Monthly")
+        #expect(usage.windows[0].label == AppLocalization.text("每月", "Monthly"))
         #expect(usage.windows[0].usedFraction == 0.5)
         #expect(recorder.requests.isEmpty)
     }
