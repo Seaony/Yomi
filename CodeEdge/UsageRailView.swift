@@ -113,7 +113,7 @@ struct UsageRailView: View {
                                 usage: descriptor.id == ProviderCatalog.overview.id
                                     ? store.overviewUsage
                                     : store.usage(for: descriptor.id),
-                                refreshInterval: { store.currentRefreshInterval },
+                                refreshInterval: { store.freshnessRefreshInterval },
                                 animationDelay: Double(index) * 0.045,
                                 showName: showProviderNames,
                                 hoverChanged: { hovering in
@@ -121,6 +121,7 @@ struct UsageRailView: View {
                                         hideProviderDetail(descriptor.id)
                                         return
                                     }
+                                    store.noteInteraction()
                                     let rowHeight = UsageRailLayout.scaled(
                                         showProviderNames ? 101 : 84
                                     )

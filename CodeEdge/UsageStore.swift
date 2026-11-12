@@ -14,8 +14,20 @@ final class UsageStore: ObservableObject {
     let serviceStatusMonitor: ProviderServiceStatusMonitor
     private let collector: any UsageCollecting
     private let defaults: UserDefaults
+    private let now: () -> Date
+    private let powerState: () -> (lowPower: Bool, thermal: ProcessInfo.ThermalState)
     private let cacheKey = "usage-cache.v3"
     private var refreshLoop: Task<Void, Never>?
+    private var isStarted = false
+    private var refreshSettingsObserver: AnyCancellable?
+    private var powerStateObservers: [AnyCancellable] = []
+    private var observedRefreshInterval: TimeInterval?
+    private var codingActivityMonitor: CodingActivityMonitor?
+    private(set) var lastRefreshAt: Date?
+    private(set) var nextRefreshAt: Date?
+    private(set) var scheduledRefreshInterval: TimeInterval?
+    private(set) var lastInteractionAt: Date?
+    private(set) var lastCodingActivityAt: Date?
     private var deadlineRefreshTask: Task<Void, Never>?
     private var attemptedResetBoundaries: Set<ResetBoundaryRefreshPolicy.Boundary> = []
     private var lastResetTriggeredAtByProvider: [ProviderID: Date] = [:]
@@ -49,11 +61,17 @@ final class UsageStore: ObservableObject {
         preferences: ProviderPreferences? = nil,
         collector: any UsageCollecting = UsageCollector(),
         defaults: UserDefaults = .standard,
-        serviceStatusMonitor: ProviderServiceStatusMonitor? = nil
+        serviceStatusMonitor: ProviderServiceStatusMonitor? = nil,
+        now: @escaping () -> Date = Date.init,
+        powerState: @escaping () -> (lowPower: Bool, thermal: ProcessInfo.ThermalState) = {
+            (ProcessInfo.processInfo.isLowPowerModeEnabled, ProcessInfo.processInfo.thermalState)
+        }
     ) {
         self.preferences = preferences ?? .shared
         self.collector = collector
         self.defaults = defaults
+        self.now = now
+        self.powerState = powerState
         self.notifications = QuotaNotificationController(defaults: defaults)
         self.serviceStatusMonitor = serviceStatusMonitor ?? ProviderServiceStatusMonitor(defaults: defaults)
         backoffByID = defaults.data(forKey: backoffKey).flatMap {
@@ -94,7 +112,26 @@ final class UsageStore: ObservableObject {
     #endif
 
     var currentRefreshInterval: TimeInterval {
-        max(60, defaults.object(forKey: "refresh-interval") as? Double ?? 300)
+        let selected = defaults.double(forKey: "refresh-interval")
+        return selected == 0 ? 0 : max(60, selected)
+    }
+
+    var freshnessRefreshInterval: TimeInterval {
+        UsageFreshness.refreshInterval(for: currentRefreshInterval)
+    }
+
+    var serviceStatusRefreshInterval: TimeInterval {
+        currentRefreshInterval == 0 ? AdaptiveRefreshPolicy.nominalIntervalForHeuristics : currentRefreshInterval
+    }
+
+    func noteInteraction(at date: Date = Date()) {
+        lastInteractionAt = date
+        rescheduleRefresh(onlyIfShorter: true)
+    }
+
+    func noteCodingActivity(at date: Date = Date()) {
+        lastCodingActivityAt = date
+        rescheduleRefresh(onlyIfShorter: true)
     }
 
     func serviceStatus(for id: ProviderID) -> ProviderServiceStatus? {
@@ -109,19 +146,86 @@ final class UsageStore: ObservableObject {
     }
 
     func start() {
-        guard refreshLoop == nil else { return }
+        guard !isStarted else { return }
+        isStarted = true
+        observedRefreshInterval = currentRefreshInterval
+        refreshSettingsObserver = NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, self.observedRefreshInterval != self.currentRefreshInterval else { return }
+                self.observedRefreshInterval = self.currentRefreshInterval
+                self.synchronizeCodingActivityMonitor()
+                self.objectWillChange.send()
+                self.rescheduleRefresh(force: true)
+            }
+        powerStateObservers = [Notification.Name.NSProcessInfoPowerStateDidChange, ProcessInfo.thermalStateDidChangeNotification].map { name in
+            NotificationCenter.default.publisher(for: name)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in self?.rescheduleRefresh() }
+        }
+        synchronizeCodingActivityMonitor()
         serviceStatusMonitor.start(
             providerIDs: { [weak self] in self?.enabledProviders.map(\.id) ?? [] },
-            usageInterval: { [weak self] in self?.currentRefreshInterval ?? 300 }
+            usageInterval: { [weak self] in self?.serviceStatusRefreshInterval ?? 300 }
         )
-        refreshLoop = Task { [weak self] in
-            await self?.refresh()
-            while !Task.isCancelled {
-                let resolvedInterval = self?.currentRefreshInterval ?? 300
-                try? await Task.sleep(for: .seconds(resolvedInterval), tolerance: .seconds(20))
-                guard !Task.isCancelled else { break }
-                await self?.refresh()
+        Task { [weak self] in await self?.refresh() }
+    }
+
+    private func synchronizeCodingActivityMonitor() {
+        if currentRefreshInterval == 0 {
+            if codingActivityMonitor == nil {
+                codingActivityMonitor = CodingActivityMonitor { [weak self] date in
+                    self?.noteCodingActivity(at: date)
+                }
             }
+            codingActivityMonitor?.start()
+        } else {
+            codingActivityMonitor?.stop()
+            codingActivityMonitor = nil
+        }
+    }
+
+    private func rescheduleRefresh(force: Bool = false, onlyIfShorter: Bool = false) {
+        guard isStarted, !isRefreshing, let lastRefreshAt else { return }
+        let date = now()
+        let selected = currentRefreshInterval
+        let decision: AdaptiveRefreshPolicy.Decision?
+        if selected == 0 {
+            let power = powerState()
+            decision = AdaptiveRefreshPolicy().nextDelay(for: .init(
+                now: date, lastInteractionAt: lastInteractionAt, lastCodingActivityAt: lastCodingActivityAt,
+                lowPowerModeEnabled: power.lowPower, thermalState: power.thermal
+            ))
+        } else {
+            decision = nil
+        }
+        let interval = decision?.interval ?? selected
+        if let scheduledRefreshInterval, nextRefreshAt != nil, !force {
+            if interval == scheduledRefreshInterval { return }
+            if onlyIfShorter, interval > scheduledRefreshInterval { return }
+        }
+        refreshLoop?.cancel()
+        let deadline = lastRefreshAt.addingTimeInterval(interval)
+        let delay = max(0, deadline.timeIntervalSince(date))
+        scheduledRefreshInterval = interval
+        nextRefreshAt = deadline
+        let mode = decision.map { decision in
+            // 长单词会被通用脱敏规则当作凭据，排期原因用短名称。
+            let reason: String
+            switch decision.reason {
+            case .recentInteraction: reason = "recent"
+            case .codingActivity: reason = "coding"
+            default: reason = decision.reason.rawValue
+            }
+            return "mode=auto reason=\(reason)"
+        } ?? "mode=fixed"
+        DiagnosticLog.shared.write("\(mode) delay=\(Int(ceil(delay)))s", category: .refresh)
+        refreshLoop = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(delay), tolerance: .seconds(20)) } catch { return }
+            guard let self, !Task.isCancelled else { return }
+            self.refreshLoop = nil
+            self.nextRefreshAt = nil
+            await self.refresh()
         }
     }
 
@@ -172,6 +276,7 @@ final class UsageStore: ObservableObject {
     }
 
     func refresh(providerID: ProviderID? = nil, allowBrowserCookieImport: Bool = false, isManual: Bool = false) async {
+        if isManual || allowBrowserCookieImport { lastInteractionAt = now() }
         let request = RefreshRequest(providerID: providerID, allowBrowserCookieImport: allowBrowserCookieImport,
                                      isManual: isManual || allowBrowserCookieImport)
         await refresh(request)
@@ -183,10 +288,24 @@ final class UsageStore: ObservableObject {
             return
         }
         isRefreshing = true
-        defer { isRefreshing = false }
+        var resetsPeriodicSchedule = false
+        defer {
+            isRefreshing = false
+            if resetsPeriodicSchedule {
+                lastRefreshAt = now()
+                refreshLoop?.cancel()
+                refreshLoop = nil
+                nextRefreshAt = nil
+            }
+            rescheduleRefresh()
+        }
 
         var nextRequest: RefreshRequest? = request
         while let currentRequest = nextRequest {
+            // 自动模式手动刷过单张卡片后，从这次完成时间排，避免马上又全量请求一次。
+            if currentRequest.providerID == nil || (currentRequest.isManual && currentRefreshInterval == 0) {
+                resetsPeriodicSchedule = true
+            }
             let scope = BrowserCookieAccess.Scope(allowInteraction: currentRequest.allowBrowserCookieImport)
             await BrowserCookieAccess.$scope.withValue(scope) {
                 await performRefresh(

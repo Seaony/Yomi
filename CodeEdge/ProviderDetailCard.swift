@@ -633,7 +633,7 @@ struct ProviderDetailPanelView: View {
                 : store.usage(for: presentation.descriptor.id),
             transitionDirection: presentation.direction,
             isRefreshing: store.isRefreshing,
-            refreshInterval: { store.currentRefreshInterval },
+            refreshInterval: { store.freshnessRefreshInterval },
             refresh: {
                 let providerID = presentation.descriptor.id
                 Task {

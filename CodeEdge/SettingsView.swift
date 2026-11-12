@@ -83,7 +83,7 @@ private struct SettingsScrollablePage<Content: View>: View {
 
 private struct GeneralSettingsView: View {
     @ObservedObject private var appPreferences = AppPreferences.shared
-    @AppStorage("refresh-interval") private var refreshInterval = 300.0
+    @AppStorage("refresh-interval") private var refreshInterval = 0.0
     @AppStorage("show-provider-names") private var showProviderNames = true
     @AppStorage(FullscreenCollapsePolicy.settingKey) private var collapseInFullscreen = FullscreenCollapsePolicy.defaultEnabled
     @AppStorage(ProviderServiceStatusMonitor.settingKey) private var showServiceIncidents = ProviderServiceStatusMonitor.defaultEnabled
@@ -151,16 +151,29 @@ private struct GeneralSettingsView: View {
                 .onChange(of: appPreferences.railBackgroundColorHex) { _, value in railBackgroundHex = value ?? "" }
 
                 CodeEdgeFormSection(title: copy.text("刷新", "Refresh")) {
-                    CodeEdgeSideRow(copy.text("刷新间隔", "Refresh interval")) {
-                        CodeEdgeChoiceButtons(
-                            options: [60.0, 300, 900, 1_800], selection: $refreshInterval,
-                            title: { interval in
-                                let minutes = Int(interval / 60)
-                                return copy.text("\(minutes) 分钟", "\(minutes) min")
-                            }, symbol: { _ in nil }
-                        )
-                        .accessibilityElement(children: .contain)
-                        .accessibilityLabel(copy.text("刷新间隔", "Refresh interval"))
+                    HStack(alignment: .firstTextBaseline, spacing: SettingsSpace.md) {
+                        Text(copy.text("刷新间隔", "Refresh interval"))
+                            .font(.system(size: 13))
+                            .foregroundStyle(CodeEdgeSettingsTheme.primaryText)
+                        Spacer(minLength: 0)
+                        VStack(alignment: .leading, spacing: SettingsSpace.xs) {
+                            CodeEdgeChoiceButtons(
+                                options: [0.0, 60, 300, 900, 1_800], selection: $refreshInterval,
+                                title: { interval in
+                                    if interval == 0 { return copy.text("自动", "Auto") }
+                                    let minutes = Int(interval / 60)
+                                    return copy.text("\(minutes) 分钟", "\(minutes) min")
+                                }, symbol: { _ in nil }
+                            )
+                            .accessibilityElement(children: .contain)
+                            .accessibilityLabel(copy.text("刷新间隔", "Refresh interval"))
+                            if refreshInterval == 0 {
+                                Text(copy.text("常看时 2 分钟刷新一次，闲置时最慢 30 分钟", "Every 2 min while you're looking, up to 30 min when idle"))
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(CodeEdgeSettingsTheme.secondaryText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                     }
                 }
 

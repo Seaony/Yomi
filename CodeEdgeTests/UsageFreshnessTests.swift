@@ -25,6 +25,16 @@ struct UsageFreshnessTests {
     }
 
     @Test
+    func automaticModeKeepsTwentyMinuteOldDataFreshWhenActivityResumes() {
+        let updatedAt = now.addingTimeInterval(-20 * 60)
+        #expect(UsageFreshness.refreshInterval(for: 0) == 1800)
+        #expect(!UsageFreshness.isStale(updatedAt: updatedAt, refreshInterval: 0, now: now))
+        #expect(!UsageFreshness.shouldDim(usage: usage(state: .ready, updatedAt: updatedAt),
+                                         refreshInterval: 0, now: now))
+        #expect(UsageFreshness.isStale(updatedAt: now.addingTimeInterval(-3601), refreshInterval: 0, now: now))
+    }
+
+    @Test
     func absentOrFutureTimestampIsNotStale() {
         #expect(!UsageFreshness.isStale(updatedAt: nil, refreshInterval: 300, now: now))
         #expect(!UsageFreshness.isStale(updatedAt: now.addingTimeInterval(60), refreshInterval: 300, now: now))

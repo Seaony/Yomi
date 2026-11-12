@@ -1347,7 +1347,7 @@ actor LocalDailyUsageScanner {
         return homeDirectory.appending(path: ".codex", directoryHint: .isDirectory)
     }
 
-    private static func codexSessionRoots(homeDirectory: URL) -> [URL] {
+    static func codexSessionRoots(homeDirectory: URL) -> [URL] {
         let codexHome = codexHomeDirectory(homeDirectory: homeDirectory)
         return [
             codexHome.appending(path: "sessions", directoryHint: .isDirectory),
@@ -1355,7 +1355,7 @@ actor LocalDailyUsageScanner {
         ]
     }
 
-    private static func claudeProjectRoots(homeDirectory: URL) -> [URL] {
+    static func claudeProjectRoots(homeDirectory: URL) -> [URL] {
         let environment = ProcessInfo.processInfo.environment
         if let configured = environment["CLAUDE_CONFIG_DIR"], !configured.isEmpty {
             let root = configured.hasPrefix("/")

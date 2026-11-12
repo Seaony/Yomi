@@ -20,12 +20,16 @@ struct UsageStoreBackoffTests {
     }
 
     @Test
-    func preservesExistingFixedIntervalsAndFiveMinuteDefault() throws {
+    func preservesExistingFixedIntervalsAndDefaultsToAutomatic() throws {
         let name = "adaptive-store-\(UUID().uuidString)"
         let defaults = try #require(TestUserDefaults(suiteName: name))
         defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: name) }
         let store = UsageStore(preferences: ProviderPreferences(defaults: defaults), defaults: defaults)
-        #expect(store.currentRefreshInterval == 300)
+        #expect(store.currentRefreshInterval == 0)
+        #expect(store.freshnessRefreshInterval == 1800)
+        #expect(store.serviceStatusRefreshInterval == 300)
+        defaults.set(0, forKey: "refresh-interval")
+        #expect(store.currentRefreshInterval == 0)
         for interval in [60.0, 300, 900, 1800] {
             defaults.set(interval, forKey: "refresh-interval")
             #expect(store.currentRefreshInterval == interval)

@@ -1,13 +1,17 @@
 import Foundation
 
 nonisolated enum UsageFreshness {
+    static func refreshInterval(for selectedInterval: TimeInterval) -> TimeInterval {
+        selectedInterval == 0 ? 1800 : selectedInterval
+    }
+
     static func isStale(
         updatedAt: Date?,
         refreshInterval: TimeInterval,
         now: Date = Date()
     ) -> Bool {
         guard let updatedAt else { return false }
-        return now.timeIntervalSince(updatedAt) > max(15 * 60, 2 * refreshInterval)
+        return now.timeIntervalSince(updatedAt) > max(15 * 60, 2 * Self.refreshInterval(for: refreshInterval))
     }
 
     static func shouldDim(
