@@ -26,12 +26,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var railPresentationTarget = false
     private var isTerminating = false
     private var providerDetailPanel: ProviderDetailPanel?
-    private var providerDetailHostingView: NSHostingView<ProviderDetailPanelView>?
     private var providerDetailPresentation: ProviderDetailPresentation?
     private var selectedProviderID: ProviderID?
     private var selectedProviderLocalY: CGFloat?
     private var providerDetailCloseTask: Task<Void, Never>?
-    private var providerDetailSizeObserver: AnyCancellable?
+    private var providerDetailResizeTask: Task<Void, Never>?
     private var appearanceObserver: AnyCancellable?
     private var settingsWindow: NSWindow?
     private var dailyBillPanel: NSPanel?
@@ -61,12 +60,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         createPanel()
         startFullscreenRailController()
         store.start()
-        providerDetailSizeObserver = store.objectWillChange.sink { [weak self] _ in
-            Task { @MainActor [weak self] in
-                await Task.yield()
-                self?.updateProviderDetailFrame(animated: true)
-            }
-        }
 
         NotificationCenter.default.addObserver(
             self,
@@ -88,7 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         revealStripPanel?.orderOut(nil)
         store.serviceStatusMonitor.stop()
         providerDetailCloseTask?.cancel()
-        providerDetailSizeObserver = nil
+        providerDetailResizeTask?.cancel()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -370,7 +363,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let panel else { return }
 
         if let detailPanel = providerDetailPanel,
-           let hostingView = providerDetailHostingView,
            let presentation = providerDetailPresentation,
            detailPanel.isVisible {
             let direction = ProviderDetailTransitionDirection(
@@ -382,45 +374,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 direction: direction,
                 animated: animationDuration(1) > 0
             )
-            hostingView.layoutSubtreeIfNeeded()
-            let finalFrame = providerDetailFrame(
-                fittingSize: hostingView.fittingSize,
-                localY: localY,
-                panel: panel
-            )
             selectedProviderID = descriptor.id
             selectedProviderLocalY = localY
-
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = animationDuration(0.14)
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                detailPanel.animator().setFrame(finalFrame, display: true)
-            }
+            updateProviderDetailFrame(animated: true)
             return
         }
 
         closeProviderDetail()
         let presentation = ProviderDetailPresentation(descriptor: descriptor)
+        providerDetailPresentation = presentation
         let root = ProviderDetailPanelView(
             store: store,
             presentation: presentation,
             railSide: railSide,
             openDailyBill: { [weak self] in self?.openDailyBill() }
         )
-        let hostingView = NSHostingView(rootView: root)
-        let fittingSize = hostingView.fittingSize
+        let detailPanel = ProviderDetailPanel(rootView: root) { [weak self] size in
+            self?.scheduleProviderDetailResize(to: size, for: presentation)
+        }
         let finalFrame = providerDetailFrame(
-            fittingSize: fittingSize,
+            contentSize: detailPanel.frame.size,
             localY: localY,
             panel: panel
         )
-        let detailPanel = ProviderDetailPanel(
-            contentRect: NSRect(origin: .zero, size: fittingSize),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        detailPanel.contentView = hostingView
         detailPanel.isOpaque = false
         detailPanel.backgroundColor = .clear
         detailPanel.hasShadow = false
@@ -433,8 +409,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         detailPanel.setFrame(finalFrame, display: false)
 
         self.providerDetailPanel = detailPanel
-        providerDetailHostingView = hostingView
-        providerDetailPresentation = presentation
         selectedProviderID = descriptor.id
         selectedProviderLocalY = localY
         fullscreenRailController?.updatePointerState()
@@ -449,7 +423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func providerDetailFrame(
-        fittingSize: NSSize,
+        contentSize: NSSize,
         localY: CGFloat,
         panel: FloatingPanel
     ) -> NSRect {
@@ -458,10 +432,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let minimumY = visibleFrame.minY + ProviderDetailLayout.screenMargin - padding
         let maximumY = max(
             minimumY,
-            visibleFrame.maxY - fittingSize.height - ProviderDetailLayout.screenMargin + padding
+            visibleFrame.maxY - contentSize.height - ProviderDetailLayout.screenMargin + padding
         )
         let anchorY = panel.frame.maxY - localY
-        let proposedY = anchorY - fittingSize.height / 2
+        let proposedY = anchorY - contentSize.height / 2
         let x = switch railSide {
         case .left:
             panel.frame.maxX
@@ -469,49 +443,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 - padding
         case .right:
             panel.frame.minX
-                - fittingSize.width
+                - contentSize.width
                 + padding
                 - ProviderDetailLayout.railGap
         }
         return NSRect(
             x: x,
             y: min(max(proposedY, minimumY), maximumY),
-            width: fittingSize.width,
-            height: fittingSize.height
+            width: contentSize.width,
+            height: contentSize.height
         )
     }
 
-    private func updateProviderDetailFrame(animated: Bool) {
+    private func scheduleProviderDetailResize(to size: NSSize, for presentation: ProviderDetailPresentation) {
+        guard !isTerminating, providerDetailPresentation === presentation else { return }
+        providerDetailResizeTask?.cancel()
+        // 尺寸来自 SwiftUI 的布局回调，等这一轮布局结束再调整窗口。
+        providerDetailResizeTask = Task { @MainActor [weak self] in
+            guard let self, !Task.isCancelled else { return }
+            self.providerDetailResizeTask = nil
+            self.updateProviderDetailFrame(contentSize: size, animated: false)
+        }
+    }
+
+    private func updateProviderDetailFrame(contentSize: NSSize? = nil, animated: Bool) {
         guard let panel,
               let detailPanel = providerDetailPanel,
               detailPanel.isVisible,
-              let hostingView = providerDetailHostingView,
               let localY = selectedProviderLocalY
         else { return }
-        hostingView.layoutSubtreeIfNeeded()
         let frame = providerDetailFrame(
-            fittingSize: hostingView.fittingSize,
+            contentSize: contentSize ?? detailPanel.frame.size,
             localY: localY,
             panel: panel
         )
-        guard !detailPanel.frame.equalTo(frame) else { return }
-        if animated {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = animationDuration(0.14)
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                detailPanel.animator().setFrame(frame, display: true)
-            }
-        } else {
-            detailPanel.setFrame(frame, display: true)
-        }
+        detailPanel.updateFrame(frame, duration: animated ? animationDuration(0.14) : 0)
     }
 
     private func closeProviderDetail() {
         providerDetailCloseTask?.cancel()
         providerDetailCloseTask = nil
+        providerDetailResizeTask?.cancel()
+        providerDetailResizeTask = nil
         guard let detailPanel = providerDetailPanel else { return }
         providerDetailPanel = nil
-        providerDetailHostingView = nil
         providerDetailPresentation = nil
         selectedProviderID = nil
         selectedProviderLocalY = nil
@@ -789,6 +764,36 @@ final class FloatingPanel: NSPanel {
 }
 
 final class ProviderDetailPanel: NSPanel {
+    init(rootView: some View, contentSizeChanged: @escaping (NSSize) -> Void) {
+        let content = rootView
+            .fixedSize()
+            .onGeometryChange(for: NSSize.self) { $0.size } action: { contentSizeChanged($0) }
+        let hostingView = NSHostingView(rootView: content)
+        let contentRect = NSRect(origin: .zero, size: hostingView.fittingSize)
+        super.init(
+            contentRect: contentRect,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        // 由 AppKit 调整窗口尺寸，SwiftUI 内容只随容器铺开。
+        hostingView.sizingOptions = []
+        let container = NSView(frame: contentRect)
+        hostingView.frame = container.bounds
+        hostingView.autoresizingMask = [.width, .height]
+        container.addSubview(hostingView)
+        contentView = container
+    }
+
+    func updateFrame(_ frame: NSRect, duration: TimeInterval) {
+        // 两种更新都走同一个动画属性，新尺寸能立即替换尚未完成的位置动画。
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animator().setFrame(frame, display: true)
+        }
+    }
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 }
