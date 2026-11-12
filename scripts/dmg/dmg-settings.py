@@ -4,6 +4,8 @@
 # 窗口尺寸和图标位置必须和 render-background.swift 保持一致。
 
 import os
+import subprocess
+import tempfile
 
 # defines 由 dmgbuild 注入；它执行配置时没有 __file__，背景图按仓库根目录找。
 app_path = defines["app"]  # noqa: F821
@@ -15,10 +17,18 @@ filesystem = "HFS+"
 files = [app_path]
 symlinks = {"Applications": "/Applications"}
 
-# 挂载后的卷图标沿用应用图标。
-volume_icon = os.path.join(app_path, "Contents/Resources/AppIcon.icns")
-if os.path.exists(volume_icon):
-    icon = volume_icon
+# 挂载后的卷图标：应用图标是满版方块，先裁成标准圆角再用，否则桌面上显示成正方形。
+# 用仓库里 1024 的原图；编进 App 的 AppIcon.icns 最大只有 256，放大会糊。
+icon = os.path.join(tempfile.mkdtemp(), "VolumeIcon.icns")
+subprocess.run(
+    [
+        "swift",
+        os.path.join(settings_dir, "render-volume-icon.swift"),
+        "CodeEdge/Assets.xcassets/AppIcon.appiconset/icon_512x512@2x.png",
+        icon,
+    ],
+    check=True,
+)
 
 background = os.path.join(settings_dir, "background.png")
 window_rect = ((200, 160), (660, 400))

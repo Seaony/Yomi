@@ -45,6 +45,7 @@ DMG 的外观由 `scripts/dmg/` 决定：
 
 - `dmg-settings.py`：窗口大小、隐藏工具栏和侧边栏、图标大小和位置、卷图标。
 - `background.png` / `background@2x.png`：窗口背景，由 `render-background.swift` 生成，打包时自动合成 Retina 背景。
+- `render-volume-icon.swift`：打包时自动运行，把仓库里 1024 的满版 App 图标裁成标准圆角，作为挂载后的卷图标。直接用 App 里的 `AppIcon.icns` 会显示成方块，而且它最大只有 256，会糊。
 
 改了窗口尺寸或图标位置时，两个文件里的数值要一起改，然后重新生成背景：
 
