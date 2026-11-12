@@ -1879,7 +1879,7 @@ private struct AboutSettingsView: View {
                             .font(.system(size: 12))
                         }
                         HStack(spacing: 12) {
-                            Button(copied ? copy.text("已复制", "Copied") : copy.text("复制诊断信息", "Copy diagnostics")) {
+                            Button {
                                 NSPasteboard.general.clearContents()
                                 let limits = store.enabledProviders.compactMap { provider in
                                     store.backoffDescription(for: provider.id, language: language).map { provider.name + ": " + $0 }
@@ -1887,14 +1887,31 @@ private struct AboutSettingsView: View {
                                 let report = DiagnosticLog.shared.report(enabledProviders: store.enabledProviders)
                                     + (limits.isEmpty ? "" : "\n" + limits.joined(separator: "\n"))
                                 copied = NSPasteboard.general.setString(DiagnosticsRedactor.redact(report), forType: .string)
+                            } label: {
+                                Label(copied ? copy.text("已复制", "Copied") : copy.text("复制诊断信息", "Copy diagnostics"), systemImage: "doc.on.doc")
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                    .foregroundStyle(SettingsPalette.primary)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 8)
+                                    .background(SettingsPalette.control)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             }
-                            Button(copy.text("打开日志文件夹", "Open log folder")) {
+                            .buttonStyle(SettingsPressButtonStyle())
+                            Button {
                                 let directory = DiagnosticLog.shared.directoryURL
                                 try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                                 NSWorkspace.shared.open(directory)
+                            } label: {
+                                Label(copy.text("打开日志文件夹", "Open log folder"), systemImage: "folder")
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                    .foregroundStyle(SettingsPalette.primary)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 8)
+                                    .background(SettingsPalette.control)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             }
+                            .buttonStyle(SettingsPressButtonStyle())
                         }
-                        .buttonStyle(.bordered)
                         Text(copy.text("仅包含应用、系统、刷新状态和脱敏日志。", "Includes app, system, refresh status and redacted logs only."))
                             .font(.system(size: 11))
                             .foregroundStyle(SettingsPalette.tertiary)

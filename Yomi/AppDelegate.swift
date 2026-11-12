@@ -129,10 +129,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let visible = targetScreen()?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
             let height = min(720, max(420, visible.height - 80))
             let window = NSPanel(
-                contentRect: NSRect(x: visible.midX - 214, y: visible.midY - height / 2, width: 428, height: height),
+                contentRect: NSRect(x: visible.midX - 222, y: visible.midY - height / 2, width: 444, height: height),
                 styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false
             )
-            window.minSize = NSSize(width: 428, height: 420)
+            window.minSize = NSSize(width: 444, height: 420)
             window.level = .floating
             window.hidesOnDeactivate = false
             window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]

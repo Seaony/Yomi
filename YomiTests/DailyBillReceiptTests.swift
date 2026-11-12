@@ -13,7 +13,7 @@ struct DailyBillReceiptTests {
         #expect(Array(png.prefix(8)) == [137, 80, 78, 71, 13, 10, 26, 10])
         #expect(png.count > 1_000)
         let image = try #require(NSBitmapImageRep(data: png))
-        #expect(image.pixelsWide == 760)
+        #expect(image.pixelsWide == 952)
         #expect(image.pixelsHigh > 600)
     }
 
@@ -34,7 +34,7 @@ struct DailyBillReceiptTests {
         let longPNG = try #require(DailyBillImageExporter.pngData(data: bill, language: .english, colorScheme: .dark))
         let longImage = try #require(NSBitmapImageRep(data: longPNG))
         #expect(longImage.pixelsHigh > emptyImage.pixelsHigh + 400)
-        #expect(longImage.pixelsWide == 760)
+        #expect(longImage.pixelsWide == 952)
     }
 
     @Test
@@ -55,8 +55,8 @@ struct DailyBillReceiptTests {
     }
 
     @Test
-    func dailyAverageComparisonUsesOneDecimalAndPlainWords() {
-        #expect(DailyBillReceiptText.dailyAverageComparison(4.284, language: .simplifiedChinese) == "4.3 倍")
+    func dailyAverageComparisonUsesOneDecimalAndTheSameSymbolInBothLanguages() {
+        #expect(DailyBillReceiptText.dailyAverageComparison(4.284, language: .simplifiedChinese) == "4.3×")
         #expect(DailyBillReceiptText.dailyAverageComparison(4.284, language: .english) == "4.3×")
         #expect(DailyBillReceiptText.dailyAverageComparison(1, language: .english) == "1.0×")
     }
@@ -64,11 +64,19 @@ struct DailyBillReceiptTests {
     @Test
     func partialPricesAreMarkedAndFilenameOnlyContainsTheDate() {
         let partial = DailyTokenUsage(tokens: 10, valueUSD: nil, partialValueUSD: 1.25)
-        #expect(DailyBillReceiptText.amount(partial, language: .english) == "At least $1.25")
-        #expect(DailyBillReceiptText.amount(partial, language: .simplifiedChinese) == "至少 $1.25")
+        #expect(DailyBillReceiptText.amount(partial, language: .english) == "≥ $1.25")
+        #expect(DailyBillReceiptText.amount(partial, language: .simplifiedChinese) == "≥ $1.25")
         #expect(DailyBillReceiptText.amount(DailyTokenUsage(tokens: 10, valueUSD: nil), language: .english) == "—")
         let filename = DailyBillImageExporter.filename(for: now)
         #expect(filename.range(of: #"^Yomi-[0-9]{4}-[0-9]{2}-[0-9]{2}\.png$"#, options: .regularExpression) != nil)
+    }
+
+    @Test
+    func receiptZeroTokensStayPlainWithoutChangingDetailFormatting() {
+        #expect(DailyBillReceiptText.tokens(0) == "0")
+        #expect(DailyBillReceiptText.tokens(nil) == "—")
+        #expect(DailyBillReceiptText.tokens(18_638_617) == "18.6M")
+        #expect(formatDetailTokensInMillions(0) == "0M")
     }
 
     private var now: Date { Date(timeIntervalSince1970: 1_794_403_800) }

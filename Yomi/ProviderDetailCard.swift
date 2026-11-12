@@ -67,6 +67,7 @@ struct ProviderDetailCard: View {
     @Environment(\.appLanguage) private var language
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isRefreshHovering = false
+    @State private var isBillHovering = false
     @State private var isStatusLinkHovering = false
 
     private var copy: AppCopy { AppCopy(language: language) }
@@ -209,11 +210,6 @@ struct ProviderDetailCard: View {
                 usageHeadline
             }
             detailContent
-            if isOverview, let openDailyBill {
-                Button(copy.text("今日 AI 账单", "Today's AI bill"), action: openDailyBill)
-                    .buttonStyle(.bordered)
-                    .pointerStyle(.link)
-            }
         }
         .padding(14)
         .frame(width: 300)
@@ -467,35 +463,49 @@ struct ProviderDetailCard: View {
                 )
             }
 
-            Button(action: refresh) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
-                    .frame(width: 23, height: 22)
-                    .background(
-                        AppTheme.primaryText(for: colorScheme).opacity(0.045),
-                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+            HStack(spacing: 6) {
+                if isOverview, let openDailyBill {
+                    headerButton(
+                        symbol: "receipt", title: copy.text("今日 AI 账单", "Today's AI bill"),
+                        hovering: $isBillHovering, action: openDailyBill
                     )
-            }
-            .buttonStyle(.plain)
-            .disabled(isRefreshing)
-            .opacity(isRefreshing ? 0.45 : 1)
-            .scaleEffect(isRefreshHovering ? 1.06 : 1)
-            .help(
-                isOverview
-                    ? copy.text("立即刷新全部 Provider", "Refresh all providers")
-                    : copy.text("立即刷新", "Refresh now")
-            )
-            .onHover { hovering in
-                if hovering { NSCursor.pointingHand.set() }
-                else { NSCursor.arrow.set() }
-                withAnimation(.easeOut(duration: 0.12)) {
-                    isRefreshHovering = hovering
                 }
+                headerButton(
+                    symbol: "arrow.clockwise",
+                    title: isOverview
+                        ? copy.text("立即刷新全部 Provider", "Refresh all providers")
+                        : copy.text("立即刷新", "Refresh now"),
+                    hovering: $isRefreshHovering, action: refresh
+                )
+                .disabled(isRefreshing)
+                .opacity(isRefreshing ? 0.45 : 1)
             }
-            .onDisappear {
-                if isRefreshHovering { NSCursor.arrow.set() }
-            }
+        }
+    }
+
+    private func headerButton(symbol: String, title: String, hovering: Binding<Bool>, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
+                .frame(width: 23, height: 22)
+                .background(
+                    AppTheme.primaryText(for: colorScheme).opacity(0.045),
+                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                )
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(hovering.wrappedValue ? 1.06 : 1)
+        .help(title)
+        .accessibilityLabel(title)
+        .onHover { value in
+            if value { NSCursor.pointingHand.set() }
+            else { NSCursor.arrow.set() }
+            withAnimation(.easeOut(duration: 0.12)) { hovering.wrappedValue = value }
+        }
+        .onDisappear {
+            if hovering.wrappedValue { NSCursor.arrow.set() }
+            hovering.wrappedValue = false
         }
     }
 
