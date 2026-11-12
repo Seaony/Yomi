@@ -33,12 +33,7 @@ struct ProviderSettingsView: View {
                 } else {
                     ContentUnavailableView(
                         copy.text("选择一个 Provider", "Select a provider"),
-                        systemImage: "square.grid.2x2",
-                        description: Text(
-                            copy.text(
-                                "可以在这里启用并配置数据来源。",
-                                "Enable it and configure its data source here."
-                            ))
+                        systemImage: "square.grid.2x2"
                     )
                 }
             }
@@ -202,7 +197,7 @@ private struct ProviderQuotaMuteToggle: View {
 
     var body: some View {
         let copy = AppCopy(language: language)
-        Toggle(copy.text("静音此 Provider", "Mute this provider"), isOn: Binding(
+        Toggle(copy.text("关闭此 Provider 的额度提醒", "Turn off quota alerts for this provider"), isOn: Binding(
             get: { notifications.isMuted(providerID) },
             set: { notifications.setMuted($0, for: providerID) }
         ))
@@ -360,12 +355,6 @@ private struct ProviderConfigurationView: View {
     private var notificationSection: some View {
         CodeEdgeFormSection(title: copy.text("额度提醒", "Quota notifications")) {
             ProviderQuotaMuteToggle(notifications: store.notifications, providerID: descriptor.id)
-        } footer: {
-            Text(
-                copy.text(
-                    "保留额度显示，停止此 Provider 的额度通知",
-                    "Keep quota data visible without quota notifications"
-                ))
         }
     }
 

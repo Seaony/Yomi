@@ -124,11 +124,6 @@ private struct GeneralSettingsView: View {
                         .accessibilityElement(children: .contain)
                         .accessibilityLabel(copy.text("语言", "Language"))
                     }
-                } footer: {
-                    VStack(alignment: .leading, spacing: SettingsSpace.xs) {
-                        Text(copy.text("系统模式会自动跟随 macOS 的外观设置。", "System mode follows the current macOS appearance."))
-                        Text(copy.text("切换设置、悬浮栏和详情卡片的显示语言。", "Changes the language across settings, the floating rail, and detail cards."))
-                    }
                 }
                 CodeEdgeFormSection(title: copy.text("悬浮侧边栏背景", "Floating rail background")) {
                     CodeEdgeSideRow(copy.text("背景颜色", "Background color")) {
@@ -151,8 +146,6 @@ private struct GeneralSettingsView: View {
                                 .pointerStyle(.link)
                         }
                     }
-                } footer: {
-                    Text(copy.text("自定义悬浮侧边栏的背景颜色", "Customize the floating rail background color"))
                 }
                 .onAppear { railBackgroundHex = appPreferences.railBackgroundColorHex ?? "" }
                 .onChange(of: appPreferences.railBackgroundColorHex) { _, value in railBackgroundHex = value ?? "" }
@@ -169,8 +162,6 @@ private struct GeneralSettingsView: View {
                         .accessibilityElement(children: .contain)
                         .accessibilityLabel(copy.text("刷新间隔", "Refresh interval"))
                     }
-                } footer: {
-                    Text(copy.text("更短的间隔会更快同步额度变化，但会增加网络请求。", "Shorter intervals update quotas sooner and make more network requests."))
                 }
 
                 CodeEdgeFormSection(title: copy.text("行为", "Behavior")) {
@@ -182,9 +173,6 @@ private struct GeneralSettingsView: View {
                 } footer: {
                     VStack(alignment: .leading, spacing: SettingsSpace.xs) {
                         Text(copy.text("全屏时收成细条，鼠标移到细条上即可展开", "Collapses to a thin bar in full screen. Hover it to expand."))
-                        Text(copy.text("在圆环和详情卡中显示服务商故障", "Show provider incidents in rings and detail cards"))
-                        Text(copy.text("登录 macOS 后自动运行 CodeEdge", "Start CodeEdge automatically after signing in to macOS"))
-                        Text(copy.text("在悬浮栏圆环下方显示名称", "Show names below provider rings in the floating rail"))
                         if let loginError { Text(loginError).foregroundStyle(CodeEdgeSettingsTheme.error) }
                     }
                 }
@@ -237,9 +225,7 @@ private struct QuotaNotificationSettingsView: View {
                     Toggle(copy.text("额度重置或恢复", "Quota reset or restored"), isOn: $resetEnabled)
                 } footer: {
                     VStack(alignment: .leading, spacing: SettingsSpace.xs) {
-                        Text(copy.text("跨过所选档位时提醒，每个周期一次", "Notify once per threshold in each quota cycle"))
-                        Text(copy.text("额度耗尽时提醒", "Notify when a quota is exhausted"))
-                        Text(copy.text("确认新周期开始后提醒", "Notify when a new quota cycle is confirmed"))
+                        Text(copy.text("每个额度周期只提醒一次", "Once per threshold each quota cycle"))
                         if notifications.authorizationDenied {
                             Text(copy.text("通知权限已关闭，请在系统设置 → 通知 → CodeEdge 中允许通知。", "Notifications are disabled. Allow CodeEdge notifications in System Settings → Notifications."))
                                 .foregroundStyle(CodeEdgeSettingsTheme.warning)
