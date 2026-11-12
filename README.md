@@ -43,7 +43,7 @@ It's for you if you use more than one AI tool or plan. If you use one service an
 
 **1 · Install.** Download the DMG from the **[latest release](https://github.com/Seaony/CodeEdge/releases/latest)** and drag `CodeEdge.app` into Applications.
 
-<sub>Builds are universal (Apple silicon and Intel) and need macOS 26.5 or later. They are not signed with an Apple Developer ID or notarised yet, so the first launch may be blocked; open **System Settings → Privacy & Security** and choose to open CodeEdge anyway. CodeEdge updates itself from GitHub Releases through Sparkle.</sub>
+<sub>Builds are universal (Apple silicon and Intel) and need macOS 26.5 or later. They are signed with a Developer ID and notarised by Apple. CodeEdge updates itself from GitHub Releases through Sparkle.</sub>
 
 **2 · Enable providers.** Open Settings, go to **Providers**, and turn on the services you use. Each one says what it needs: a local sign-in, an API key, a browser session or an environment variable.
 
@@ -98,7 +98,7 @@ xcodebuild -project CodeEdge.xcodeproj -scheme CodeEdge -configuration Debug \
 open DerivedData/Build/Products/Debug/CodeEdge.app
 ```
 
-To publish an unsigned release from a clean, pushed `master`, run `scripts/publish-unsigned-release.sh <version>`. It builds a universal app, the ZIP, the DMG and the Sparkle appcast, then tags and publishes a GitHub Release. See [docs/RELEASING.md](docs/RELEASING.md) for the details.
+To publish a release from a clean, pushed `master`, run `scripts/publish-release.sh <version>`. It builds a universal app, signs and notarises it, creates the ZIP, the DMG and the Sparkle appcast, then tags and publishes a GitHub Release. See [docs/RELEASING.md](docs/RELEASING.md) for the details.
 
 ## Acknowledgements
 

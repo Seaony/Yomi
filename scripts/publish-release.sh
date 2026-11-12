@@ -10,10 +10,13 @@ project="CodeEdge.xcodeproj"
 scheme="CodeEdge"
 repository="Seaony/CodeEdge"
 sparkle_account="${SPARKLE_ACCOUNT:-com.seaony.Moni}"
+# Developer ID 证书在登录钥匙串里；公证凭据用 xcrun notarytool store-credentials 存在同名配置下。
+signing_identity="${SIGNING_IDENTITY:-Developer ID Application: SHEN WANG (JJJKGPY7T7)}"
+notary_profile="${NOTARY_PROFILE:-notary}"
 version="${1:-}"
 
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "Usage: scripts/publish-unsigned-release.sh <MAJOR.MINOR.PATCH>" >&2
+    echo "Usage: scripts/publish-release.sh <MAJOR.MINOR.PATCH>" >&2
     exit 1
 fi
 
@@ -48,15 +51,24 @@ if gh release view "$tag" --repo "$repository" >/dev/null 2>&1; then
     exit 1
 fi
 
-for command_name in gh xcodebuild ditto hdiutil xmllint lipo codesign dmgbuild; do
+for command_name in gh xcodebuild ditto hdiutil xmllint lipo codesign dmgbuild xcrun spctl; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         echo "Required command is unavailable: $command_name" >&2
         exit 1
     fi
 done
 gh auth status >/dev/null
+if ! security find-identity -v -p codesigning | grep -Fq "\"$signing_identity\""; then
+    echo "Signing identity is not in the keychain: $signing_identity" >&2
+    exit 1
+fi
+# 构建要好几分钟，先确认公证凭据能用，免得最后一步才失败。
+if ! xcrun notarytool history --keychain-profile "$notary_profile" >/dev/null 2>&1; then
+    echo "Notary credentials are missing. Run: xcrun notarytool store-credentials $notary_profile" >&2
+    exit 1
+fi
 
-work_dir="$(mktemp -d /tmp/codeedge-unsigned-release.XXXXXX)"
+work_dir="$(mktemp -d /tmp/codeedge-release.XXXXXX)"
 trap 'rm -rf "$work_dir"' EXIT
 derived_data="$work_dir/DerivedData"
 updates_dir="$work_dir/updates"
@@ -108,7 +120,32 @@ xcodebuild \
     build
 
 app_path="$derived_data/Build/Products/Release/$app_name.app"
-codesign --force --deep --sign - "$app_path"
+
+# 交给 Apple 公证，等结果；不是 Accepted 就打印日志并停下。
+notarize() {
+    local file="$1"
+    local result
+    result="$(xcrun notarytool submit "$file" --keychain-profile "$notary_profile" --wait --output-format json)"
+    local status
+    status="$(printf '%s' "$result" | /usr/bin/plutil -extract status raw -o - -)"
+    if [[ "$status" != "Accepted" ]]; then
+        local id
+        id="$(printf '%s' "$result" | /usr/bin/plutil -extract id raw -o - -)"
+        echo "Notarization of $(basename "$file") finished with status: $status" >&2
+        xcrun notarytool log "$id" --keychain-profile "$notary_profile" >&2 || true
+        exit 1
+    fi
+}
+
+# Sparkle 的组件要从里往外逐个签，最后签整个应用；都开启 Hardened Runtime 并带时间戳，公证才会通过。
+sign() { codesign --force --sign "$signing_identity" --options runtime --timestamp "$@"; }
+sparkle="$app_path/Contents/Frameworks/Sparkle.framework/Versions/B"
+sign "$sparkle/XPCServices/Installer.xpc"
+sign --preserve-metadata=entitlements "$sparkle/XPCServices/Downloader.xpc"
+sign "$sparkle/Autoupdate"
+sign "$sparkle/Updater.app"
+sign "$app_path/Contents/Frameworks/Sparkle.framework"
+sign "$app_path"
 scripts/validate-release.sh "$app_path"
 architectures="$(lipo -archs "$app_path/Contents/MacOS/$app_name")"
 if [[ "$architectures" != *arm64* ]] || [[ "$architectures" != *x86_64* ]]; then
@@ -123,8 +160,14 @@ if [[ "$short_version" != "$version" || "$bundle_version" != "$build_number" ]];
     exit 1
 fi
 
-zip_name="$app_name-$version-unsigned.zip"
-dmg_name="$app_name-$version-unsigned.dmg"
+echo "Notarizing $app_name.app..."
+ditto -c -k --keepParent "$app_path" "$work_dir/notarize.zip"
+notarize "$work_dir/notarize.zip"
+xcrun stapler staple "$app_path"
+spctl --assess --type execute --verbose "$app_path"
+
+zip_name="$app_name-$version.zip"
+dmg_name="$app_name-$version.dmg"
 mkdir -p "$output_dir"
 ditto -c -k --sequesterRsrc --keepParent "$app_path" "$output_dir/$zip_name"
 # 带背景图和固定图标布局的安装窗口，配置见 scripts/dmg/。
@@ -133,6 +176,11 @@ dmgbuild \
     -D app="$app_path" \
     "$app_name" \
     "$output_dir/$dmg_name"
+echo "Notarizing $dmg_name..."
+codesign --force --sign "$signing_identity" --timestamp "$output_dir/$dmg_name"
+notarize "$output_dir/$dmg_name"
+xcrun stapler staple "$output_dir/$dmg_name"
+spctl --assess --type open --context context:primary-signature --verbose "$output_dir/$dmg_name"
 
 previous_tag="$(git describe --tags --abbrev=0 HEAD 2>/dev/null || true)"
 notes_path="$work_dir/release-notes.md"
@@ -143,7 +191,10 @@ notes_path="$work_dir/release-notes.md"
     else
         git log --no-merges --pretty='- %s' HEAD
     fi
-    printf '\n> 此构建未使用 Apple Developer ID 签名，也未经过 Apple 公证。首次打开时，macOS 可能阻止运行；请在“系统设置 → 隐私与安全性”中确认打开。\n'
+    # 需要单独告诉用户的事（比如这一版会弹钥匙串确认），通过 RELEASE_NOTE 追加到说明末尾。
+    if [[ -n "${RELEASE_NOTE:-}" ]]; then
+        printf '\n> %s\n' "$RELEASE_NOTE"
+    fi
 } > "$notes_path"
 
 cp "$output_dir/$zip_name" "$updates_dir/$zip_name"

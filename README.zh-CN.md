@@ -43,7 +43,7 @@ CodeEdge 把这些都收进屏幕边缘的一条细栏里：
 
 **1 · 安装。** 从 **[最新版本](https://github.com/Seaony/CodeEdge/releases/latest)** 下载 DMG，把 `CodeEdge.app` 拖进“应用程序”。
 
-<sub>安装包同时支持 Apple 芯片和 Intel，需要 macOS 26.5 或更高版本。目前还没有使用 Apple Developer ID 签名，也没有经过公证，首次打开可能被系统拦截；请到 **系统设置 → 隐私与安全性** 中选择仍要打开。CodeEdge 会通过 Sparkle 从 GitHub Releases 自动更新。</sub>
+<sub>安装包同时支持 Apple 芯片和 Intel，需要 macOS 26.5 或更高版本。已使用 Developer ID 签名并通过 Apple 公证。CodeEdge 会通过 Sparkle 从 GitHub Releases 自动更新。</sub>
 
 **2 · 启用 Provider。** 打开设置，进入 **Providers**，打开你在用的服务。每一项都会说明需要什么：本机登录、API Key、浏览器会话或环境变量。
 
@@ -98,7 +98,7 @@ xcodebuild -project CodeEdge.xcodeproj -scheme CodeEdge -configuration Debug \
 open DerivedData/Build/Products/Debug/CodeEdge.app
 ```
 
-要从干净且已推送的 `master` 发布未签名版本，运行 `scripts/publish-unsigned-release.sh <版本号>`。脚本会构建通用应用、ZIP、DMG 和 Sparkle appcast，然后打标签并发布 GitHub Release。详细说明见 [docs/RELEASING.md](docs/RELEASING.md)。
+要从干净且已推送的 `master` 发布版本，运行 `scripts/publish-release.sh <版本号>`。脚本会构建通用应用并签名、公证，生成 ZIP、DMG 和 Sparkle appcast，然后打标签并发布 GitHub Release。详细说明见 [docs/RELEASING.md](docs/RELEASING.md)。
 
 ## 致谢
 

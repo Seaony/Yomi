@@ -1,6 +1,6 @@
 # CodeEdge 快速发布说明
 
-CodeEdge 使用 Sparkle 进行应用内更新，更新文件托管在 GitHub Releases。当前采用本地未签名发布流程，不需要 Apple Developer ID，也不进行 Apple 公证。
+CodeEdge 使用 Sparkle 进行应用内更新，更新文件托管在 GitHub Releases。发布版本用 Developer ID 签名并经过 Apple 公证，用户下载后可以直接打开。
 
 发布脚本会自动完成以下工作：
 
@@ -8,9 +8,10 @@ CodeEdge 使用 Sparkle 进行应用内更新，更新文件托管在 GitHub Rel
 2. 检查版本标签和 GitHub Release 是否已经存在。
 3. 根据上一个正式 Release 的 `appcast.xml` 自动递增 build number；首次发布从 `1` 开始。
 4. 构建包含 `arm64` 和 `x86_64` 的 Release 应用。
-5. 对应用执行本地 ad-hoc 签名，以保证应用包和 Sparkle Framework 的完整性；这不是 Apple Developer ID 签名。
-6. 生成 ZIP、DMG、Release Notes 和带 EdDSA 签名的 `appcast.xml`。DMG 用 `dmgbuild` 打包，打开后是带背景图、大图标、拖到 Applications 的安装窗口。
-7. 创建并推送版本标签，随后创建 GitHub Release 并上传全部产物。
+5. 用 Developer ID 从里往外签名 Sparkle 的组件和应用，开启 Hardened Runtime 并带时间戳。
+6. 把应用交给 Apple 公证，通过后把票据装订到应用上。
+7. 生成 ZIP、DMG、Release Notes 和带 EdDSA 签名的 `appcast.xml`。DMG 用 `dmgbuild` 打包，打开后是带背景图、大图标、拖到 Applications 的安装窗口；DMG 也单独签名、公证并装订。
+8. 创建并推送版本标签，随后创建 GitHub Release 并上传全部产物。
 
 应用固定读取以下更新源：
 
@@ -30,8 +31,22 @@ gh auth status
 本机还需要可用的 Xcode、Command Line Tools，以及以下命令：
 
 ```text
-gh xcodebuild ditto hdiutil xmllint lipo codesign dmgbuild
+gh xcodebuild ditto hdiutil xmllint lipo codesign dmgbuild xcrun spctl
 ```
+
+登录钥匙串里要有 Developer ID Application 证书。脚本默认用 `Developer ID Application: SHEN WANG (JJJKGPY7T7)`，换证书时设置 `SIGNING_IDENTITY`。确认证书在：
+
+```bash
+security find-identity -v -p codesigning
+```
+
+公证凭据只需要存一次。去 [appleid.apple.com](https://appleid.apple.com) 生成一个 App 专用密码，然后运行下面的命令，按提示填 Apple ID 和这个密码：
+
+```bash
+xcrun notarytool store-credentials notary --team-id JJJKGPY7T7
+```
+
+脚本默认读取名为 `notary` 的凭据，换名字时设置 `NOTARY_PROFILE`。凭据不能用时，脚本会在开始构建前停下。
 
 `dmgbuild` 用 uv 安装：
 
@@ -68,17 +83,25 @@ security find-generic-password \
   -s https://sparkle-project.org
 ```
 
-Sparkle 的 EdDSA 签名是自动更新校验所必需的，与 Apple Developer ID 签名和公证无关。
+Sparkle 的 EdDSA 签名是自动更新校验所必需的，和 Developer ID 签名、公证是两套独立的校验，缺一不可。
 
 ## 发布新版本
 
 发布前先把准备发布的内容 commit 并推送到 `origin/master`，确保工作区完全干净。然后只传入三段式版本号：
 
 ```bash
-scripts/publish-unsigned-release.sh 1.0.1
+scripts/publish-release.sh 1.0.1
+```
+
+某一版需要额外提醒用户时（比如换签名后第一次启动会弹钥匙串确认），用 `RELEASE_NOTE` 追加一段说明，它会出现在 GitHub Release 和 Sparkle 更新窗口里：
+
+```bash
+RELEASE_NOTE="……" scripts/publish-release.sh 1.0.1
 ```
 
 脚本会执行外部写操作，包括：
+
+- 把应用和 DMG 上传给 Apple 公证；
 
 - 创建本地标签 `v1.0.1`；
 - 将该标签推送到 `origin`；
@@ -96,8 +119,8 @@ build/releases/v1.0.1/
 其中包括：
 
 ```text
-CodeEdge-1.0.1-unsigned.zip
-CodeEdge-1.0.1-unsigned.dmg
+CodeEdge-1.0.1.zip
+CodeEdge-1.0.1.dmg
 appcast.xml
 ```
 
@@ -113,6 +136,6 @@ scripts/validate-release.sh \
 
 发布脚本生成的目录默认不保留独立 `CodeEdge.app`，因此通常无需手动执行该命令；脚本已经在打包前自动验证构建产物，并在生成 appcast 后再次验证。
 
-## 用户首次打开
+## 从未签名版本升级
 
-由于应用没有 Developer ID 签名和 Apple 公证，macOS 可能在首次打开时阻止运行。用户需要在“系统设置 → 隐私与安全性”中确认打开。后续版本仍通过 Sparkle appcast 的 EdDSA 签名验证更新完整性。
+1.6.3 之前的版本只有本地临时签名。CodeEdge 存在钥匙串里的密钥，访问权限绑定的是签名身份，所以从旧版升级到第一个签名版本后，第一次启动会为每个已存的密钥弹一次钥匙串确认，选「始终允许」即可。之后签名身份固定，升级不会再弹。
