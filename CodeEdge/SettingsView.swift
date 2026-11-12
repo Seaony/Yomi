@@ -164,7 +164,7 @@ private struct GeneralSettingsView: View {
                             title: { interval in
                                 let minutes = Int(interval / 60)
                                 return copy.text("\(minutes) 分钟", "\(minutes) min")
-                            }, symbol: { _ in "clock" }
+                            }, symbol: { _ in nil }
                         )
                         .accessibilityElement(children: .contain)
                         .accessibilityLabel(copy.text("刷新间隔", "Refresh interval"))

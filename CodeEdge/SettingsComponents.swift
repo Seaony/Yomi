@@ -169,7 +169,7 @@ struct CodeEdgeChoiceButtons<Value: Hashable>: View {
     let options: [Value]
     @Binding var selection: Value
     let title: (Value) -> String
-    let symbol: (Value) -> String
+    let symbol: (Value) -> String?
     @Namespace private var selectionSpace
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -196,7 +196,7 @@ struct CodeEdgeChoiceButtons<Value: Hashable>: View {
 
 private struct CodeEdgeChoiceSegment: View {
     let title: String
-    let symbol: String
+    let symbol: String?
     let selected: Bool
     let space: Namespace.ID
     let action: () -> Void
@@ -207,7 +207,9 @@ private struct CodeEdgeChoiceSegment: View {
         let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
         Button(action: action) {
             HStack(spacing: 6) {
-                Image(systemName: symbol).accessibilityHidden(true)
+                if let symbol {
+                    Image(systemName: symbol).accessibilityHidden(true)
+                }
                 Text(title)
             }
             .font(.system(size: 12.5, weight: .medium))
