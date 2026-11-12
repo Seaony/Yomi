@@ -8,6 +8,7 @@ nonisolated enum DiagnosticCategory: String, CaseIterable, Sendable {
     case update
     case rail
     case migration
+    case app
 }
 
 nonisolated enum DiagnosticsRedactor {
@@ -109,7 +110,6 @@ nonisolated final class DiagnosticLog: @unchecked Sendable {
     private let fileCount: Int
     private let systemLoggingEnabled: Bool
     private let loggers: [DiagnosticCategory: Logger]
-    private var latestResults: [ProviderID: ProviderDiagnosticResult] = [:]
 
     init(
         directoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -149,34 +149,7 @@ nonisolated final class DiagnosticLog: @unchecked Sendable {
         var safe = result
         safe.source = DiagnosticsRedactor.redact(result.source)
         safe.errorKind = result.errorKind.map(DiagnosticsRedactor.redact)
-        lock.withLock { latestResults[result.providerID] = safe }
         write(safe.logLine, category: .provider, date: result.date)
-    }
-
-    func report(
-        enabledProviders: [ProviderDescriptor],
-        bundle: Bundle = .main,
-        language: AppLanguage = AppLocalization.currentLanguage
-    ) -> String {
-        let copy = AppCopy(language: language)
-        let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
-        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
-        var lines = [
-            "CodeEdge \(version) (\(build))",
-            "macOS \(ProcessInfo.processInfo.operatingSystemVersionString)",
-            copy.text("已启用的 Provider：", "Enabled providers:"),
-        ]
-        let results = lock.withLock { latestResults }
-        for descriptor in enabledProviders {
-            if let result = results[descriptor.id] {
-                lines.append("\(ISO8601DateFormatter().string(from: result.date)) \(result.logLine)")
-            } else {
-                lines.append("provider=\(descriptor.id.rawValue) result=not-refreshed")
-            }
-        }
-        lines.append(copy.text("最近日志：", "Recent logs:"))
-        lines.append(recentLogText())
-        return DiagnosticsRedactor.redact(lines.joined(separator: "\n"))
     }
 
     func recentLogText(maximumBytes: Int = 32 * 1024) -> String {

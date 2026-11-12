@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 struct ProviderSettingsView: View {
@@ -123,7 +124,7 @@ private struct ProviderSettingsRow: View {
                                 .frame(width: 5, height: 5)
                                 .accessibilityHidden(true)
                             Text(statusText)
-                                .font(.system(size: 12))
+                                .font(.system(size: 11))
                                 .foregroundStyle(CodeEdgeSettingsTheme.secondaryText)
                                 .lineLimit(1)
                                 .help(statusText)
@@ -148,15 +149,20 @@ private struct ProviderSettingsRow: View {
     }
 
     private var statusText: String {
-        if let date = usage.updatedAt, usage.state == .ready {
+        guard isEnabled else { return copy.text("未启用", "Off") }
+        // 刷新时旧数据还在，继续显示上次的更新时间。
+        if let date = usage.updatedAt, usage.state == .ready || usage.state == .loading {
             return copy.text("已更新", "Updated")
                 + " · \(date.formatted(date: .omitted, time: .shortened))"
         }
-        return usage.message.map(copy.usageMessage) ?? copy.text("未读取", "Not loaded")
+        if usage.state == .loading { return copy.text("读取中", "Loading") }
+        return usage.message.map(copy.usageMessage) ?? copy.text("还没有数据", "No data yet")
     }
 
     private var statusColor: Color {
-        switch usage.state {
+        // 从没读到过数据不算过期，用灰色，黄色只留给在用缓存的情况。
+        if usage.state == .unavailable && usage.updatedAt == nil { return CodeEdgeSettingsTheme.tertiaryText }
+        return switch usage.state {
         case .ready: CodeEdgeSettingsTheme.statusGreen
         case .loading: CodeEdgeSettingsTheme.statusBlue
         case .unavailable: CodeEdgeSettingsTheme.statusAmber
@@ -312,6 +318,13 @@ private struct ProviderConfigurationView: View {
             }
         }
         .clipped()
+        // 列表里的开关直接改已保存的配置，这里跟着同步，免得保存时把旧的启用状态写回去。
+        // 发布时属性还没更新，所以用发出来的新数组，不回头读属性。
+        .onReceive(store.preferences.$configurations.compactMap { [id = descriptor.id] configurations in
+            configurations.first(where: { $0.id == id })?.isEnabled
+        }.removeDuplicates()) { enabled in
+            configuration.isEnabled = enabled
+        }
         .task(id: descriptor.id) {
             guard descriptor.id.rawValue == "deepseek" else { return }
             let profiles = await Task.detached(priority: .utility) {
@@ -661,16 +674,21 @@ private struct ProviderConfigurationView: View {
                 Button(copy.text("刷新此 Provider", "Refresh provider")) {
                     saveAndRefresh(allowBrowserCookieImport: true)
                 }
+                // 刷新只处理已启用的 Provider，没启用时按了也没反应。
+                .disabled(!configuration.isEnabled)
             } label: {
                 HStack(spacing: SettingsSpace.sm) {
-                    Circle().fill(statusColor(usage.state))
+                    Circle().fill(
+                        configuration.isEnabled && !(usage.state == .unavailable && usage.updatedAt == nil)
+                            ? statusColor(usage.state) : CodeEdgeSettingsTheme.tertiaryText
+                    )
                         .frame(width: 7, height: 7)
                         .accessibilityHidden(true)
-                    Text(stateText(usage.state))
+                    Text(stateText(usage))
                 }
             }
         } footer: {
-            if let message = store.usage(for: descriptor.id).message {
+            if configuration.isEnabled, let message = store.usage(for: descriptor.id).message {
                 Text(copy.usageMessage(message))
                     .foregroundStyle(
                         store.usage(for: descriptor.id).state == .failed
@@ -1205,12 +1223,15 @@ private struct ProviderConfigurationView: View {
             : $secret
     }
 
-    private func stateText(_ state: ProviderUsage.State) -> String {
-        switch state {
-        case .ready: copy.text("可用", "Available")
-        case .loading: copy.text("读取中", "Loading")
-        case .unavailable: copy.text("缓存数据", "Cached data")
-        case .failed: copy.text("读取失败", "Failed")
+    private func stateText(_ usage: ProviderUsage) -> String {
+        guard configuration.isEnabled else { return copy.text("未启用", "Off") }
+        switch usage.state {
+        case .ready: return copy.text("可用", "Available")
+        case .loading: return copy.text("读取中", "Loading")
+        // 从没读到过数据时也是这个状态，这时没有缓存可用。
+        case .unavailable where usage.updatedAt == nil: return copy.text("还没有数据", "No data yet")
+        case .unavailable: return copy.text("缓存数据", "Cached data")
+        case .failed: return copy.text("读取失败", "Failed")
         }
     }
 

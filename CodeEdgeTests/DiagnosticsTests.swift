@@ -123,7 +123,7 @@ struct DiagnosticsTests {
     }
 
     @Test
-    func recordsAndExportAreRedacted() throws {
+    func recordsAreRedacted() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let log = DiagnosticLog(directoryURL: directory, systemLoggingEnabled: false)
@@ -131,13 +131,10 @@ struct DiagnosticsTests {
         log.record(ProviderDiagnosticResult(providerID: id, source: "OAuth", date: Date(), duration: 0.23,
                                             outcome: .failed, errorKind: "Bearer private-bearer",
                                             httpStatus: 401, usedCache: true))
-        let descriptor = try #require(ProviderCatalog.byID[id])
-        let report = log.report(enabledProviders: [descriptor])
-        #expect(report.contains("provider=codex"))
-        #expect(report.contains("http=401"))
-        #expect(report.contains("cache=true"))
-        #expect(!report.contains("private-bearer"))
         let raw = try String(contentsOf: directory.appendingPathComponent("codeedge.log"), encoding: .utf8)
+        #expect(raw.contains("provider=codex"))
+        #expect(raw.contains("http=401"))
+        #expect(raw.contains("cache=true"))
         #expect(!raw.contains("private-bearer"))
     }
 

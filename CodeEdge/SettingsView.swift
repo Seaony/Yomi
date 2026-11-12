@@ -45,7 +45,7 @@ struct SettingsView: View {
             .frame(height: 640)
             .tabItem { Label("Providers", systemImage: "square.grid.2x2") }
             .tag(Section.providers)
-            AboutSettingsView(updateController: updates, store: store)
+            AboutSettingsView(updateController: updates)
                 .tabItem { Label(copy.text("关于", "About"), systemImage: "info.circle") }
                 .tag(Section.about)
         }
@@ -89,18 +89,9 @@ private struct GeneralSettingsView: View {
     @AppStorage(ProviderServiceStatusMonitor.settingKey) private var showServiceIncidents = ProviderServiceStatusMonitor.defaultEnabled
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
-    @State private var railBackgroundHex = ""
-    @FocusState private var hexFocused: Bool
     @Environment(\.appLanguage) private var language
-    @Environment(\.colorScheme) private var colorScheme
 
     private var copy: AppCopy { AppCopy(language: language) }
-    private var railBackgroundColor: Binding<Color> {
-        Binding(
-            get: { appPreferences.railBackgroundColor ?? AppTheme.railBackground(for: colorScheme) },
-            set: { appPreferences.setRailBackgroundColor($0) }
-        )
-    }
 
     var body: some View {
         SettingsScrollablePage {
@@ -109,64 +100,42 @@ private struct GeneralSettingsView: View {
                     CodeEdgeSideRow(copy.text("外观", "Appearance")) {
                         CodeEdgeChoiceButtons(
                             options: AppAppearance.allCases, selection: $appPreferences.appearance,
-                            title: appearanceTitle, symbol: appearanceSymbol
+                            title: appearanceTitle, symbol: appearanceSymbol, iconOnly: true
                         )
                         .accessibilityElement(children: .contain)
                         .accessibilityLabel(copy.text("外观", "Appearance"))
                     }
                     CodeEdgeSideRow(copy.text("语言", "Language")) {
-                        CodeEdgeChoiceButtons(
-                            options: [AppLanguage.english, .simplifiedChinese], selection: $appPreferences.language,
-                            title: { $0 == .english ? "English" : "简体中文" },
-                            symbol: { $0 == .english ? "character.book.closed" : "character.book.closed.zh" }
-                        )
-                        .environment(\.locale, Locale(identifier: "en"))
-                        .accessibilityElement(children: .contain)
-                        .accessibilityLabel(copy.text("语言", "Language"))
+                        // 语言名用各自的写法，切到不认识的语言也能找回来。
+                        Picker(copy.text("语言", "Language"), selection: $appPreferences.language) {
+                            Text("English").tag(AppLanguage.english)
+                            Text("简体中文").tag(AppLanguage.simplifiedChinese)
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .fixedSize()
                     }
                 }
                 CodeEdgeFormSection(title: copy.text("悬浮侧边栏背景", "Floating rail background")) {
-                    CodeEdgeSideRow(copy.text("背景颜色", "Background color")) {
-                        HStack(spacing: SettingsSpace.sm) {
-                            if appPreferences.railBackgroundColorHex != nil {
-                                Button(copy.text("恢复默认", "Reset")) { appPreferences.setRailBackgroundColor(nil) }
-                            }
-                            TextField("#RRGGBB", text: $railBackgroundHex)
-                                .font(.system(size: 13, design: .monospaced))
-                                .focused($hexFocused)
-                                .codeEdgeSettingsField(focused: hexFocused)
-                                .frame(width: 98)
-                                .accessibilityLabel(copy.text("悬浮侧边栏背景 #RRGGBB", "Floating rail background #RRGGBB"))
-                                .onChange(of: railBackgroundHex) { _, value in
-                                    guard let normalized = appPreferences.setRailBackgroundColor(hex: value), normalized != value else { return }
-                                    railBackgroundHex = normalized
-                                }
-                            ColorPicker(copy.text("悬浮侧边栏背景", "Floating rail background"), selection: railBackgroundColor, supportsOpacity: false)
-                                .labelsHidden()
-                                .pointerStyle(.link)
-                        }
-                    }
+                    RailBackgroundRow(scheme: .light, title: copy.text("浅色外观", "Light appearance"))
+                    RailBackgroundRow(scheme: .dark, title: copy.text("深色外观", "Dark appearance"))
                 }
-                .onAppear { railBackgroundHex = appPreferences.railBackgroundColorHex ?? "" }
-                .onChange(of: appPreferences.railBackgroundColorHex) { _, value in railBackgroundHex = value ?? "" }
 
                 CodeEdgeFormSection(title: copy.text("刷新", "Refresh")) {
-                    HStack(alignment: .firstTextBaseline, spacing: SettingsSpace.md) {
-                        Text(copy.text("刷新间隔", "Refresh interval"))
-                            .font(.system(size: 13))
-                            .foregroundStyle(CodeEdgeSettingsTheme.primaryText)
-                        Spacer(minLength: 0)
+                    CodeEdgeSideRow {
+                        Picker(copy.text("刷新间隔", "Refresh interval"), selection: $refreshInterval) {
+                            ForEach([0.0, 60, 300, 900, 1_800], id: \.self) { interval in
+                                Text(interval == 0 ? copy.text("自动", "Auto")
+                                    : copy.text("\(Int(interval / 60)) 分钟", "\(Int(interval / 60)) min"))
+                                    .tag(interval)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .fixedSize()
+                    } label: {
                         VStack(alignment: .leading, spacing: SettingsSpace.xs) {
-                            CodeEdgeChoiceButtons(
-                                options: [0.0, 60, 300, 900, 1_800], selection: $refreshInterval,
-                                title: { interval in
-                                    if interval == 0 { return copy.text("自动", "Auto") }
-                                    let minutes = Int(interval / 60)
-                                    return copy.text("\(minutes) 分钟", "\(minutes) min")
-                                }, symbol: { _ in nil }
-                            )
-                            .accessibilityElement(children: .contain)
-                            .accessibilityLabel(copy.text("刷新间隔", "Refresh interval"))
+                            Text(copy.text("刷新间隔", "Refresh interval"))
                             if refreshInterval == 0 {
                                 Text(copy.text("常看时 2 分钟刷新一次，闲置时最慢 30 分钟", "Every 2 min while you're looking, up to 30 min when idle"))
                                     .font(.system(size: 12))
@@ -208,7 +177,7 @@ private struct GeneralSettingsView: View {
 
     private func appearanceSymbol(_ appearance: AppAppearance) -> String {
         switch appearance {
-        case .system: "circle.lefthalf.filled"
+        case .system: "display"
         case .light: "sun.max.fill"
         case .dark: "moon.fill"
         }
@@ -284,10 +253,52 @@ private struct QuotaNotificationSettingsView: View {
     }
 }
 
+/// 一种外观下的侧边栏底色：十六进制输入框加取色器，改过才显示「恢复默认」。
+private struct RailBackgroundRow: View {
+    let scheme: ColorScheme
+    let title: String
+    @ObservedObject private var appPreferences = AppPreferences.shared
+    @State private var hex = ""
+    @FocusState private var hexFocused: Bool
+    @Environment(\.appLanguage) private var language
+    private var copy: AppCopy { AppCopy(language: language) }
+
+    private var color: Binding<Color> {
+        Binding(
+            get: { appPreferences.railBackgroundColor(for: scheme) ?? AppTheme.railBackground(for: scheme) },
+            set: { appPreferences.setRailBackgroundColor($0, for: scheme) }
+        )
+    }
+
+    var body: some View {
+        CodeEdgeSideRow(title) {
+            HStack(spacing: SettingsSpace.sm) {
+                if appPreferences.railBackgroundColorHex[scheme] != nil {
+                    Button(copy.text("恢复默认", "Reset")) { appPreferences.setRailBackgroundColor(nil, for: scheme) }
+                }
+                TextField("#RRGGBB", text: $hex)
+                    .font(.system(size: 13, design: .monospaced))
+                    .focused($hexFocused)
+                    .codeEdgeSettingsField(focused: hexFocused)
+                    .frame(width: 98)
+                    .accessibilityLabel(title + " #RRGGBB")
+                    .onChange(of: hex) { _, value in
+                        guard let normalized = appPreferences.setRailBackgroundColor(hex: value, for: scheme),
+                              normalized != value else { return }
+                        hex = normalized
+                    }
+                ColorPicker(title, selection: color, supportsOpacity: false)
+                    .labelsHidden()
+                    .pointerStyle(.link)
+            }
+        }
+        .onAppear { hex = appPreferences.railBackgroundColorHex[scheme] ?? "" }
+        .onChange(of: appPreferences.railBackgroundColorHex[scheme]) { _, value in hex = value ?? "" }
+    }
+}
+
 private struct AboutSettingsView: View {
     @ObservedObject var updateController: UpdateController
-    @ObservedObject var store: UsageStore
-    @State private var copied = false
     @Environment(\.appLanguage) private var language
     private var copy: AppCopy { AppCopy(language: language) }
 
@@ -315,24 +326,22 @@ private struct AboutSettingsView: View {
                         }
                     }
                     .disabled(!updateController.canCheckForUpdates)
+                    Button {
+                        let directory = DiagnosticLog.shared.directoryURL
+                        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                        NSWorkspace.shared.open(directory)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "folder")
+                            Text(copy.text("打开日志", "Open Logs"))
+                        }
+                    }
                     Button(role: .destructive) { NSApp.terminate(nil) } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "power")
                             Text(copy.text("退出", "Quit"))
                         }
                     }
-                }
-                CodeEdgeSeparator()
-                VStack(spacing: SettingsSpace.sm) {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: SettingsSpace.sm) { diagnosticActions }
-                        VStack(spacing: SettingsSpace.sm) { diagnosticActions }
-                    }
-                    Text(copy.text("仅包含应用、系统、刷新状态和脱敏日志。", "Includes app, system, refresh status and redacted logs only."))
-                        .font(.system(size: 12))
-                        .foregroundStyle(CodeEdgeSettingsTheme.secondaryText)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -341,32 +350,6 @@ private struct AboutSettingsView: View {
         }
     }
 
-    @ViewBuilder private var diagnosticActions: some View {
-        Button {
-            NSPasteboard.general.clearContents()
-            let limits = store.enabledProviders.compactMap { provider in
-                store.backoffDescription(for: provider.id, language: language).map { provider.name + ": " + $0 }
-            }
-            let report = DiagnosticLog.shared.report(enabledProviders: store.enabledProviders)
-                + (limits.isEmpty ? "" : "\n" + limits.joined(separator: "\n"))
-            copied = NSPasteboard.general.setString(DiagnosticsRedactor.redact(report), forType: .string)
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "doc.on.doc")
-                Text(copied ? copy.text("已复制", "Copied") : copy.text("复制诊断信息", "Copy diagnostics"))
-            }
-        }
-        Button {
-            let directory = DiagnosticLog.shared.directoryURL
-            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            NSWorkspace.shared.open(directory)
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "folder")
-                Text(copy.text("打开日志文件夹", "Open log folder"))
-            }
-        }
-    }
     private var versionText: String {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"

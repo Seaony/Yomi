@@ -170,6 +170,8 @@ struct CodeEdgeChoiceButtons<Value: Hashable>: View {
     @Binding var selection: Value
     let title: (Value) -> String
     let symbol: (Value) -> String?
+    /// 只显示图标时，文字改作悬停提示和读屏名称。
+    var iconOnly = false
     @Namespace private var selectionSpace
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -177,7 +179,7 @@ struct CodeEdgeChoiceButtons<Value: Hashable>: View {
         HStack(spacing: 2) {
             ForEach(options, id: \.self) { option in
                 CodeEdgeChoiceSegment(
-                    title: title(option), symbol: symbol(option),
+                    title: title(option), symbol: symbol(option), iconOnly: iconOnly,
                     selected: option == selection, space: selectionSpace
                 ) {
                     withAnimation(reduceMotion ? nil : .snappy(duration: 0.22)) {
@@ -197,6 +199,7 @@ struct CodeEdgeChoiceButtons<Value: Hashable>: View {
 private struct CodeEdgeChoiceSegment: View {
     let title: String
     let symbol: String?
+    let iconOnly: Bool
     let selected: Bool
     let space: Namespace.ID
     let action: () -> Void
@@ -210,7 +213,7 @@ private struct CodeEdgeChoiceSegment: View {
                 if let symbol {
                     Image(systemName: symbol).accessibilityHidden(true)
                 }
-                Text(title)
+                if !iconOnly { Text(title) }
             }
             .font(.system(size: 12.5, weight: .medium))
             .foregroundStyle(
@@ -232,6 +235,8 @@ private struct CodeEdgeChoiceSegment: View {
         .buttonStyle(CodeEdgeChoicePressStyle())
         .pointerStyle(isEnabled ? .link : nil)
         .onHover { hovering = $0 }
+        .help(iconOnly ? title : "")
+        .accessibilityLabel(title)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

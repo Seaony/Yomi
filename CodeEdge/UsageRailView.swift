@@ -83,7 +83,7 @@ struct UsageRailView: View {
     }
 
     private var railBackground: Color {
-        appPreferences.railBackgroundColor ?? AppTheme.railBackground(for: colorScheme)
+        appPreferences.railBackgroundColor(for: colorScheme) ?? AppTheme.railBackground(for: colorScheme)
     }
 
     private var railProviders: [ProviderDescriptor] {

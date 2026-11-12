@@ -41,6 +41,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         guard !Self.isRunningTests else { return }
+        // 用户反馈问题时直接发日志文件，开头要能看出版本和系统。
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        DiagnosticLog.shared.write(
+            "Launched CodeEdge \(version) (\(build)) on macOS \(ProcessInfo.processInfo.operatingSystemVersionString)",
+            category: .app
+        )
         // 外观只在这里统一设置。preferredColorScheme 管不到自建面板，
         // 从深色切回系统时也不会复位窗口，所以直接改整个 App 的外观，系统模式时交还给 macOS。
         appearanceObserver = AppPreferences.shared.$appearance.sink { appearance in

@@ -85,8 +85,11 @@ nonisolated struct AppCopy {
             ("无法识别返回的用量数据", "The returned usage data could not be read"),
             ("未找到本机用量记录", "No local usage records found"),
             ("未配置命令", "Command is not configured"),
-            ("等待首次刷新", "Waiting for the first refresh"),
         ]
+        // 旧缓存里可能还存着以前的占位文案。
+        if message == "等待首次刷新" || message == "Waiting for the first refresh" {
+            return text("还没有数据", "No data yet")
+        }
         for pair in pairs where message == pair.0 || message == pair.1 {
             return text(pair.0, pair.1)
         }
@@ -261,15 +264,21 @@ final class AppPreferences: ObservableObject {
         }
     }
 
-    @Published private(set) var railBackgroundColorHex: String?
+    /// 浅色和深色外观各自的侧边栏底色，没设置时用默认色。
+    @Published private(set) var railBackgroundColorHex: [ColorScheme: String] = [:]
 
-    var railBackgroundColor: Color? {
-        railBackgroundColorHex.flatMap(Self.color(from:))
+    func railBackgroundColor(for scheme: ColorScheme) -> Color? {
+        railBackgroundColorHex[scheme].flatMap(Self.color(from:))
     }
 
     private let defaults: UserDefaults
     private let appearanceKey = "app-appearance"
-    private let railBackgroundColorKey = "rail-background-color"
+    /// 旧版只有一个底色，两种外观共用。
+    private static let legacyRailBackgroundColorKey = "rail-background-color"
+
+    private static func railBackgroundColorKey(for scheme: ColorScheme) -> String {
+        scheme == .dark ? "rail-background-color.dark" : "rail-background-color.light"
+    }
 
     private init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -279,24 +288,33 @@ final class AppPreferences: ObservableObject {
         language = AppLanguage(
             rawValue: defaults.string(forKey: AppLocalization.languageKey) ?? ""
         ) ?? .simplifiedChinese
-        railBackgroundColorHex = defaults.string(forKey: railBackgroundColorKey)
-            .flatMap(Self.normalizedHex(_:))
+        // 旧版的单一底色拆给浅色和深色各一份，两种外观下看到的颜色不变。
+        if let legacy = defaults.string(forKey: Self.legacyRailBackgroundColorKey) {
+            for scheme in [ColorScheme.light, .dark] where defaults.string(forKey: Self.railBackgroundColorKey(for: scheme)) == nil {
+                defaults.set(legacy, forKey: Self.railBackgroundColorKey(for: scheme))
+            }
+            defaults.removeObject(forKey: Self.legacyRailBackgroundColorKey)
+        }
+        for scheme in [ColorScheme.light, .dark] {
+            railBackgroundColorHex[scheme] = defaults.string(forKey: Self.railBackgroundColorKey(for: scheme))
+                .flatMap(Self.normalizedHex(_:))
+        }
     }
 
-    func setRailBackgroundColor(_ color: Color?) {
+    func setRailBackgroundColor(_ color: Color?, for scheme: ColorScheme) {
         guard let color, let hex = Self.hexString(from: color) else {
-            railBackgroundColorHex = nil
-            defaults.removeObject(forKey: railBackgroundColorKey)
+            railBackgroundColorHex[scheme] = nil
+            defaults.removeObject(forKey: Self.railBackgroundColorKey(for: scheme))
             return
         }
-        setRailBackgroundColor(hex: hex)
+        setRailBackgroundColor(hex: hex, for: scheme)
     }
 
     @discardableResult
-    func setRailBackgroundColor(hex: String) -> String? {
+    func setRailBackgroundColor(hex: String, for scheme: ColorScheme) -> String? {
         guard let normalized = Self.normalizedHex(hex) else { return nil }
-        railBackgroundColorHex = normalized
-        defaults.set(normalized, forKey: railBackgroundColorKey)
+        railBackgroundColorHex[scheme] = normalized
+        defaults.set(normalized, forKey: Self.railBackgroundColorKey(for: scheme))
         return normalized
     }
 

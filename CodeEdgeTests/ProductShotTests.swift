@@ -189,18 +189,18 @@ struct ProductShotTests {
 
     /// 临时改成跟随系统外观、默认底色，结束后把这些设置原样写回。
     private static func overrideAppPreferences() -> () -> Void {
-        let keys = [AppLocalization.languageKey, "app-appearance", "rail-background-color"]
+        let keys = [AppLocalization.languageKey, "app-appearance", "rail-background-color.light", "rail-background-color.dark"]
         let saved = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
         let preferences = AppPreferences.shared
         let language = preferences.language
         let appearance = preferences.appearance
         let background = preferences.railBackgroundColorHex
         preferences.appearance = .system
-        preferences.setRailBackgroundColor(nil)
+        for scheme in [ColorScheme.light, .dark] { preferences.setRailBackgroundColor(nil, for: scheme) }
         return {
             preferences.language = language
             preferences.appearance = appearance
-            if let background { preferences.setRailBackgroundColor(hex: background) }
+            for (scheme, hex) in background { preferences.setRailBackgroundColor(hex: hex, for: scheme) }
             for (key, value) in saved {
                 if let value { UserDefaults.standard.set(value, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
             }
