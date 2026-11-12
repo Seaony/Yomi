@@ -368,7 +368,6 @@ private struct ProviderConfigurationView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
-                .frame(width: 180)
             }
 
             if configuration.source == .endpoint
@@ -455,7 +454,6 @@ private struct ProviderConfigurationView: View {
                     }
                     .labelsHidden()
                     .pickerStyle(.menu)
-                    .frame(width: 180)
                     .onChange(of: configuration.account) { _, newRegion in
                         guard !configuration.endpoint.isEmpty,
                             configuration.endpoint != newRegion
@@ -491,7 +489,6 @@ private struct ProviderConfigurationView: View {
                     }
                     .labelsHidden()
                     .pickerStyle(.menu)
-                    .frame(width: 180)
                 }
             }
             if descriptor.id.rawValue == "deepseek", deepSeekProfiles.count > 1 {
@@ -504,7 +501,6 @@ private struct ProviderConfigurationView: View {
                     }
                     .labelsHidden()
                     .pickerStyle(.menu)
-                    .frame(width: 180)
                 }
             }
             if configuration.source == .account
@@ -596,7 +592,6 @@ private struct ProviderConfigurationView: View {
                     }
                     .labelsHidden()
                     .pickerStyle(.menu)
-                    .frame(width: 180)
                 }
                 if bedrockAuthMode == BedrockAuthMode.profile.rawValue {
                     ProviderSettingsTextField(
