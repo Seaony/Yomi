@@ -1,0 +1,9 @@
+Style reference: the attached reference images (icon showcase by Kubai). Use ONLY their style principles, do not copy their characters: macOS app icon on a rounded-square (squircle) canvas with soft 3D depth and a subtle glossy highlight; ONE simple personified subject with very few details; the subject is cropped by the canvas at a tilt so it only peeks in from an edge (focus + charm); strong color contrast between subject and background, and if the subject is not vivid enough give it a clean white sticker-style outline and a soft drop shadow; the background (or a small accessory) communicates what the app does.
+The app: CodeEdge, a macOS utility that docks a slim vertical rail on the edge of the screen and shows how much quota is left for AI coding tools (Claude, Codex, Cursor) as small circular ring gauges.
+Output: one 1:1 image, 1024x1024. Show the single icon centered on a plain warm light-gray backdrop (#ECEAE6) with generous margin, like the reference showcase. No text anywhere unless stated. No other objects outside the icon.
+
+Concept 1 — the existing blue blob mascot peeks in from the edge.
+- Subject: the same soft rounded blob character as the attached current-yomi-icon.png (pale icy-blue body, small curled antenna nub on top, two dark-blue oval eyes, tiny smile). Keep it recognizably the same character.
+- It peeks in from the RIGHT edge of the canvas, tilted about 12 degrees, so only the top of its head, the antenna and both eyes are visible; the rest is cut off by the canvas edge.
+- White sticker outline + soft shadow around the blob so it pops.
+- Background: deep navy blue (#0B2A5B to #123E86 gradient). On the left side of the background, a slim vertical rounded rail with three small circular ring gauges stacked vertically, each partially filled (teal ring about 60%, orange ring about 85%, sky-blue ring about 30%), clean and flat. This rail is the "function" hint.
