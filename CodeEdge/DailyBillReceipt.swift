@@ -135,7 +135,7 @@ struct DailyBillReceiptView: View {
             VStack(spacing: 4) {
                 downloadLine
                     .foregroundStyle(ink.opacity(0.75))
-                Text(copy.text("所有 AI 额度，一眼看清", "Every AI quota. One glance."))
+                Text(copy.text("用到极限，心里有数", "Code to the edge."))
                     .foregroundStyle(ink.opacity(0.55))
             }
             .font(.system(size: 10.5, design: .monospaced))

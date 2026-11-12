@@ -275,7 +275,7 @@ private struct ProductShotCanvas: View {
                     .foregroundStyle(ink)
             }
             .padding(.bottom, 26)
-            Text(english ? "Every AI quota.\nOne glance." : "所有 AI 额度，\n一眼看清。")
+            Text(english ? "Code to\nthe edge." : "用到极限，\n心里有数。")
                 .font(.system(size: english ? 46 : 44, weight: .heavy, design: .rounded))
                 .foregroundStyle(ink)
                 .lineSpacing(2)

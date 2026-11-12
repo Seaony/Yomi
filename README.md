@@ -4,7 +4,7 @@
 
 # CodeEdge
 
-### Every AI quota. One glance.
+### Code to the edge.
 
 **Codex, Claude, Cursor, Gemini, Copilot, Kiro and 100+ more, pinned to the edge of your screen.**<br>
 Remaining quota, reset times, today's tokens and estimated spend,<br>

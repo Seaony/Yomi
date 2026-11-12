@@ -4,7 +4,7 @@
 
 # CodeEdge
 
-### 所有 AI 额度，一眼看清。
+### 用到极限，心里有数。
 
 **Codex、Claude、Cursor、Gemini、Copilot、Kiro 等 100 多个服务，固定在屏幕边缘。**<br>
 剩余额度、重置时间、今日 Token 和预估花费，<br>
