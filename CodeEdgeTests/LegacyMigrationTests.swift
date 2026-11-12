@@ -244,6 +244,81 @@ struct LegacyMigrationTests {
         #expect(query[kSecUseAuthenticationUI as String] as? String == "u_AuthUIF")
         #expect(try #require(query[kSecUseAuthenticationContext as String] as? LAContext).interactionNotAllowed)
     }
+
+    @Test
+    func legacyKeychainListsAttributesThenReadsEveryPasswordSeparately() throws {
+        var queries: [[String: Any]] = []
+        let accounts = ["one", "two"]
+        let keychain = LegacyMigration.SystemKeychain(copyMatching: { query in
+            queries.append(query)
+            let all = query[kSecMatchLimit as String] as? String == kSecMatchLimitAll as String
+            let returnsData = query[kSecReturnData as String] as? Bool == true
+            // macOS legacy 明确拒绝批量返回密码数据；假接口保持这个限制。
+            if all && returnsData { return (errSecParam, nil) }
+            if all { return (errSecSuccess, accounts.map { [kSecAttrAccount as String: $0] }) }
+            guard let account = query[kSecAttrAccount as String] as? String,
+                  accounts.contains(account), returnsData else { return (errSecParam, nil) }
+            return (errSecSuccess, Data(account.utf8))
+        }, addItem: { _ in Issue.record("枚举不能新增条目"); return errSecParam })
+
+        let entries = try keychain.accounts(service: "test-legacy-service").map { account in
+            LegacyMigrationCredential(account: account, data: try keychain.data(service: "test-legacy-service", account: account))
+        }
+
+        #expect(entries == accounts.map { .init(account: $0, data: Data($0.utf8)) })
+        #expect(queries.count == 3)
+        #expect(queries[0][kSecReturnAttributes as String] as? Bool == true)
+        #expect(queries[0][kSecReturnData as String] == nil)
+        for query in queries.dropFirst() {
+            #expect(query[kSecMatchLimit as String] as? String == kSecMatchLimitOne as String)
+            #expect(query[kSecReturnData as String] as? Bool == true)
+            #expect(query[kSecReturnAttributes as String] == nil)
+        }
+        for query in queries {
+            #expect(query[kSecUseAuthenticationUI as String] as? String == "u_AuthUIF")
+            #expect(try #require(query[kSecUseAuthenticationContext as String] as? LAContext).interactionNotAllowed)
+        }
+    }
+
+    @Test
+    func existingNewCredentialDoesNotRequireReadingTheOldSecret() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        fixture.keychain.legacy = [.init(account: "already-new", data: Data([1])), .init(account: "missing", data: Data([2]))]
+        fixture.keychain.current["already-new"] = Data([9])
+        fixture.keychain.deniedReadAccounts = ["already-new"]
+
+        let report = fixture.migrate([:])
+
+        #expect(report.completed && report.credentials == 1)
+        #expect(fixture.keychain.readAccounts == ["missing"])
+        #expect(fixture.keychain.current == ["already-new": Data([9]), "missing": Data([2])])
+    }
+
+    @Test(arguments: [LegacyMigration.KeychainOperation.list, .read, .contains, .add])
+    func systemCallFailuresIdentifyTheOperationWithoutRevealingValues(operation: LegacyMigration.KeychainOperation) throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let keychain = LegacyMigration.SystemKeychain(copyMatching: { query in
+            let all = query[kSecMatchLimit as String] as? String == kSecMatchLimitAll as String
+            let secret = query[kSecReturnData as String] as? Bool == true
+            let current: LegacyMigration.KeychainOperation = all ? .list : secret ? .read : .contains
+            if current == operation { return (errSecParam, nil) }
+            if all { return (errSecSuccess, [[kSecAttrAccount as String: "private-account"]]) }
+            if secret { return (errSecSuccess, Data("private-secret".utf8)) }
+            return (errSecItemNotFound, nil)
+        }, addItem: { _ in errSecParam })
+        let report = LegacyMigration.migrate(defaults: fixture.defaults, destinationDomain: fixture.defaults.domain,
+            legacyValues: [:], keychain: keychain, applicationSupportRoot: fixture.root)
+
+        #expect(report.failure == .keychain(errSecParam))
+        #expect(report.keychainOperation == operation)
+        #expect(!report.completed)
+        #expect(fixture.defaults.values[LegacyMigration.completionKey] == nil)
+        #expect(report.logLine.contains("operation: \(operation.rawValue)"))
+        #expect(!report.logLine.contains("private"))
+        #expect(DiagnosticsRedactor.redact(report.logLine) == report.logLine)
+    }
 }
 
 private struct Fixture {
@@ -300,13 +375,22 @@ nonisolated private final class FakeKeychain: LegacyMigrationKeychain {
     var failAddAt: Int?
     var racingValue: Data?
     var beforeRead: (() -> Void)?
+    var readAccounts: [String] = []
+    var deniedReadAccounts: Set<String> = []
     private var addCalls = 0
 
-    func entries(service: String) throws -> [LegacyMigrationCredential] {
+    func accounts(service: String) throws -> [String] {
         readServices.append(service)
         beforeRead?()
-        if failRead { throw LegacyMigration.KeychainError(status: errSecAuthFailed) }
-        return legacy
+        if failRead { throw LegacyMigration.KeychainError(status: errSecAuthFailed, operation: .list) }
+        return legacy.map(\.account)
+    }
+    func data(service: String, account: String) throws -> Data {
+        readAccounts.append(account)
+        if deniedReadAccounts.contains(account) {
+            throw LegacyMigration.KeychainError(status: errSecInteractionNotAllowed, operation: .read)
+        }
+        return legacy.first { $0.account == account }!.data
     }
     func contains(service: String, account: String) throws -> Bool { current[account] != nil }
     func addIfAbsent(_ credential: LegacyMigrationCredential, service: String) throws -> Bool {

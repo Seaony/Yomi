@@ -7,7 +7,8 @@ nonisolated struct LegacyMigrationCredential: Equatable, Sendable {
 }
 
 nonisolated protocol LegacyMigrationKeychain {
-    func entries(service: String) throws -> [LegacyMigrationCredential]
+    func accounts(service: String) throws -> [String]
+    func data(service: String, account: String) throws -> Data
     func contains(service: String, account: String) throws -> Bool
     func addIfAbsent(_ credential: LegacyMigrationCredential, service: String) throws -> Bool
 }
@@ -32,13 +33,15 @@ nonisolated enum LegacyMigration {
         var completed = false
         var alreadyComplete = false
         var failure: Failure?
+        var keychainOperation: KeychainOperation?
 
         var logLine: String {
             let result = completed ? "completed" : "incomplete"
             let detail: String
             switch failure {
             case .preferences: detail = " stage: preferences"
-            case let .keychain(status): detail = " stage: keychain status: \(status)"
+            case let .keychain(status):
+                detail = " stage: keychain operation: \(keychainOperation?.rawValue ?? "unknown") status: \(status)"
             case .applicationSupport: detail = " stage: application-support"
             case nil: detail = ""
             }
@@ -97,12 +100,15 @@ nonisolated enum LegacyMigration {
         }
 
         do {
-            for credential in try keychain.entries(service: legacyKeychainService) {
-                guard try !keychain.contains(service: keychainService, account: credential.account) else { continue }
+            for account in try keychain.accounts(service: legacyKeychainService) {
+                guard try !keychain.contains(service: keychainService, account: account) else { continue }
+                let credential = LegacyMigrationCredential(account: account,
+                    data: try keychain.data(service: legacyKeychainService, account: account))
                 if try keychain.addIfAbsent(credential, service: keychainService) { report.credentials += 1 }
             }
         } catch {
             report.failure = .keychain((error as? KeychainError)?.status ?? errSecInternalError)
+            report.keychainOperation = (error as? KeychainError)?.operation
             return report
         }
 
@@ -152,46 +158,74 @@ nonisolated enum LegacyMigration {
         "usage-revision.", "credential-keychain-granted.", "credential-keychain-denied-until.", "yomi-",
     ]
 
+    enum KeychainOperation: String, Sendable {
+        case list, read, contains, add, unknown
+    }
+
     struct KeychainError: Error {
         let status: OSStatus
+        var operation: KeychainOperation = .unknown
     }
 
     struct SystemKeychain: LegacyMigrationKeychain {
-        func entries(service: String) throws -> [LegacyMigrationCredential] {
+        private let copyMatching: ([String: Any]) -> (OSStatus, Any?)
+        private let addItem: ([String: Any]) -> OSStatus
+
+        init(
+            copyMatching: @escaping ([String: Any]) -> (OSStatus, Any?) = { query in
+                var result: CFTypeRef?
+                let status = SecItemCopyMatching(query as CFDictionary, &result)
+                return (status, result)
+            },
+            addItem: @escaping ([String: Any]) -> OSStatus = { SecItemAdd($0 as CFDictionary, nil) }
+        ) {
+            self.copyMatching = copyMatching
+            self.addItem = addItem
+        }
+
+        func accounts(service: String) throws -> [String] {
             var query = Self.baseQuery(service: service)
             query[kSecMatchLimit as String] = kSecMatchLimitAll
             query[kSecReturnAttributes as String] = true
-            query[kSecReturnData as String] = true
-            var result: CFTypeRef?
-            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            let (status, result) = copyMatching(query)
             if status == errSecItemNotFound { return [] }
-            guard status == errSecSuccess else { throw KeychainError(status: status) }
-            guard let rows = result as? [[String: Any]] else { throw KeychainError(status: errSecDecode) }
+            guard status == errSecSuccess else { throw KeychainError(status: status, operation: .list) }
+            guard let rows = result as? [[String: Any]] else { throw KeychainError(status: errSecDecode, operation: .list) }
             return try rows.map { row in
-                guard let account = row[kSecAttrAccount as String] as? String,
-                      let data = row[kSecValueData as String] as? Data else {
-                    throw KeychainError(status: errSecDecode)
+                guard let account = row[kSecAttrAccount as String] as? String else {
+                    throw KeychainError(status: errSecDecode, operation: .list)
                 }
-                return LegacyMigrationCredential(account: account, data: data)
+                return account
             }
+        }
+
+        func data(service: String, account: String) throws -> Data {
+            // macOS 旧钥匙串不允许批量取密码，必须按账户逐条静默读取。
+            var query = Self.baseQuery(service: service, account: account)
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
+            query[kSecReturnData as String] = true
+            let (status, result) = copyMatching(query)
+            guard status == errSecSuccess else { throw KeychainError(status: status, operation: .read) }
+            guard let data = result as? Data else { throw KeychainError(status: errSecDecode, operation: .read) }
+            return data
         }
 
         func contains(service: String, account: String) throws -> Bool {
             var query = Self.baseQuery(service: service, account: account)
             query[kSecMatchLimit as String] = kSecMatchLimitOne
             query[kSecReturnAttributes as String] = true
-            let status = SecItemCopyMatching(query as CFDictionary, nil)
+            let (status, _) = copyMatching(query)
             if status == errSecItemNotFound { return false }
-            guard status == errSecSuccess else { throw KeychainError(status: status) }
+            guard status == errSecSuccess else { throw KeychainError(status: status, operation: .contains) }
             return true
         }
 
         func addIfAbsent(_ credential: LegacyMigrationCredential, service: String) throws -> Bool {
             var query = Self.baseQuery(service: service, account: credential.account)
             query[kSecValueData as String] = credential.data
-            let status = SecItemAdd(query as CFDictionary, nil)
+            let status = addItem(query)
             if status == errSecDuplicateItem { return false }
-            guard status == errSecSuccess else { throw KeychainError(status: status) }
+            guard status == errSecSuccess else { throw KeychainError(status: status, operation: .add) }
             return true
         }
 

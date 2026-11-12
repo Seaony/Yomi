@@ -8,6 +8,13 @@
 import SwiftUI
 
 @main
+enum CodeEdgeLauncher {
+    static func main() {
+        LegacyMigration.runOnce()
+        CodeEdgeApp.main()
+    }
+}
+
 struct CodeEdgeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 

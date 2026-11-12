@@ -132,7 +132,7 @@ final class ProviderPreferences: ObservableObject {
 }
 
 private nonisolated enum SecretVault {
-    private static let service = "com.seaony.Yomi.providers"
+    private static let service = "com.seaony.CodeEdge.providers"
 
     static func read(account: String) throws -> String? {
         var query = baseQuery(account: account)
