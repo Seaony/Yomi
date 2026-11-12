@@ -448,7 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel: FloatingPanel
     ) -> NSRect {
         let visibleFrame = targetScreen()?.visibleFrame ?? panel.frame
-        let padding = ProviderDetailLayout.outerPadding + ProviderDetailLayout.shadowOverflow
+        let padding = ProviderDetailLayout.panelPadding
         let minimumY = visibleFrame.minY + ProviderDetailLayout.screenMargin - padding
         let maximumY = max(
             minimumY,
@@ -563,7 +563,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         else { return false }
         return ProviderDetailInteractionRegion.contains(
             NSEvent.mouseLocation,
-            detailFrame: detailPanel.frame,
+            detailFrame: ProviderDetailLayout.visibleCardFrame(panelFrame: detailPanel.frame),
             railFrame: panel.frame,
             railSide: railSide
         )

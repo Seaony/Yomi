@@ -6,9 +6,14 @@ enum ProviderDetailLayout {
     static let arrowHalfHeight: CGFloat = 7
     static let outerPadding: CGFloat = 22
     static let shadowOverflow: CGFloat = 16
+    static let panelPadding = outerPadding + shadowOverflow
     static let screenMargin: CGFloat = 24
     static let railGap: CGFloat = 6
     static let transitionOffset: CGFloat = 8
+
+    static func visibleCardFrame(panelFrame: CGRect) -> CGRect {
+        panelFrame.insetBy(dx: panelPadding, dy: panelPadding)
+    }
 }
 
 enum ProviderDetailTransitionDirection {
@@ -659,8 +664,8 @@ struct ProviderDetailPanelView: View {
                         )
                 }
         }
-        .padding(ProviderDetailLayout.outerPadding + ProviderDetailLayout.shadowOverflow)
         .contentShape(Rectangle())
+        .padding(ProviderDetailLayout.panelPadding)
         .animation(
             reduceMotion ? nil : .easeInOut(duration: 0.18),
             value: presentation.descriptor.id
