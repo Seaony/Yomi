@@ -4,7 +4,9 @@ import SwiftUI
 enum ProviderDetailLayout {
     static let arrowWidth: CGFloat = 8
     static let arrowHalfHeight: CGFloat = 7
-    static let outerPadding: CGFloat = 16
+    static let outerPadding: CGFloat = 22
+    static let shadowOverflow: CGFloat = 16
+    static let screenMargin: CGFloat = 24
     static let railGap: CGFloat = 6
     static let transitionOffset: CGFloat = 8
 }
@@ -648,8 +650,16 @@ struct ProviderDetailPanelView: View {
         .background {
             ProviderDetailPanelShape(railSide: railSide)
                 .fill(AppTheme.detailBackground(for: colorScheme))
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0.45 : 0.16), radius: 14, y: 5)
+                .overlay {
+                    ProviderDetailPanelShape(railSide: railSide)
+                        .stroke(
+                            AppTheme.primaryText(for: colorScheme).opacity(colorScheme == .dark ? 0.12 : 0.10),
+                            lineWidth: 1
+                        )
+                }
         }
-        .padding(ProviderDetailLayout.outerPadding)
+        .padding(ProviderDetailLayout.outerPadding + ProviderDetailLayout.shadowOverflow)
         .contentShape(Rectangle())
         .animation(
             reduceMotion ? nil : .easeInOut(duration: 0.18),
@@ -853,24 +863,25 @@ private struct ProviderDetailPanelShape: Shape {
         )
         let midpoint = rect.midY
 
-        var path = Path(
+        let path = Path(
             roundedRect: cardRect,
             cornerRadius: 18,
             style: .continuous
         )
         let cardEdge = railSide == .right ? cardRect.maxX - 1 : cardRect.minX + 1
         let arrowTip = railSide == .right ? rect.maxX : rect.minX
-        path.move(to: CGPoint(
+        var arrow = Path()
+        arrow.move(to: CGPoint(
             x: cardEdge,
             y: midpoint - ProviderDetailLayout.arrowHalfHeight
         ))
-        path.addLine(to: CGPoint(x: arrowTip, y: midpoint))
-        path.addLine(to: CGPoint(
+        arrow.addLine(to: CGPoint(x: arrowTip, y: midpoint))
+        arrow.addLine(to: CGPoint(
             x: cardEdge,
             y: midpoint + ProviderDetailLayout.arrowHalfHeight
         ))
-        path.closeSubpath()
-        return path
+        arrow.closeSubpath()
+        return path.union(arrow)
     }
 }
 

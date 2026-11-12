@@ -448,19 +448,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel: FloatingPanel
     ) -> NSRect {
         let visibleFrame = targetScreen()?.visibleFrame ?? panel.frame
-        let minimumY = visibleFrame.minY + 8
-        let maximumY = max(minimumY, visibleFrame.maxY - fittingSize.height - 8)
+        let padding = ProviderDetailLayout.outerPadding + ProviderDetailLayout.shadowOverflow
+        let minimumY = visibleFrame.minY + ProviderDetailLayout.screenMargin - padding
+        let maximumY = max(
+            minimumY,
+            visibleFrame.maxY - fittingSize.height - ProviderDetailLayout.screenMargin + padding
+        )
         let anchorY = panel.frame.maxY - localY
         let proposedY = anchorY - fittingSize.height / 2
         let x = switch railSide {
         case .left:
             panel.frame.maxX
                 + ProviderDetailLayout.railGap
-                - ProviderDetailLayout.outerPadding
+                - padding
         case .right:
             panel.frame.minX
                 - fittingSize.width
-                + ProviderDetailLayout.outerPadding
+                + padding
                 - ProviderDetailLayout.railGap
         }
         return NSRect(

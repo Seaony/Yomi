@@ -185,6 +185,13 @@ struct UsageRailView: View {
             GeometryReader { proxy in
                 UsageRailShape(side: railSide)
                     .fill(railBackground)
+                    .overlay {
+                        UsageRailShape(side: railSide)
+                            .stroke(
+                                AppTheme.primaryText(for: colorScheme).opacity(colorScheme == .dark ? 0.12 : 0.10),
+                                lineWidth: 1
+                            )
+                    }
                     .frame(
                         height: max(
                             0,
