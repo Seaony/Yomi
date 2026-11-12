@@ -44,7 +44,7 @@ struct DailyBillReceiptView: View {
                     .font(.system(size: 40, weight: .bold, design: .monospaced))
                     .lineLimit(1)
                     .minimumScaleFactor(0.65)
-                Text(copy.text("按 API 价格折算 · 非发票", "Estimated at API prices · Not an invoice"))
+                Text(copy.text("按 API 价格折算", "Estimated at API prices"))
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(ink.opacity(0.6))
                     .multilineTextAlignment(.center)
@@ -131,12 +131,17 @@ struct DailyBillReceiptView: View {
 
             dashedDivider
 
-            Text(copy.text("仅统计本地日志，不是付款凭证", "Based on local logs. Not a payment receipt."))
-                .font(.system(size: 10.5, design: .monospaced))
-                .foregroundStyle(ink.opacity(0.55))
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity)
+            // 小票会被复制、保存去分享，页脚像真小票一样印上出处。
+            VStack(spacing: 4) {
+                downloadLine
+                    .foregroundStyle(ink.opacity(0.75))
+                Text(copy.text("所有 AI 额度，一眼看清", "Every AI quota. One glance."))
+                    .foregroundStyle(ink.opacity(0.55))
+            }
+            .font(.system(size: 10.5, design: .monospaced))
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity)
         }
         .font(.system(size: 12.5, design: .monospaced))
         .foregroundStyle(ink)
@@ -144,11 +149,23 @@ struct DailyBillReceiptView: View {
         .padding(.top, 28)
         .padding(.bottom, 24)
         .frame(width: Self.width, alignment: .leading)
-        .background(ReceiptPalette.paper, in: ReceiptPaperShape())
+        .padding(.top, ReceiptPaperShape.toothHeight)
+        .padding(.bottom, ReceiptPaperShape.toothHeight)
+        .background { ReceiptPaperSurface() }
         .clipShape(ReceiptPaperShape())
-        .shadow(color: .black.opacity(0.15), radius: 18, y: 6)
+        // 先合成一层再加影，不然每行字都会带上影子。
+        .compositingGroup()
+        // 一层贴着纸边的浅影，加一层散开的影，像一张放在桌上的纸。
+        .shadow(color: .black.opacity(0.12), radius: 1, y: 1)
+        .shadow(color: .black.opacity(0.16), radius: 14, y: 8)
         .environment(\.colorScheme, colorScheme)
         .environment(\.locale, language.locale)
+    }
+
+    private var downloadLine: Text {
+        let name = Text("CodeEdge").fontWeight(.bold)
+        let site = "codeedge.mameya.app"
+        return language == .english ? Text("Get \(name) at \(site)") : Text("在 \(site) 下载 \(name)")
     }
 
     private var streakText: String {
@@ -359,20 +376,79 @@ private struct ReceiptDashLine: Shape {
     }
 }
 
+/// 上下两头都是撕下来的锯齿边。
 private struct ReceiptPaperShape: Shape {
+    static let toothHeight: CGFloat = 6
+
     func path(in rect: CGRect) -> Path {
-        let toothHeight: CGFloat = 6
+        let tooth = Self.toothHeight
         let count = max(1, Int(rect.width / 12))
         let step = rect.width / CGFloat(count)
         var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - toothHeight))
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY + tooth))
+        for index in 0..<count {
+            path.addLine(to: CGPoint(x: rect.minX + (CGFloat(index) + 0.5) * step, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.minX + CGFloat(index + 1) * step, y: rect.minY + tooth))
+        }
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - tooth))
         for index in (0..<count).reversed() {
             path.addLine(to: CGPoint(x: rect.minX + (CGFloat(index) + 0.5) * step, y: rect.maxY))
-            path.addLine(to: CGPoint(x: rect.minX + CGFloat(index) * step, y: rect.maxY - toothHeight))
+            path.addLine(to: CGPoint(x: rect.minX + CGFloat(index) * step, y: rect.maxY - tooth))
         }
         path.closeSubpath()
         return path
+    }
+}
+
+/// 纸面：底色、纤维颗粒和两侧微微卷起的暗边。
+private struct ReceiptPaperSurface: View {
+    var body: some View {
+        ZStack {
+            ReceiptPalette.paper
+            Canvas(rendersAsynchronously: false) { context, size in
+                // 固定种子，同一尺寸每次画出来一样，导出的图片也稳定。
+                var random = ReceiptGrainRandom(seed: UInt64(size.width * 7919 + size.height))
+                let ink = ReceiptPalette.ink
+                for _ in 0..<Int(size.width * size.height / 45) {
+                    let diameter = 0.5 + random.next() * 0.9
+                    let rect = CGRect(x: random.next() * size.width, y: random.next() * size.height,
+                                      width: diameter, height: diameter)
+                    context.fill(Path(ellipseIn: rect), with: .color(ink.opacity(0.04 + random.next() * 0.07)))
+                }
+                for _ in 0..<Int(size.width * size.height / 900) {
+                    let start = CGPoint(x: random.next() * size.width, y: random.next() * size.height)
+                    let angle = random.next() * .pi
+                    let length = 3 + random.next() * 7
+                    var fiber = Path()
+                    fiber.move(to: start)
+                    fiber.addLine(to: CGPoint(x: start.x + cos(angle) * length, y: start.y + sin(angle) * length))
+                    context.stroke(fiber, with: .color(ink.opacity(0.05)), lineWidth: 0.5)
+                }
+            }
+            LinearGradient(
+                stops: [
+                    .init(color: .black.opacity(0.05), location: 0),
+                    .init(color: .clear, location: 0.12),
+                    .init(color: .clear, location: 0.88),
+                    .init(color: .black.opacity(0.05), location: 1),
+                ],
+                startPoint: .leading, endPoint: .trailing
+            )
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct ReceiptGrainRandom {
+    private var state: UInt64
+
+    init(seed: UInt64) { state = seed | 1 }
+
+    /// 返回 0..<1 的伪随机数。
+    mutating func next() -> CGFloat {
+        state ^= state << 13
+        state ^= state >> 7
+        state ^= state << 17
+        return CGFloat(state % 1_000_000) / 1_000_000
     }
 }
