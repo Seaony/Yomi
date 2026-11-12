@@ -191,8 +191,8 @@ nonisolated enum BrowserCookieAccess {
 
     private static func recordProfileFailure(_ browser: Browser) {
         scope?.record(AppLocalization.text(
-            "无法读取 \(browser.displayName) 的浏览器资料。请在系统设置 → 隐私与安全性 → 文件与文件夹中检查 Yomi 的访问权限。",
-            "Cannot read \(browser.displayName)'s profile. Check Yomi's access in System Settings → Privacy & Security → Files & Folders."
+            "无法读取 \(browser.displayName) 的浏览器资料。请在系统设置 → 隐私与安全性 → 文件与文件夹中检查 CodeEdge 的访问权限。",
+            "Cannot read \(browser.displayName)'s profile. Check CodeEdge's access in System Settings → Privacy & Security → Files & Folders."
         ), priority: 1)
     }
 

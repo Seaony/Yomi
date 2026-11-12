@@ -6,7 +6,7 @@ enum ProviderCatalog {
 
     static let overview = item(
         "yomi-overview",
-        "Yomi",
+        "CodeEdge",
         "Today",
         "30 days",
         .tokens,

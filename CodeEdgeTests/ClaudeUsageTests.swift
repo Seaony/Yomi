@@ -254,7 +254,7 @@ struct ClaudeUsageTests {
     @Test @MainActor
     func restoredCacheShowsRenamedPlan() throws {
         struct Cached: Encodable { let usage: ProviderUsage; let revision: Int }
-        let suite = "yomi-claude-plan-\(UUID().uuidString)"
+        let suite = "codeedge-claude-plan-\(UUID().uuidString)"
         let defaults = try #require(TestUserDefaults(suiteName: suite))
         defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suite) }
         let id = ProviderID(rawValue: "claude")

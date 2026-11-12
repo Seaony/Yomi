@@ -54,7 +54,7 @@ struct FullscreenRevealStrip: View {
             .onHover(perform: hoverChanged)
             .onTapGesture(perform: reveal)
             .pointerStyle(.link)
-            .accessibilityLabel(AppCopy(language: preferences.language).text("展开 Yomi", "Expand Yomi"))
+            .accessibilityLabel(AppCopy(language: preferences.language).text("展开 CodeEdge", "Expand CodeEdge"))
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { reveal() }
             .preferredColorScheme(preferences.appearance.colorScheme)

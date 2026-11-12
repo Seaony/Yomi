@@ -144,7 +144,7 @@ struct OpenCodeGoUsageTests {
 
     @Test(arguments: [false, true])
     func localDatabaseReadsV2SessionMessagesOnce(withLegacyTables: Bool) throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: "yomi-opencode-\(UUID().uuidString)")
+        let directory = FileManager.default.temporaryDirectory.appending(path: "codeedge-opencode-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let database = directory.appending(path: "opencode.db")
@@ -191,7 +191,7 @@ struct OpenCodeGoUsageTests {
 
     @Test
     func cliCredentialPrefersActiveDatabaseLoginOverLegacyAuthFile() throws {
-        let home = FileManager.default.temporaryDirectory.appending(path: "yomi-opencode-\(UUID().uuidString)")
+        let home = FileManager.default.temporaryDirectory.appending(path: "codeedge-opencode-\(UUID().uuidString)")
         let directory = home.appending(path: ".local/share/opencode")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: home) }

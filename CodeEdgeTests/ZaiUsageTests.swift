@@ -68,7 +68,7 @@ struct ZaiUsageTests {
         ) == nil)
 
         let home = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Yomi-ZaiUsageTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("CodeEdge-ZaiUsageTests-\(UUID().uuidString)", isDirectory: true)
         let keyFile = home.appendingPathComponent(".coding-relay/glm-api-key")
         try FileManager.default.createDirectory(
             at: keyFile.deletingLastPathComponent(),

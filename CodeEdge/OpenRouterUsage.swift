@@ -164,7 +164,7 @@ nonisolated enum OpenRouterUsageFetcher {
         let key = cleaned(apiKey)
         guard let key else { throw OpenRouterUsageError.missingCredential }
         let baseURL = try resolvedBaseURL(configured: endpoint, environment: environment)
-        let title = cleaned(clientTitle) ?? cleaned(environment[titleEnvironmentKey]) ?? "Yomi"
+        let title = cleaned(clientTitle) ?? cleaned(environment[titleEnvironmentKey]) ?? "CodeEdge"
         let referer = cleaned(httpReferer) ?? cleaned(environment[refererEnvironmentKey])
 
         let credits: Credits?

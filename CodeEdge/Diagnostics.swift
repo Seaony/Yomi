@@ -7,6 +7,7 @@ nonisolated enum DiagnosticCategory: String, CaseIterable, Sendable {
     case credentials
     case update
     case rail
+    case migration
 }
 
 nonisolated enum DiagnosticsRedactor {
@@ -112,7 +113,7 @@ nonisolated final class DiagnosticLog: @unchecked Sendable {
 
     init(
         directoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/Yomi", isDirectory: true),
+            .appendingPathComponent("Library/Logs/CodeEdge", isDirectory: true),
         maximumFileBytes: Int = 512 * 1024,
         fileCount: Int = 4,
         systemLoggingEnabled: Bool = true
@@ -121,7 +122,7 @@ nonisolated final class DiagnosticLog: @unchecked Sendable {
         self.maximumFileBytes = max(256, maximumFileBytes)
         self.fileCount = max(1, fileCount)
         self.systemLoggingEnabled = systemLoggingEnabled
-        let subsystem = Bundle.main.bundleIdentifier ?? "Yomi"
+        let subsystem = Bundle.main.bundleIdentifier ?? "CodeEdge"
         loggers = Dictionary(uniqueKeysWithValues: DiagnosticCategory.allCases.map {
             ($0, Logger(subsystem: subsystem, category: $0.rawValue))
         })
@@ -165,7 +166,7 @@ nonisolated final class DiagnosticLog: @unchecked Sendable {
         let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         var lines = [
-            "Yomi \(version) (\(build))",
+            "CodeEdge \(version) (\(build))",
             "macOS \(ProcessInfo.processInfo.operatingSystemVersionString)",
             copy.text("已启用的 Provider：", "Enabled providers:"),
         ]
@@ -194,7 +195,7 @@ nonisolated final class DiagnosticLog: @unchecked Sendable {
     }
 
     private func fileURL(_ index: Int) -> URL {
-        directoryURL.appendingPathComponent(index == 0 ? "yomi.log" : "yomi.\(index).log")
+        directoryURL.appendingPathComponent(index == 0 ? "codeedge.log" : "codeedge.\(index).log")
     }
 
     private func append(_ data: Data) {

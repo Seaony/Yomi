@@ -1013,7 +1013,7 @@ nonisolated struct DevinAppSessionImporter: Sendable {
     private func itemTableRows() throws -> [ItemRow] {
         let source = databaseURL.resolvingSymlinksInPath()
         guard FileManager.default.fileExists(atPath: source.path) else { return [] }
-        let directory = FileManager.default.temporaryDirectory.appending(path: "yomi-devin-\(UUID().uuidString)")
+        let directory = FileManager.default.temporaryDirectory.appending(path: "codeedge-devin-\(UUID().uuidString)")
         try FileManager.default.createDirectory(
             at: directory,
             withIntermediateDirectories: true,

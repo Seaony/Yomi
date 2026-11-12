@@ -79,7 +79,7 @@ enum OpenCodeGoUsageFetcher {
         request.timeoutInterval = 18
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("Yomi/1", forHTTPHeaderField: "User-Agent")
+        request.setValue("CodeEdge/1", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw UsageCollectionError.unreadableResponse }
         guard (200..<300).contains(http.statusCode) else { throw UsageCollectionError.requestFailed(http.statusCode) }

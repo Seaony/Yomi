@@ -182,7 +182,7 @@ nonisolated enum HuggingFaceUsageFetcher {
         request.timeoutInterval = timeout
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("Yomi", forHTTPHeaderField: "User-Agent")
+        request.setValue("CodeEdge", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw HuggingFaceUsageError.invalidResponse }
         switch http.statusCode {

@@ -6,7 +6,7 @@ import Testing
 
 @Suite(.serialized)
 struct CursorAppTokenTests {
-    // 测试跑在 Yomi.app 里，授权记录会写进真实偏好设置，结束后清掉。
+    // 测试跑在 CodeEdge.app 里，授权记录会写进真实偏好设置，结束后清掉。
     private func resetGrant() {
         for prefix in ["credential-keychain-granted.", "credential-keychain-denied-until."] {
             UserDefaults.standard.removeObject(forKey: prefix + "Cursor Safe Storage")

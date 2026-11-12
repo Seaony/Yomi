@@ -4,11 +4,11 @@ import Testing
 @testable import CodeEdge
 
 // 用真实界面组件和演示数据生成 README 产品图，成品 JPEG 写入 docs/assets，中间图留在 /tmp。
-// 平时跳过；运行：TEST_RUNNER_YOMI_PRODUCT_SHOTS=1 xcodebuild test -only-testing:YomiTests/ProductShotTests
+// 平时跳过；运行：TEST_RUNNER_CODEEDGE_PRODUCT_SHOTS=1 xcodebuild test -only-testing:CodeEdgeTests/ProductShotTests
 @MainActor
-@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["YOMI_PRODUCT_SHOTS"] != nil))
+@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["CODEEDGE_PRODUCT_SHOTS"] != nil))
 struct ProductShotTests {
-    private static let outputDirectory = URL(fileURLWithPath: "/tmp/yomi-product-shots", isDirectory: true)
+    private static let outputDirectory = URL(fileURLWithPath: "/tmp/codeedge-product-shots", isDirectory: true)
     private static let repositoryRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
     fileprivate static let demoProviders = ["codex", "claude", "cursor", "gemini", "copilot", "kiro"]
 
@@ -35,7 +35,7 @@ struct ProductShotTests {
     // MARK: - 渲染真实界面
 
     private func renderInterface(dark: Bool, language: AppLanguage) async throws -> (NSImage, NSImage) {
-        let suite = "yomi-product-shots-\(UUID().uuidString)"
+        let suite = "codeedge-product-shots-\(UUID().uuidString)"
         let defaults = try #require(TestUserDefaults(suiteName: suite))
         defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suite) }
         defaults.set(true, forKey: "show-provider-names")
@@ -270,7 +270,7 @@ private struct ProductShotCanvas: View {
                         .frame(width: 36, height: 36)
                         .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
                 }
-                Text("Yomi")
+                Text("CodeEdge")
                     .font(.system(size: 22, weight: .bold, design: .rounded))
                     .foregroundStyle(ink)
             }
@@ -306,7 +306,7 @@ private struct ProductShotCanvas: View {
                 .frame(width: 300, height: 380)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .offset(x: -70, y: 120)
-            HStack(alignment: .top, spacing: ProviderDetailLayout.railGap - ProviderDetailLayout.outerPadding) {
+            HStack(alignment: .top, spacing: ProviderDetailLayout.railGap - ProviderDetailLayout.panelPadding) {
                 Image(nsImage: card)
                     .shadow(color: .black.opacity(dark ? 0.45 : 0.16), radius: 24, y: 10)
                     .offset(y: cardOffset)

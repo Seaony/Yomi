@@ -360,7 +360,7 @@ struct VertexAIUsageTests {
     }
 
     private static func temporaryDirectory() throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appending(path: "yomi-vertex-\(UUID().uuidString)")
+        let url = FileManager.default.temporaryDirectory.appending(path: "codeedge-vertex-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }

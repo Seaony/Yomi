@@ -16,8 +16,8 @@ public_key="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$info_path")"
 bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info_path")"
 short_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_path")"
 
-if [[ "$feed_url" != "https://github.com/Seaony/Yomi/releases/latest/download/appcast.xml" ]]; then
-    echo "SUFeedURL does not point to the Yomi release feed." >&2
+if [[ "$feed_url" != "https://github.com/Seaony/CodeEdge/releases/latest/download/appcast.xml" ]]; then
+    echo "SUFeedURL does not point to the CodeEdge release feed." >&2
     exit 1
 fi
 if [[ -z "$bundle_version" || -z "$short_version" ]]; then
@@ -46,8 +46,8 @@ if [[ -n "$appcast_path" ]]; then
         echo "Appcast does not contain an EdDSA archive signature." >&2
         exit 1
     fi
-    if ! grep -Eq 'https://github\.com/Seaony/Yomi/releases/download/' "$appcast_path"; then
-        echo "Appcast does not point to a Yomi GitHub release asset." >&2
+    if ! grep -Eq 'https://github\.com/Seaony/CodeEdge/releases/download/' "$appcast_path"; then
+        echo "Appcast does not point to a CodeEdge GitHub release asset." >&2
         exit 1
     fi
 fi

@@ -218,7 +218,7 @@ struct ModelTokenUsageTests {
     }
 
     private func temporaryHome() throws -> URL {
-        let home = FileManager.default.temporaryDirectory.appending(path: "yomi-model-\(UUID().uuidString)")
+        let home = FileManager.default.temporaryDirectory.appending(path: "codeedge-model-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         return home
     }

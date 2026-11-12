@@ -36,8 +36,8 @@ enum KimiUsageError: LocalizedError, Equatable {
             AppLocalization.text("不支持 Kimi 区域：\(region)", "Unsupported Kimi region: \(region)")
         case .desktopSessionChanged:
             AppLocalization.text(
-                "Kimi Desktop 会话已变化，请确认已登录目标账号后刷新 Yomi",
-                "Kimi Desktop session changed. Confirm the intended account is signed in, then refresh Yomi."
+                "Kimi Desktop 会话已变化，请确认已登录目标账号后刷新 CodeEdge",
+                "Kimi Desktop session changed. Confirm the intended account is signed in, then refresh CodeEdge."
             )
         case let .apiError(status):
             AppLocalization.text("Kimi 用量接口错误（HTTP \(status)）", "Kimi usage API error (HTTP \(status))")
@@ -864,7 +864,7 @@ nonisolated enum KimiUsageFetcher {
         let deviceURL = home.appendingPathComponent("device_id")
         let deviceID = cleaned(try? String(contentsOf: deviceURL, encoding: .utf8)) ?? UUID().uuidString.lowercased()
         return [
-            "User-Agent": "Yomi/1",
+            "User-Agent": "CodeEdge/1",
             "X-Msh-Platform": "kimi_code_cli",
             "X-Msh-Version": "1",
             "X-Msh-Device-Name": ascii(ProcessInfo.processInfo.hostName),

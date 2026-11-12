@@ -105,7 +105,7 @@ struct NeuralWattUsageTests {
     }
 
     @Test
-    func nonrenewingSubscriptionStillKeepsPeriodResetInYomiWindow() throws {
+    func nonrenewingSubscriptionStillKeepsPeriodResetInCodeEdgeWindow() throws {
         let usage = try Self.snapshot(#"{"balance":{"credits_remaining_usd":1},"subscription":{"auto_renew":false,"current_period_end":"2026-12-01T00:00:00Z","kwh_included":10,"kwh_used":1}}"#).providerUsage()
         #expect(usage.windows.first?.resetsAt == Self.date("2026-12-01T00:00:00Z"))
     }

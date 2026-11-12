@@ -30,8 +30,8 @@ nonisolated enum OllamaUsageError: LocalizedError, Equatable {
             AppLocalization.text("Ollama API Key 无效或已被撤销", "Ollama API key is invalid or revoked")
         case .safariCookieAccessDenied:
             AppLocalization.text(
-                "读取 Safari Cookie 需要为 Yomi 开启完全磁盘访问权限",
-                "Reading Safari cookies requires Full Disk Access for Yomi"
+                "读取 Safari Cookie 需要为 CodeEdge 开启完全磁盘访问权限",
+                "Reading Safari cookies requires Full Disk Access for CodeEdge"
             )
         case let .browserCookieAccessDenied(browser):
             AppLocalization.text(
@@ -291,7 +291,7 @@ nonisolated enum OllamaUsageFetcher {
         request.timeoutInterval = 20
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("Yomi/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("CodeEdge/1.0", forHTTPHeaderField: "User-Agent")
         let (data, http) = try await response(for: request, session: session)
         switch http.statusCode {
         case 200: break

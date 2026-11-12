@@ -457,7 +457,7 @@ struct LocalDailyUsageScannerTests {
     }
 
     private func temporaryHome() throws -> URL {
-        let home = FileManager.default.temporaryDirectory.appending(path: "yomi-scanner-\(UUID().uuidString)")
+        let home = FileManager.default.temporaryDirectory.appending(path: "codeedge-scanner-\(UUID().uuidString)")
         for path in [".claude/projects/sample", ".codex/sessions"] {
             try FileManager.default.createDirectory(at: home.appending(path: path), withIntermediateDirectories: true)
         }

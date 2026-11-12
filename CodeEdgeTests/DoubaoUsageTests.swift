@@ -303,7 +303,7 @@ struct DoubaoUsageTests {
     @Test
     func commandSourceInvokesExactArkcliUsageArguments() async throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("yomi-doubao-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("codeedge-doubao-\(UUID().uuidString)", isDirectory: true)
         let executable = root.appendingPathComponent("arkcli")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -328,7 +328,7 @@ struct DoubaoUsageTests {
     @Test
     func oversizedArkcliOutputFailsClosedWithoutDeadlocking() async throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("yomi-doubao-large-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("codeedge-doubao-large-\(UUID().uuidString)", isDirectory: true)
         let executable = root.appendingPathComponent("arkcli")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }

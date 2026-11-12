@@ -965,7 +965,7 @@ private actor FactorySessionStore {
     }
 
     private let fileURL = FileManager.default.homeDirectoryForCurrentUser
-        .appending(path: "Library/Application Support/Yomi/factory-session.json")
+        .appending(path: "Library/Application Support/CodeEdge/factory-session.json")
     private var snapshot: Snapshot?
     private var loaded = false
 

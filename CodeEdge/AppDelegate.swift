@@ -160,7 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private var settingsWindowTitle: String {
-        AppLocalization.text("Yomi 设置", "Yomi Settings")
+        AppLocalization.text("CodeEdge 设置", "CodeEdge Settings")
     }
 
     private func createPanel() {

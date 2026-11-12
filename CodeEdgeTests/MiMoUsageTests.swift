@@ -283,7 +283,7 @@ struct MiMoUsageTests {
     @Test
     func localFallbackIsClearlyLabeledAndNeverBecomesAQuotaWindow() throws {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("yomi-mimo-\(UUID().uuidString)")
+            .appendingPathComponent("codeedge-mimo-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("usage.json")

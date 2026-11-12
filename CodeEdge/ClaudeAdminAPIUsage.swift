@@ -176,7 +176,7 @@ enum ClaudeAdminAPIUsageFetcher {
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("Yomi/1", forHTTPHeaderField: "User-Agent")
+        request.setValue("CodeEdge/1", forHTTPHeaderField: "User-Agent")
         let data: Data
         let response: URLResponse
         do {

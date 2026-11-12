@@ -42,7 +42,7 @@ struct GrokUsageTests {
     @Test
     func resolvesGrokHomeAndReadsOnlyItsAuthFile() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Yomi-Grok-auth-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("CodeEdge-Grok-auth-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try Data(#"{"https://auth.x.ai::client":{"key":"file-token"}}"#.utf8)
@@ -185,7 +185,7 @@ struct GrokUsageTests {
     @Test
     func realCLITransportWaitsForInitializeThenSendsUnescapedBillingMethod() async throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Yomi-Grok-cli-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("CodeEdge-Grok-cli-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let executable = root.appendingPathComponent("grok-fixture")
@@ -483,7 +483,7 @@ struct GrokUsageTests {
     @Test
     func teamPrincipalDegradesToIdentityOnlyForExactNoPersonalTeamRPC() async throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Yomi-Grok-team-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("CodeEdge-Grok-team-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try Data(#"{"https://auth.x.ai::client":{"key":"team-token","email":"team@example.com","team_id":"team-123","principal_type":"Team"}}"#.utf8)
@@ -515,7 +515,7 @@ struct GrokUsageTests {
     @Test
     func teamCLIUnsupportedMethodAlsoKeepsIdentityWithoutFakeQuota() async throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Yomi-Grok-team-cli-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("CodeEdge-Grok-team-cli-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try Data(#"{"https://auth.x.ai::client":{"key":"team-token","email":"team@example.com","principal_type":"Team"}}"#.utf8)

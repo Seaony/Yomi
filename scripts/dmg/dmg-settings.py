@@ -1,6 +1,6 @@
 # dmgbuild 配置：固定窗口大小、隐藏工具栏和侧边栏、大图标左右摆放，并使用同目录的背景图。
 # 用法（在仓库根目录执行）：
-#   dmgbuild -s scripts/dmg/dmg-settings.py -D app=<Yomi.app 路径> Yomi <输出.dmg>
+#   dmgbuild -s scripts/dmg/dmg-settings.py -D app=<CodeEdge.app 路径> CodeEdge <输出.dmg>
 # 窗口尺寸和图标位置必须和 render-background.swift 保持一致。
 
 import os

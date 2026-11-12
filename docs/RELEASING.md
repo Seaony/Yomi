@@ -1,6 +1,6 @@
-# Yomi 快速发布说明
+# CodeEdge 快速发布说明
 
-Yomi 使用 Sparkle 进行应用内更新，更新文件托管在 GitHub Releases。当前采用本地未签名发布流程，不需要 Apple Developer ID，也不进行 Apple 公证。
+CodeEdge 使用 Sparkle 进行应用内更新，更新文件托管在 GitHub Releases。当前采用本地未签名发布流程，不需要 Apple Developer ID，也不进行 Apple 公证。
 
 发布脚本会自动完成以下工作：
 
@@ -15,7 +15,7 @@ Yomi 使用 Sparkle 进行应用内更新，更新文件托管在 GitHub Release
 应用固定读取以下更新源：
 
 ```text
-https://github.com/Seaony/Yomi/releases/latest/download/appcast.xml
+https://github.com/Seaony/CodeEdge/releases/latest/download/appcast.xml
 ```
 
 ## 首次准备
@@ -52,14 +52,14 @@ DMG 的外观由 `scripts/dmg/` 决定：
 swift scripts/dmg/render-background.swift scripts/dmg
 ```
 
-不发版、只看效果时，可以拿任意一个构建好的 `Yomi.app` 打一个预览：
+不发版、只看效果时，可以拿任意一个构建好的 `CodeEdge.app` 打一个预览：
 
 ```bash
-dmgbuild -s scripts/dmg/dmg-settings.py -D app=/tmp/YomiDerivedData/Build/Products/Debug/Yomi.app Yomi /tmp/Yomi-preview.dmg
-open /tmp/Yomi-preview.dmg
+dmgbuild -s scripts/dmg/dmg-settings.py -D app=/tmp/CodeEdgeDerivedData/Build/Products/Debug/CodeEdge.app CodeEdge /tmp/CodeEdge-preview.dmg
+open /tmp/CodeEdge-preview.dmg
 ```
 
-Sparkle 的 EdDSA 私钥必须位于登录钥匙串。Yomi 当前沿用自动更新配置中已有的 `com.seaony.Moni` Sparkle 密钥账户，脚本默认读取该账户。可以这样确认它存在：
+Sparkle 的 EdDSA 私钥必须位于登录钥匙串。CodeEdge 当前沿用自动更新配置中已有的 `com.seaony.Moni` Sparkle 密钥账户，脚本默认读取该账户。可以这样确认它存在：
 
 ```bash
 security find-generic-password \
@@ -81,7 +81,7 @@ scripts/publish-unsigned-release.sh 1.0.1
 
 - 创建本地标签 `v1.0.1`；
 - 将该标签推送到 `origin`；
-- 创建 `Seaony/Yomi` 的 GitHub Release；
+- 创建 `Seaony/CodeEdge` 的 GitHub Release；
 - 上传 ZIP、DMG 和 `appcast.xml`。
 
 脚本不会自动 commit，也不会推送 `master`。如果工作区不干净、本地提交尚未推送、版本已存在或 GitHub CLI 未登录，脚本会在发布前停止。
@@ -95,8 +95,8 @@ build/releases/v1.0.1/
 其中包括：
 
 ```text
-Yomi-1.0.1-unsigned.zip
-Yomi-1.0.1-unsigned.dmg
+CodeEdge-1.0.1-unsigned.zip
+CodeEdge-1.0.1-unsigned.dmg
 appcast.xml
 ```
 
@@ -106,11 +106,11 @@ appcast.xml
 
 ```bash
 scripts/validate-release.sh \
-  build/releases/v1.0.1/Yomi.app \
+  build/releases/v1.0.1/CodeEdge.app \
   build/releases/v1.0.1/appcast.xml
 ```
 
-发布脚本生成的目录默认不保留独立 `Yomi.app`，因此通常无需手动执行该命令；脚本已经在打包前自动验证构建产物，并在生成 appcast 后再次验证。
+发布脚本生成的目录默认不保留独立 `CodeEdge.app`，因此通常无需手动执行该命令；脚本已经在打包前自动验证构建产物，并在生成 appcast 后再次验证。
 
 ## 用户首次打开
 

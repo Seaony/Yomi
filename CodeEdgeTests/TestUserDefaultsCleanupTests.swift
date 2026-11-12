@@ -3,11 +3,11 @@ import Testing
 
 struct TestUserDefaultsCleanupTests {
     @Test(arguments: [
-        "com.seaony.Yomi", "com.seaony.Yomi.12345678-1234-1234-1234-123456789ABC",
-        "yomi-product-shots-", "yomi-product-shots-not-a-uuid",
-        "yomi-product-shots-12345678-1234-1234-1234-123456789ABC.plist",
-        "yomi-product-shots-12345678-1234-1234-1234-123456789ABC/../other",
-        "/tmp/YomiStatusMonitorTests-12345678-1234-1234-1234-123456789ABC",
+        "com.seaony.CodeEdge", "com.seaony.CodeEdge.12345678-1234-1234-1234-123456789ABC",
+        "codeedge-product-shots-", "codeedge-product-shots-not-a-uuid",
+        "codeedge-product-shots-12345678-1234-1234-1234-123456789ABC.plist",
+        "codeedge-product-shots-12345678-1234-1234-1234-123456789ABC/../other",
+        "/tmp/CodeEdgeStatusMonitorTests-12345678-1234-1234-1234-123456789ABC",
         "unknown-test-12345678-1234-1234-1234-123456789ABC",
     ])
     func rejectsEveryNameOutsideTheExactTestDomains(suiteName: String) {
@@ -19,9 +19,9 @@ struct TestUserDefaultsCleanupTests {
     }
 
     @Test(arguments: [
-        "yomi-product-shots-", "yomi-claude-plan-", "UsageParserTests.", "usage-pace-cache-",
+        "codeedge-product-shots-", "codeedge-claude-plan-", "UsageParserTests.", "usage-pace-cache-",
         "backoff-store-", "adaptive-store-", "backoff-integration-", "quota-notifications-test-",
-        "YomiStatusMonitorTests-", "YomiStatusObservation-", "YomiTestDefaultsCleanupTests-",
+        "CodeEdgeStatusMonitorTests-", "CodeEdgeStatusObservation-", "CodeEdgeTestDefaultsCleanupTests-",
     ])
     func acceptsOnlyACompleteUUIDAfterAKnownPrefix(prefix: String) throws {
         let uuid = UUID().uuidString
@@ -33,8 +33,8 @@ struct TestUserDefaultsCleanupTests {
 
     @Test
     func valuesAndCleanupNeverCreatePreferenceFiles() throws {
-        let suite = "YomiTestDefaultsCleanupTests-\(UUID().uuidString)"
-        let otherSuite = "YomiTestDefaultsCleanupTests-\(UUID().uuidString)"
+        let suite = "CodeEdgeTestDefaultsCleanupTests-\(UUID().uuidString)"
+        let otherSuite = "CodeEdgeTestDefaultsCleanupTests-\(UUID().uuidString)"
         let defaults = try #require(TestUserDefaults(suiteName: suite))
         let otherDefaults = try #require(TestUserDefaults(suiteName: otherSuite))
         let file = try TestUserDefaultsCleanup.fileURL(for: suite)
@@ -57,7 +57,7 @@ struct TestUserDefaultsCleanupTests {
 
     @Test
     func typedValuesDefaultsAndChangeNotificationsStayAvailable() throws {
-        let suite = "YomiTestDefaultsCleanupTests-\(UUID().uuidString)"
+        let suite = "CodeEdgeTestDefaultsCleanupTests-\(UUID().uuidString)"
         let defaults = try #require(TestUserDefaults(suiteName: suite))
         defer { TestUserDefaultsCleanup.cleanup(defaults, suiteName: suite) }
         let changes = ChangeCounter()

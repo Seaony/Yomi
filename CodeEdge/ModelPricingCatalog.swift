@@ -256,7 +256,7 @@ nonisolated struct ModelPricingCatalog: Codable, Sendable {
 
     private static func cacheURL() -> URL {
         let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        return root.appending(path: "Yomi/model-pricing/models-dev-v1.json")
+        return root.appending(path: "CodeEdge/model-pricing/models-dev-v1.json")
     }
 
     private static func cachedArtifact() -> CacheArtifact? {

@@ -139,7 +139,7 @@ struct DiagnosticsTests {
         #expect(report.contains("http=401"))
         #expect(report.contains("cache=true"))
         #expect(!report.contains("private-bearer"))
-        let raw = try String(contentsOf: directory.appendingPathComponent("yomi.log"), encoding: .utf8)
+        let raw = try String(contentsOf: directory.appendingPathComponent("codeedge.log"), encoding: .utf8)
         #expect(!raw.contains("private-bearer"))
     }
 

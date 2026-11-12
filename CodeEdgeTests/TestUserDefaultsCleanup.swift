@@ -8,9 +8,9 @@ nonisolated enum TestUserDefaultsCleanup {
     }
 
     private static let prefixes = [
-        "yomi-product-shots-", "yomi-claude-plan-", "UsageParserTests.", "usage-pace-cache-",
+        "codeedge-product-shots-", "codeedge-claude-plan-", "UsageParserTests.", "usage-pace-cache-",
         "backoff-store-", "adaptive-store-", "backoff-integration-", "quota-notifications-test-",
-        "YomiStatusMonitorTests-", "YomiStatusObservation-", "YomiTestDefaultsCleanupTests-",
+        "CodeEdgeStatusMonitorTests-", "CodeEdgeStatusObservation-", "CodeEdgeTestDefaultsCleanupTests-",
     ]
 
     static func accepts(_ suiteName: String) -> Bool {

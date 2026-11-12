@@ -18,7 +18,7 @@ nonisolated enum MuseUsageError: LocalizedError, Equatable {
         case .missingCredentials:
             AppLocalization.text("未找到 Muse Code 登录信息，请先运行 muse login 或填写 dca: 访问令牌", "Muse Code login was not found. Run muse login or enter a dca: access token")
         case .keychainAccessNotGranted:
-            AppLocalization.text("Yomi 还没有读取 Muse Code 钥匙串登录的权限，请手动刷新并在弹窗中允许，或填写 dca: 访问令牌", "Yomi cannot read the Muse Code Keychain login yet. Refresh manually and allow access, or enter a dca: access token")
+            AppLocalization.text("CodeEdge 还没有读取 Muse Code 钥匙串登录的权限，请手动刷新并在弹窗中允许，或填写 dca: 访问令牌", "CodeEdge cannot read the Muse Code Keychain login yet. Refresh manually and allow access, or enter a dca: access token")
         case .keychainUnavailable:
             AppLocalization.text("暂时无法读取钥匙串，请解锁钥匙串后再刷新", "Keychain is temporarily unavailable. Unlock it and refresh again")
         case .invalidCredentials:
@@ -64,7 +64,7 @@ nonisolated enum MuseUsageFetcher {
         request.setValue("1.0.0", forHTTPHeaderField: "x-api-version")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("Yomi", forHTTPHeaderField: "User-Agent")
+        request.setValue("CodeEdge", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw MuseUsageError.requestFailed(0) }
         switch http.statusCode {

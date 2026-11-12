@@ -5,10 +5,10 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-app_name="Yomi"
-project="Yomi.xcodeproj"
-scheme="Yomi"
-repository="Seaony/Yomi"
+app_name="CodeEdge"
+project="CodeEdge.xcodeproj"
+scheme="CodeEdge"
+repository="Seaony/CodeEdge"
 sparkle_account="${SPARKLE_ACCOUNT:-com.seaony.Moni}"
 version="${1:-}"
 
@@ -56,7 +56,7 @@ for command_name in gh xcodebuild ditto hdiutil xmllint lipo codesign dmgbuild; 
 done
 gh auth status >/dev/null
 
-work_dir="$(mktemp -d /tmp/yomi-unsigned-release.XXXXXX)"
+work_dir="$(mktemp -d /tmp/codeedge-unsigned-release.XXXXXX)"
 trap 'rm -rf "$work_dir"' EXIT
 derived_data="$work_dir/DerivedData"
 updates_dir="$work_dir/updates"

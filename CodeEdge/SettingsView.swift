@@ -449,8 +449,8 @@ private struct GeneralSettingsView: View {
                         SettingsToggleRow(
                             title: copy.text("登录后自动启动", "Launch at login"),
                             hint: copy.text(
-                                "登录 macOS 后自动运行 Yomi",
-                                "Start Yomi automatically after signing in to macOS"
+                                "登录 macOS 后自动运行 CodeEdge",
+                                "Start CodeEdge automatically after signing in to macOS"
                             ),
                             isOn: $launchAtLogin
                         )
@@ -545,7 +545,7 @@ private struct QuotaNotificationSettingsView: View {
                 .font(.system(size: 12))
             }
             if notifications.authorizationDenied {
-                Text(copy.text("通知权限已关闭，请在系统设置 → 通知 → Yomi 中允许通知。", "Notifications are disabled. Allow Yomi notifications in System Settings → Notifications."))
+                Text(copy.text("通知权限已关闭，请在系统设置 → 通知 → CodeEdge 中允许通知。", "Notifications are disabled. Allow CodeEdge notifications in System Settings → Notifications."))
                     .font(.system(size: 11.5))
                     .foregroundStyle(SettingsPalette.orange)
             } else if let error = notifications.permissionError {
@@ -1819,7 +1819,7 @@ private struct AboutSettingsView: View {
                     .frame(width: 88, height: 88)
 
                 VStack(spacing: 5) {
-                    Text("Yomi")
+                    Text("CodeEdge")
                         .font(.system(size: 24, weight: .bold, design: .rounded))
                     Text(copy.text("跨 Provider 用量一览", "Usage across all your providers"))
                         .font(.system(size: 12.5))
@@ -1848,7 +1848,7 @@ private struct AboutSettingsView: View {
                     Button {
                         NSApp.terminate(nil)
                     } label: {
-                        Label(copy.text("退出 Yomi", "Quit Yomi"), systemImage: "power")
+                        Label(copy.text("退出 CodeEdge", "Quit CodeEdge"), systemImage: "power")
                             .font(.system(size: 12.5, weight: .semibold))
                             .foregroundStyle(SettingsPalette.red)
                             .padding(.horizontal, 14)

@@ -1162,7 +1162,7 @@ actor UsageCollector: UsageCollecting {
         request.httpMethod = recipe.method
         request.timeoutInterval = 18
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("Yomi/1", forHTTPHeaderField: "User-Agent")
+        request.setValue("CodeEdge/1", forHTTPHeaderField: "User-Agent")
 
         if !secret.isEmpty {
             switch recipe.authorization {
@@ -1472,7 +1472,7 @@ actor UsageCollector: UsageCollecting {
     }
 
     nonisolated static func readClaudeKeychain(_ query: [String: Any]) -> (OSStatus, Data?) {
-        // Claude Code 刷新令牌会改写钥匙串条目并清掉 Yomi 的授权，
+        // Claude Code 刷新令牌会改写钥匙串条目并清掉 CodeEdge 的授权，
         // 它自己用 security 命令写入，所以先用同一个命令读取，避免反复弹窗。
         if let service = query[kSecAttrService as String] as? String,
            let data = readKeychainViaSecurityCLI(service: service) {

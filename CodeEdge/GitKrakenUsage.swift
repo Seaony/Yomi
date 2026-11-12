@@ -99,8 +99,8 @@ nonisolated enum GitKrakenUsageFetcher {
         request.timeoutInterval = 15
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("Yomi", forHTTPHeaderField: "Client-Name")
-        request.setValue("Yomi", forHTTPHeaderField: "User-Agent")
+        request.setValue("CodeEdge", forHTTPHeaderField: "Client-Name")
+        request.setValue("CodeEdge", forHTTPHeaderField: "User-Agent")
         request.setValue(
             Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0",
             forHTTPHeaderField: "Client-Version"

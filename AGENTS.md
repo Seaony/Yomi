@@ -2,31 +2,32 @@
 
 ## 项目概况
 
-Yomi 是使用 SwiftUI 与 AppKit 构建的原生 macOS 应用，用悬浮侧边栏展示多个 Provider 的额度、Token 用量和预估金额。
+CodeEdge 是使用 SwiftUI 与 AppKit 构建的原生 macOS 应用，用悬浮侧边栏展示多个 Provider 的额度、Token 用量和预估金额。
 
-- 工程：`Yomi.xcodeproj`
-- Scheme：`Yomi`
-- 主要 Target：`Yomi`
-- 测试 Target：`YomiTests`
+- 工程：`CodeEdge.xcodeproj`
+- Scheme：`CodeEdge`
+- 主要 Target：`CodeEdge`
+- 测试 Target：`CodeEdgeTests`
 - Swift：5.0
 - macOS Deployment Target：26.5
 - Swift Package 依赖：Sparkle、SweetCookieKit
-- 应用入口：`Yomi/YomiApp.swift`
-- 窗口与悬浮面板：`Yomi/AppDelegate.swift`
+- 应用入口：`CodeEdge/CodeEdgeApp.swift`
+- 窗口与悬浮面板：`CodeEdge/AppDelegate.swift`
 - 参考仓库：
   - 本机 `/Users/seaony/code/CodexBar`，上游为 [steipete/CodexBar](https://github.com/steipete/CodexBar)。Provider 数据逻辑以它为准；最近一次同步对应 CodexBar 0.84.0 之后的 main（7447bc77c，2026-11-07），只有 Vercel 个人 AI Gateway 预算未同步。
   - [vinzdg/codenotch](https://github.com/vinzdg/codenotch)（MIT，本机未克隆）：同样把 Claude Code、Cursor、Codex、Antigravity 的额度固定在屏幕边缘，可参考其界面与交互。
 
 ## 代码位置
 
-- `Yomi/UsageStore.swift`：Provider 状态、刷新调度与缓存回退。
-- `Yomi/UsageCollector.swift`：用量数据采集和本地统计补充。
-- `Yomi/ProviderRecipes.swift`：部分 Provider 的 HTTP 接口地址、请求方法与认证方式。
-- `Yomi/*Usage.swift`：Provider 专用采集与解析，例如 `CursorUsage.swift`、`KimiUsage.swift`。
-- `Yomi/LocalDailyUsageScanner.swift`：本地 Token 用量与金额统计。
-- `Yomi/AppPreferences.swift`：外观、颜色、语言偏好与中英文文案。
-- `Yomi/ProviderPreferences.swift`：Provider 启用状态与密钥的钥匙串存储。
-- `Yomi/UsageParser.swift`：接口返回解析与缓存恢复。
+- `CodeEdge/UsageStore.swift`：Provider 状态、刷新调度与缓存回退。
+- `CodeEdge/UsageCollector.swift`：用量数据采集和本地统计补充。
+- `CodeEdge/ProviderRecipes.swift`：部分 Provider 的 HTTP 接口地址、请求方法与认证方式。
+- `CodeEdge/*Usage.swift`：Provider 专用采集与解析，例如 `CursorUsage.swift`、`KimiUsage.swift`。
+- `CodeEdge/LocalDailyUsageScanner.swift`：本地 Token 用量与金额统计。
+- `CodeEdge/AppPreferences.swift`：外观、颜色、语言偏好与中英文文案。
+- `CodeEdge/LegacyMigration.swift`：启动入口在任何偏好或单例初始化前迁移旧设置、钥匙串和 Application Support；只补新域缺失项，保留旧凭据。持久化 ID `yomi-overview` 和模型缓存键前缀 `yomi-fallback:` 沿用旧标识。
+- `CodeEdge/ProviderPreferences.swift`：Provider 启用状态与密钥的钥匙串存储。
+- `CodeEdge/UsageParser.swift`：接口返回解析与缓存恢复。
 - `scripts/`、`docs/RELEASING.md`：未签名版本发布脚本与说明；发布会推送标签并创建 GitHub Release。
 
 ## 实现约束
@@ -39,7 +40,7 @@ Yomi 是使用 SwiftUI 与 AppKit 构建的原生 macOS 应用，用悬浮侧边
 - 所有界面改动必须同时适配深色、浅色和系统外观模式，并复用现有颜色与组件。
 - 交互控件需要保持现有 hover、指针和按压反馈。
 - 图标与相邻数量使用明确的紧凑间距，不依赖 Label 的默认间距。
-- 自动更新使用 Sparkle 和 Yomi 自己的 GitHub Release `appcast.xml`，不引入 CodexBar 或 Moni 作为依赖。
+- 自动更新使用 Sparkle 和 CodeEdge 自己的 GitHub Release `appcast.xml`，不引入 CodexBar 或 Moni 作为依赖。
 
 ## 验证
 
@@ -48,17 +49,17 @@ Yomi 是使用 SwiftUI 与 AppKit 构建的原生 macOS 应用，用悬浮侧边
 ```bash
 git diff --check
 xcodebuild \
-  -project Yomi.xcodeproj \
-  -scheme Yomi \
+  -project CodeEdge.xcodeproj \
+  -scheme CodeEdge \
   -configuration Debug \
-  -derivedDataPath /tmp/YomiDerivedData \
+  -derivedDataPath /tmp/CodeEdgeDerivedData \
   build
 ```
 
 构建产物位于：
 
 ```text
-/tmp/YomiDerivedData/Build/Products/Debug/Yomi.app
+/tmp/CodeEdgeDerivedData/Build/Products/Debug/CodeEdge.app
 ```
 
 - 每次完成代码修改后，重新启动上述最新 Debug 构建供用户检查。

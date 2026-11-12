@@ -17,7 +17,7 @@ struct DailyBillReceiptView: View {
                 VStack(spacing: 6) {
                     Text(copy.text("今日 AI 账单", "Today's AI bill"))
                         .font(.system(size: 22, weight: .bold, design: .monospaced))
-                    Text(copy.text("由 Yomi 统计", "Tallied by Yomi"))
+                    Text(copy.text("由 CodeEdge 统计", "Tallied by CodeEdge"))
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(ink.opacity(0.6))
                 }
@@ -290,7 +290,7 @@ enum DailyBillImageExporter {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.dateFormat = "yyyy-MM-dd"
-        return "Yomi-\(formatter.string(from: day)).png"
+        return "CodeEdge-\(formatter.string(from: day)).png"
     }
 }
 

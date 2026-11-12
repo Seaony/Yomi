@@ -68,7 +68,7 @@ struct DailyBillReceiptTests {
         #expect(DailyBillReceiptText.amount(partial, language: .simplifiedChinese) == "≥ $1.25")
         #expect(DailyBillReceiptText.amount(DailyTokenUsage(tokens: 10, valueUSD: nil), language: .english) == "—")
         let filename = DailyBillImageExporter.filename(for: now)
-        #expect(filename.range(of: #"^Yomi-[0-9]{4}-[0-9]{2}-[0-9]{2}\.png$"#, options: .regularExpression) != nil)
+        #expect(filename.range(of: #"^CodeEdge-[0-9]{4}-[0-9]{2}-[0-9]{2}\.png$"#, options: .regularExpression) != nil)
     }
 
     @Test

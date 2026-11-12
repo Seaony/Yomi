@@ -1,8 +1,8 @@
 <div align="center">
 
-<a href="https://github.com/Seaony/Yomi/releases/latest"><img src="docs/assets/icon-512.png" width="112" alt="Yomi"></a>
+<a href="https://github.com/Seaony/CodeEdge/releases/latest"><img src="docs/assets/icon-512.png" width="112" alt="CodeEdge"></a>
 
-# Yomi
+# CodeEdge
 
 ### Every AI quota. One glance.
 
@@ -10,27 +10,27 @@
 Remaining quota, reset times, today's tokens and estimated spend,<br>
 without opening a single dashboard.
 
-[![Release](https://img.shields.io/github/v/release/Seaony/Yomi?label=release&color=111111)](https://github.com/Seaony/Yomi/releases/latest) [![Stars](https://img.shields.io/github/stars/Seaony/Yomi?style=flat&color=111111)](https://github.com/Seaony/Yomi/stargazers)<br>
+[![Release](https://img.shields.io/github/v/release/Seaony/CodeEdge?label=release&color=111111)](https://github.com/Seaony/CodeEdge/releases/latest) [![Stars](https://img.shields.io/github/stars/Seaony/CodeEdge?style=flat&color=111111)](https://github.com/Seaony/CodeEdge/stargazers)<br>
 ![macOS 26.5+](https://img.shields.io/badge/macOS-26.5%2B-000000?logo=apple&logoColor=white) ![Swift 5](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white) ![SwiftUI](https://img.shields.io/badge/UI-SwiftUI-0A84FF?logo=swift&logoColor=white)
 
-**[Download](https://github.com/Seaony/Yomi/releases/latest)** &nbsp;·&nbsp; **[Releasing](docs/RELEASING.md)** &nbsp;·&nbsp; **English** · [简体中文](README.zh-CN.md)
+**[Download](https://github.com/Seaony/CodeEdge/releases/latest)** &nbsp;·&nbsp; **[Releasing](docs/RELEASING.md)** &nbsp;·&nbsp; **English** · [简体中文](README.zh-CN.md)
 
 <br>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/product-dark-en.jpg">
-  <img src="docs/assets/product-light-en.jpg" width="900" alt="Yomi's rail docked to the right edge of the screen, with Claude's quota details open">
+  <img src="docs/assets/product-light-en.jpg" width="900" alt="CodeEdge's rail docked to the right edge of the screen, with Claude's quota details open">
 </picture>
 
 </div>
 
 <br>
 
-## Is Yomi for you?
+## Is CodeEdge for you?
 
 Every AI service shows its limits somewhere different: a settings page, a CLI command, a billing console, a usage tab three clicks deep. When you pay for several of them, checking what's left becomes a chore, and you usually find out at the worst moment, when a request is refused.
 
-Yomi keeps all of it in a slim rail at the edge of your screen:
+CodeEdge keeps all of it in a slim rail at the edge of your screen:
 
 - **See what's left at a glance**: each provider is a ring that shows its remaining quota. Click it for plan, every quota window and the time until it resets.
 - **Know what you're spending**: today's and the last 30 days' tokens from local session logs, priced with each model's rates.
@@ -41,9 +41,9 @@ It's for you if you use more than one AI tool or plan. If you use one service an
 
 ## Quick start
 
-**1 · Install.** Download the DMG from the **[latest release](https://github.com/Seaony/Yomi/releases/latest)** and drag `Yomi.app` into Applications.
+**1 · Install.** Download the DMG from the **[latest release](https://github.com/Seaony/CodeEdge/releases/latest)** and drag `CodeEdge.app` into Applications.
 
-<sub>Builds are universal (Apple silicon and Intel) and need macOS 26.5 or later. They are not signed with an Apple Developer ID or notarised yet, so the first launch may be blocked; open **System Settings → Privacy & Security** and choose to open Yomi anyway. Yomi updates itself from GitHub Releases through Sparkle.</sub>
+<sub>Builds are universal (Apple silicon and Intel) and need macOS 26.5 or later. They are not signed with an Apple Developer ID or notarised yet, so the first launch may be blocked; open **System Settings → Privacy & Security** and choose to open CodeEdge anyway. CodeEdge updates itself from GitHub Releases through Sparkle.</sub>
 
 **2 · Enable providers.** Open Settings, go to **Providers**, and turn on the services you use. Each one says what it needs: a local sign-in, an API key, a browser session or an environment variable.
 
@@ -65,7 +65,7 @@ Each provider is read the way its service allows: a local account, a CLI, an API
 
 ### A rail, not a dashboard
 
-The rail is a column of rings, one per provider, each filled to the share of quota that's left. It floats above other windows at the edge of the screen and stays there across Spaces. Drag it to either side and to any height; Yomi restores it on next launch.
+The rail is a column of rings, one per provider, each filled to the share of quota that's left. It floats above other windows at the edge of the screen and stays there across Spaces. Drag it to either side and to any height; CodeEdge restores it on next launch.
 
 ### Details in one click
 
@@ -73,7 +73,7 @@ Click a ring to open a compact card: plan, every quota window (session, 5-hour, 
 
 ### Tokens and spend from your own logs
 
-For agents that keep local session logs, such as Codex, Claude Code, Pi and DeepSeek, Yomi totals today's and the last 30 days' tokens and prices them with each model's rates. The overview ring adds every provider together. For Claude, it also projects what the current weekly window is worth.
+For agents that keep local session logs, such as Codex, Claude Code, Pi and DeepSeek, CodeEdge totals today's and the last 30 days' tokens and prices them with each model's rates. The overview ring adds every provider together. For Claude, it also projects what the current weekly window is worth.
 
 ### Built for macOS
 
@@ -84,18 +84,18 @@ Native SwiftUI and AppKit. System, dark and light appearance. English and Simpli
 - Keys and credentials are stored in the macOS Keychain.
 - Usage caches, preferences and the rail's position stay on your Mac.
 - Local session logs are read only for token and cost totals; chat and code text are never parsed into quotas.
-- Yomi talks only to each provider's own data source, and to Yomi's GitHub Releases feed for updates.
+- CodeEdge talks only to each provider's own data source, and to CodeEdge's GitHub Releases feed for updates.
 
 ## Build from source
 
 You need Xcode 26.6.
 
 ```sh
-git clone https://github.com/Seaony/Yomi.git
-cd Yomi
-xcodebuild -project Yomi.xcodeproj -scheme Yomi -configuration Debug \
+git clone https://github.com/Seaony/CodeEdge.git
+cd CodeEdge
+xcodebuild -project CodeEdge.xcodeproj -scheme CodeEdge -configuration Debug \
   -derivedDataPath "$PWD/DerivedData" build
-open DerivedData/Build/Products/Debug/Yomi.app
+open DerivedData/Build/Products/Debug/CodeEdge.app
 ```
 
 To publish an unsigned release from a clean, pushed `master`, run `scripts/publish-unsigned-release.sh <version>`. It builds a universal app, the ZIP, the DMG and the Sparkle appcast, then tags and publishes a GitHub Release. See [docs/RELEASING.md](docs/RELEASING.md) for the details.

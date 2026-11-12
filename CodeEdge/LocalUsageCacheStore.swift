@@ -15,7 +15,7 @@ nonisolated final class LocalUsageCacheStore {
 
     init?(directoryURL: URL? = nil) {
         let root = directoryURL ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appending(path: "Yomi/local-usage", directoryHint: .isDirectory)
+            .appending(path: "CodeEdge/local-usage", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         for stale in ["usage-v1.sqlite", "usage-v1.sqlite-wal", "usage-v1.sqlite-shm"] {
             try? FileManager.default.removeItem(at: root.appending(path: stale))

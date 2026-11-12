@@ -1,8 +1,8 @@
 <div align="center">
 
-<a href="https://github.com/Seaony/Yomi/releases/latest"><img src="docs/assets/icon-512.png" width="112" alt="Yomi"></a>
+<a href="https://github.com/Seaony/CodeEdge/releases/latest"><img src="docs/assets/icon-512.png" width="112" alt="CodeEdge"></a>
 
-# Yomi
+# CodeEdge
 
 ### 所有 AI 额度，一眼看清。
 
@@ -10,27 +10,27 @@
 剩余额度、重置时间、今日 Token 和预估花费，<br>
 不用再打开任何一个控制台。
 
-[![Release](https://img.shields.io/github/v/release/Seaony/Yomi?label=release&color=111111)](https://github.com/Seaony/Yomi/releases/latest) [![Stars](https://img.shields.io/github/stars/Seaony/Yomi?style=flat&color=111111)](https://github.com/Seaony/Yomi/stargazers)<br>
+[![Release](https://img.shields.io/github/v/release/Seaony/CodeEdge?label=release&color=111111)](https://github.com/Seaony/CodeEdge/releases/latest) [![Stars](https://img.shields.io/github/stars/Seaony/CodeEdge?style=flat&color=111111)](https://github.com/Seaony/CodeEdge/stargazers)<br>
 ![macOS 26.5+](https://img.shields.io/badge/macOS-26.5%2B-000000?logo=apple&logoColor=white) ![Swift 5](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white) ![SwiftUI](https://img.shields.io/badge/UI-SwiftUI-0A84FF?logo=swift&logoColor=white)
 
-**[下载](https://github.com/Seaony/Yomi/releases/latest)** &nbsp;·&nbsp; **[发布说明](docs/RELEASING.md)** &nbsp;·&nbsp; [English](README.md) · **简体中文**
+**[下载](https://github.com/Seaony/CodeEdge/releases/latest)** &nbsp;·&nbsp; **[发布说明](docs/RELEASING.md)** &nbsp;·&nbsp; [English](README.md) · **简体中文**
 
 <br>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/product-dark-zh.jpg">
-  <img src="docs/assets/product-light-zh.jpg" width="900" alt="Yomi 侧边栏停靠在屏幕右边缘，展开了 Claude 的额度详情">
+  <img src="docs/assets/product-light-zh.jpg" width="900" alt="CodeEdge 侧边栏停靠在屏幕右边缘，展开了 Claude 的额度详情">
 </picture>
 
 </div>
 
 <br>
 
-## Yomi 适合你吗？
+## CodeEdge 适合你吗？
 
 每个 AI 服务把用量放在不同的地方：设置页、命令行、账单后台，或者点三层才能找到的用量标签页。同时订阅好几个时，查剩余额度就成了体力活，而且往往要等请求被拒才发现用完了。
 
-Yomi 把这些都收进屏幕边缘的一条细栏里：
+CodeEdge 把这些都收进屏幕边缘的一条细栏里：
 
 - **剩多少一眼就知道**：每个 Provider 是一个圆环，显示剩余额度比例。点开能看到套餐、所有额度窗口和距离重置的时间。
 - **花了多少心里有数**：从本地会话日志统计今天和最近 30 天的 Token，按各模型价格算出预估金额。
@@ -41,9 +41,9 @@ Yomi 把这些都收进屏幕边缘的一条细栏里：
 
 ## 快速开始
 
-**1 · 安装。** 从 **[最新版本](https://github.com/Seaony/Yomi/releases/latest)** 下载 DMG，把 `Yomi.app` 拖进“应用程序”。
+**1 · 安装。** 从 **[最新版本](https://github.com/Seaony/CodeEdge/releases/latest)** 下载 DMG，把 `CodeEdge.app` 拖进“应用程序”。
 
-<sub>安装包同时支持 Apple 芯片和 Intel，需要 macOS 26.5 或更高版本。目前还没有使用 Apple Developer ID 签名，也没有经过公证，首次打开可能被系统拦截；请到 **系统设置 → 隐私与安全性** 中选择仍要打开。Yomi 会通过 Sparkle 从 GitHub Releases 自动更新。</sub>
+<sub>安装包同时支持 Apple 芯片和 Intel，需要 macOS 26.5 或更高版本。目前还没有使用 Apple Developer ID 签名，也没有经过公证，首次打开可能被系统拦截；请到 **系统设置 → 隐私与安全性** 中选择仍要打开。CodeEdge 会通过 Sparkle 从 GitHub Releases 自动更新。</sub>
 
 **2 · 启用 Provider。** 打开设置，进入 **Providers**，打开你在用的服务。每一项都会说明需要什么：本机登录、API Key、浏览器会话或环境变量。
 
@@ -73,7 +73,7 @@ Codex · Claude · Claude Platform · Cursor · Gemini · Antigravity · Copilot
 
 ### 用你自己的日志算 Token 和花费
 
-对会在本机保存会话日志的工具，比如 Codex、Claude Code、Pi 和 DeepSeek，Yomi 会统计今天和最近 30 天的 Token，并按各模型价格计算金额。总览圆环把所有 Provider 加在一起。对 Claude，还会估算当前每周额度对应的金额。
+对会在本机保存会话日志的工具，比如 Codex、Claude Code、Pi 和 DeepSeek，CodeEdge 会统计今天和最近 30 天的 Token，并按各模型价格计算金额。总览圆环把所有 Provider 加在一起。对 Claude，还会估算当前每周额度对应的金额。
 
 ### 为 macOS 而做
 
@@ -84,18 +84,18 @@ Codex · Claude · Claude Platform · Cursor · Gemini · Antigravity · Copilot
 - 密钥和凭据保存在 macOS 钥匙串中。
 - 用量缓存、偏好设置和侧边栏位置都只保存在本机。
 - 本地会话日志只用于统计 Token 和金额，聊天内容和代码文本不会被解析成额度。
-- Yomi 只访问各 Provider 自己的数据源，以及用于更新的 Yomi GitHub Releases。
+- CodeEdge 只访问各 Provider 自己的数据源，以及用于更新的 CodeEdge GitHub Releases。
 
 ## 从源码构建
 
 需要 Xcode 26.6。
 
 ```sh
-git clone https://github.com/Seaony/Yomi.git
-cd Yomi
-xcodebuild -project Yomi.xcodeproj -scheme Yomi -configuration Debug \
+git clone https://github.com/Seaony/CodeEdge.git
+cd CodeEdge
+xcodebuild -project CodeEdge.xcodeproj -scheme CodeEdge -configuration Debug \
   -derivedDataPath "$PWD/DerivedData" build
-open DerivedData/Build/Products/Debug/Yomi.app
+open DerivedData/Build/Products/Debug/CodeEdge.app
 ```
 
 要从干净且已推送的 `master` 发布未签名版本，运行 `scripts/publish-unsigned-release.sh <版本号>`。脚本会构建通用应用、ZIP、DMG 和 Sparkle appcast，然后打标签并发布 GitHub Release。详细说明见 [docs/RELEASING.md](docs/RELEASING.md)。

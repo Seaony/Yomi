@@ -141,7 +141,7 @@ struct CodexUsageTests {
             if request.url == resetCreditsURL {
                 #expect(request.httpMethod == "GET")
                 #expect(request.timeoutInterval == 4)
-                #expect(request.value(forHTTPHeaderField: "User-Agent") == "Yomi")
+                #expect(request.value(forHTTPHeaderField: "User-Agent") == "CodeEdge")
                 #expect(request.value(forHTTPHeaderField: "Accept") == "application/json")
                 #expect(request.value(forHTTPHeaderField: "OpenAI-Beta") == "codex-1")
                 #expect(request.value(forHTTPHeaderField: "originator") == "Codex Desktop")
@@ -300,7 +300,7 @@ struct CodexUsageTests {
         let argumentsLog = directory.appendingPathComponent("arguments.txt")
         let script = #"""
         #!/bin/sh
-        printf '%s\n' "$*" > "$YOMI_CODEX_ARGUMENTS"
+        printf '%s\n' "$*" > "$CODEEDGE_CODEX_ARGUMENTS"
         while IFS= read -r line; do
           case "$line" in
             *'"method":"initialize"'*)
@@ -317,7 +317,7 @@ struct CodexUsageTests {
 
         let usage = try await CodexUsageFetcher.fetchCLI(environment: [
             "CODEX_CLI_PATH": executable.path,
-            "YOMI_CODEX_ARGUMENTS": argumentsLog.path,
+            "CODEEDGE_CODEX_ARGUMENTS": argumentsLog.path,
         ])
 
         #expect(try String(contentsOf: argumentsLog, encoding: .utf8)
@@ -374,14 +374,14 @@ struct CodexUsageTests {
 
     private static func temporaryCodexHome() throws -> URL {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("yomi-codex-tests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("codeedge-codex-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
 
     private static func missingPath() -> String {
         FileManager.default.temporaryDirectory
-            .appendingPathComponent("yomi-codex-missing-\(UUID().uuidString)").path
+            .appendingPathComponent("codeedge-codex-missing-\(UUID().uuidString)").path
     }
 
     private static func jwt(_ payload: [String: Any]) throws -> String {

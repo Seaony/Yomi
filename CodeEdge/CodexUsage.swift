@@ -394,7 +394,7 @@ nonisolated enum CodexUsageFetcher {
             var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 4)
             request.httpMethod = "GET"
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            request.setValue("Yomi", forHTTPHeaderField: "User-Agent")
+            request.setValue("CodeEdge", forHTTPHeaderField: "User-Agent")
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             request.setValue("codex-1", forHTTPHeaderField: "OpenAI-Beta")
             request.setValue("Codex Desktop", forHTTPHeaderField: "originator")
@@ -764,7 +764,7 @@ private nonisolated final class CodexRPCUsageClient: @unchecked Sendable {
         defer { client.shutdown() }
         _ = try await client.request(
             method: "initialize",
-            params: ["clientInfo": ["name": "yomi", "version": "1"]],
+            params: ["clientInfo": ["name": "CodeEdge", "version": "1"]],
             timeout: 8)
         try client.notify(method: "initialized")
         let message = try await client.request(method: "account/rateLimits/read", timeout: 4)

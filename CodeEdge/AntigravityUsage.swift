@@ -1146,7 +1146,7 @@ nonisolated enum AntigravityUsageFetcher {
     ) async throws -> ProviderUsage {
         FetchDiagnostics.current?.note("CLI")
         let directory = FileManager.default.temporaryDirectory
-            .appending(path: "yomi-agy-no-browser-\(UUID().uuidString)", directoryHint: .isDirectory)
+            .appending(path: "codeedge-agy-no-browser-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]
         )

@@ -254,7 +254,7 @@ struct ProviderServiceStatusMonitorTests {
 
 @MainActor
 private final class Fixture {
-    let suite = "YomiStatusMonitorTests-\(UUID().uuidString)"
+    let suite = "CodeEdgeStatusMonitorTests-\(UUID().uuidString)"
     let defaults: UserDefaults
     let probe: StatusFetchProbe
     let monitor: ProviderServiceStatusMonitor
