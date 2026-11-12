@@ -196,27 +196,47 @@ struct ProviderDetailCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            VStack(alignment: .leading, spacing: 12) {
+                headerContent
 
-            if let status = cachedUsageStatus(usage, language: language) {
-                Label(status, systemImage: "exclamationmark.triangle")
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+                if let status = cachedUsageStatus(usage, language: language) {
+                    Label(status, systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if UsageFreshness.isStale(
+                    updatedAt: usage.updatedAt,
+                    refreshInterval: refreshInterval(),
+                    now: context.date
+                ), let updatedAt = usage.updatedAt {
+                    Text(UsageFreshness.updatedText(updatedAt: updatedAt, now: context.date, language: language))
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
+                        .help(usage.message.map { DiagnosticsRedactor.redact(copy.usageMessage($0)) } ?? "")
+                }
 
-            if isOverview || !displayedWindows.isEmpty || usage.today != nil {
-                usageHeadline
+                if isOverview || !displayedWindows.isEmpty || usage.today != nil {
+                    usageHeadline
+                }
+                if !isOverview, !displayedWindows.isEmpty {
+                    VStack(spacing: 11) {
+                        ForEach(displayedWindows) { window in
+                            UsageWindowRow(window: window, tint: tint, usageUpdatedAt: usage.updatedAt, refreshInterval: refreshInterval)
+                                .transition(sectionTransition)
+                        }
+                    }
+                }
+                serviceIncidentBanner
+                detailContent
             }
-            detailContent
+            .padding(14)
+            .frame(width: 300)
+            .fontDesign(.rounded)
+            .foregroundStyle(AppTheme.primaryText(for: colorScheme))
+            .animation(detailAnimation, value: descriptor.id)
+            .animation(detailAnimation, value: usage)
         }
-        .padding(14)
-        .frame(width: 300)
-        .fontDesign(.rounded)
-        .foregroundStyle(AppTheme.primaryText(for: colorScheme))
-        .animation(detailAnimation, value: descriptor.id)
-        .animation(detailAnimation, value: usage)
     }
 
     @ViewBuilder
@@ -225,15 +245,6 @@ struct ProviderDetailCard: View {
             overviewChart
                 .transition(sectionTransition)
         } else {
-            if !displayedWindows.isEmpty {
-                VStack(spacing: 11) {
-                    ForEach(displayedWindows) { window in
-                        UsageWindowRow(window: window, tint: tint, usageUpdatedAt: usage.updatedAt, refreshInterval: refreshInterval)
-                            .transition(sectionTransition)
-                    }
-                }
-            }
-
             if let models = usage.todayByModel, !models.isEmpty {
                 modelBreakdown(models)
             }
@@ -346,25 +357,6 @@ struct ProviderDetailCard: View {
                 .frame(maxWidth: .infinity, minHeight: 52, alignment: .center)
         } else {
             DailyUsageBarChart(points: usage.last30DaysDaily, tint: tint)
-        }
-    }
-
-    private var header: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { context in
-            VStack(alignment: .leading, spacing: 4) {
-                headerContent
-                serviceIncidentBanner
-                if UsageFreshness.isStale(
-                    updatedAt: usage.updatedAt,
-                    refreshInterval: refreshInterval(),
-                    now: context.date
-                ), cachedUsageStatus(usage, language: language) == nil, let updatedAt = usage.updatedAt {
-                    Text(UsageFreshness.updatedText(updatedAt: updatedAt, now: context.date, language: language))
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
-                        .help(usage.message.map { DiagnosticsRedactor.redact(copy.usageMessage($0)) } ?? "")
-                }
-            }
         }
     }
 
@@ -947,10 +939,13 @@ private struct UsageWindowRow: View {
             .accessibilityValue("\(Int((remainingFraction * 100).rounded()))%")
 
             if let pace, pace.predictionReady {
-                Text(paceText(pace, now: context.date))
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(isAhead ? Color.orange : AppTheme.primaryText(for: colorScheme).opacity(0.55))
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(paceText(pace, now: context.date, language: language))
+                    .font(.system(size: 10.5, weight: .regular))
+                    .foregroundStyle(isAhead && pace.actualUsedPercent < 100
+                        ? Color.orange.opacity(0.75)
+                        : AppTheme.primaryText(for: colorScheme).opacity(0.45))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
 
             if let detail = window.detail, !detail.isEmpty {
@@ -962,19 +957,20 @@ private struct UsageWindowRow: View {
         }
         }
     }
+}
 
-    private func paceText(_ pace: UsagePace, now: Date) -> String {
-        if pace.actualUsedPercent >= 100 { return copy.text("已用完", "Quota depleted") }
-        guard pace.deltaPercent > 0, let eta = pace.etaSeconds else {
-            return copy.text("照这个速度能撑到重置", "On pace to last until reset")
-        }
-        let delta = pace.deltaPercent.formatted(.number.precision(.fractionLength(0...1)))
-        let duration = eta < 60
-            ? copy.text("不到 1 分钟", "less than 1 min")
-            : compactDuration(from: now, until: now.addingTimeInterval(eta), language: language)
-        return copy.text("比时间进度多用了 \(delta)%，\n照这个速度 \(duration)后用完", "\(delta)% over pace · runs out in \(duration)")
+func paceText(_ pace: UsagePace, now: Date, language: AppLanguage) -> String {
+    let copy = AppCopy(language: language)
+    if pace.actualUsedPercent >= 100 { return copy.text("已用完", "Quota depleted") }
+    guard pace.deltaPercent > 0, let eta = pace.etaSeconds else {
+        return copy.text("预计撑到重置", "Lasts until reset")
     }
-
+    let delta = pace.deltaPercent.formatted(.number.precision(.fractionLength(0...1)).locale(language.locale))
+    if eta < 60 {
+        return copy.text("超前 \(delta)% · 预计 1 分钟内用尽", "\(delta)% ahead · runs out in <1 min")
+    }
+    let duration = compactDuration(from: now, until: now.addingTimeInterval(eta), language: language)
+    return copy.text("超前 \(delta)% · 预计 \(duration)后用尽", "\(delta)% ahead · runs out in \(duration)")
 }
 
 private func compactDuration(from now: Date, until date: Date, language: AppLanguage) -> String {
