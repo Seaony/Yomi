@@ -160,27 +160,25 @@ if [[ "$short_version" != "$version" || "$bundle_version" != "$build_number" ]];
     exit 1
 fi
 
-echo "Notarizing $app_name.app..."
-ditto -c -k --keepParent "$app_path" "$work_dir/notarize.zip"
-notarize "$work_dir/notarize.zip"
-xcrun stapler staple "$app_path"
-spctl --assess --type execute --verbose "$app_path"
-
 zip_name="$app_name-$version.zip"
 dmg_name="$app_name-$version.dmg"
 mkdir -p "$output_dir"
-ditto -c -k --sequesterRsrc --keepParent "$app_path" "$output_dir/$zip_name"
 # 带背景图和固定图标布局的安装窗口，配置见 scripts/dmg/。
 dmgbuild \
     -s scripts/dmg/dmg-settings.py \
     -D app="$app_path" \
     "$app_name" \
     "$output_dir/$dmg_name"
-echo "Notarizing $dmg_name..."
 codesign --force --sign "$signing_identity" --timestamp "$output_dir/$dmg_name"
+# 只交 DMG 公证一次：里面的应用会一起检查并登记，所以通过后应用也能装订到票据。
+echo "Notarizing $dmg_name..."
 notarize "$output_dir/$dmg_name"
 xcrun stapler staple "$output_dir/$dmg_name"
 spctl --assess --type open --context context:primary-signature --verbose "$output_dir/$dmg_name"
+xcrun stapler staple "$app_path"
+spctl --assess --type execute --verbose "$app_path"
+# ZIP 给自动更新用，要用装订好票据的应用打包。
+ditto -c -k --sequesterRsrc --keepParent "$app_path" "$output_dir/$zip_name"
 
 previous_tag="$(git describe --tags --abbrev=0 HEAD 2>/dev/null || true)"
 notes_path="$work_dir/release-notes.md"

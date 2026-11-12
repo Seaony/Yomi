@@ -9,8 +9,8 @@ CodeEdge 使用 Sparkle 进行应用内更新，更新文件托管在 GitHub Rel
 3. 根据上一个正式 Release 的 `appcast.xml` 自动递增 build number；首次发布从 `1` 开始。
 4. 构建包含 `arm64` 和 `x86_64` 的 Release 应用。
 5. 用 Developer ID 从里往外签名 Sparkle 的组件和应用，开启 Hardened Runtime 并带时间戳。
-6. 把应用交给 Apple 公证，通过后把票据装订到应用上。
-7. 生成 ZIP、DMG、Release Notes 和带 EdDSA 签名的 `appcast.xml`。DMG 用 `dmgbuild` 打包，打开后是带背景图、大图标、拖到 Applications 的安装窗口；DMG 也单独签名、公证并装订。
+6. 用 `dmgbuild` 打包 DMG，打开后是带背景图、大图标、拖到 Applications 的安装窗口。DMG 签名后交给 Apple 公证，只交这一次：里面的应用会一起检查。通过后把票据装订到 DMG 和应用上。
+7. 用装订好的应用打 ZIP，生成 Release Notes 和带 EdDSA 签名的 `appcast.xml`。
 8. 创建并推送版本标签，随后创建 GitHub Release 并上传全部产物。
 
 应用固定读取以下更新源：
@@ -101,8 +101,7 @@ RELEASE_NOTE="……" scripts/publish-release.sh 1.0.1
 
 脚本会执行外部写操作，包括：
 
-- 把应用和 DMG 上传给 Apple 公证；
-
+- 把 DMG 上传给 Apple 公证；
 - 创建本地标签 `v1.0.1`；
 - 将该标签推送到 `origin`；
 - 创建 `Seaony/CodeEdge` 的 GitHub Release；
