@@ -915,7 +915,6 @@ private struct UsageWindowRow: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let pace = UsagePace.evaluate(window: window, now: context.date, updatedAt: usageUpdatedAt, refreshInterval: refreshInterval())
-            let status = QuotaStatus.evaluate(remainingFraction: remainingFraction, pace: pace)
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(copy.usageLabel(window.label))
@@ -927,7 +926,7 @@ private struct UsageWindowRow: View {
                     "\(Int((remainingFraction * 100).rounded()))% left"
                 ))
                     .font(.system(size: 11.5, weight: .bold, design: .rounded))
-                    .foregroundStyle(status.textColor)
+                    .foregroundStyle(tint)
                     .monospacedDigit()
                     .fixedSize(horizontal: true, vertical: false)
                     .contentTransition(.numericText(value: remainingFraction))
@@ -961,6 +960,7 @@ private struct UsageWindowRow: View {
             .accessibilityValue("\(Int((remainingFraction * 100).rounded()))%")
 
             if let pace, pace.predictionReady {
+                let status = QuotaStatus.evaluate(remainingFraction: remainingFraction, pace: pace)
                 Text(paceText(pace, now: context.date, language: language))
                     .font(.system(size: 10.5, weight: .regular))
                     .foregroundStyle(status == .ok
