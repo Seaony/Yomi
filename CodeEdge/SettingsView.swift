@@ -165,16 +165,21 @@ private struct GeneralSettingsView: View {
                 }
 
                 CodeEdgeFormSection(title: copy.text("行为", "Behavior")) {
-                    Toggle(copy.text("全屏时收起", "Collapse in full screen"), isOn: $collapseInFullscreen)
+                    Toggle(isOn: $collapseInFullscreen) {
+                        VStack(alignment: .leading, spacing: SettingsSpace.xs) {
+                            Text(copy.text("全屏时收起", "Collapse in full screen"))
+                            Text(copy.text("全屏时收成细条，鼠标移到细条上即可展开", "Collapses to a thin bar in full screen. Hover it to expand."))
+                                .font(.system(size: 12))
+                                .foregroundStyle(CodeEdgeSettingsTheme.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                     Toggle(copy.text("显示服务故障", "Show service incidents"), isOn: $showServiceIncidents)
                     Toggle(copy.text("登录后自动启动", "Launch at login"), isOn: $launchAtLogin)
                         .onChange(of: launchAtLogin) { _, enabled in updateLoginItem(enabled) }
                     Toggle(copy.text("显示 Provider 名称", "Show provider names"), isOn: $showProviderNames)
                 } footer: {
-                    VStack(alignment: .leading, spacing: SettingsSpace.xs) {
-                        Text(copy.text("全屏时收成细条，鼠标移到细条上即可展开", "Collapses to a thin bar in full screen. Hover it to expand."))
-                        if let loginError { Text(loginError).foregroundStyle(CodeEdgeSettingsTheme.error) }
-                    }
+                    if let loginError { Text(loginError).foregroundStyle(CodeEdgeSettingsTheme.error) }
                 }
             }
         }
@@ -224,14 +229,11 @@ private struct QuotaNotificationSettingsView: View {
                     Toggle(copy.text("额度用完", "Quota depleted"), isOn: $depletedEnabled)
                     Toggle(copy.text("额度重置或恢复", "Quota reset or restored"), isOn: $resetEnabled)
                 } footer: {
-                    VStack(alignment: .leading, spacing: SettingsSpace.xs) {
-                        Text(copy.text("每个额度周期只提醒一次", "Once per threshold each quota cycle"))
-                        if notifications.authorizationDenied {
-                            Text(copy.text("通知权限已关闭，请在系统设置 → 通知 → CodeEdge 中允许通知。", "Notifications are disabled. Allow CodeEdge notifications in System Settings → Notifications."))
-                                .foregroundStyle(CodeEdgeSettingsTheme.warning)
-                        } else if let error = notifications.permissionError {
-                            Text(error).foregroundStyle(CodeEdgeSettingsTheme.warning)
-                        }
+                    if notifications.authorizationDenied {
+                        Text(copy.text("通知权限已关闭，请在系统设置 → 通知 → CodeEdge 中允许通知。", "Notifications are disabled. Allow CodeEdge notifications in System Settings → Notifications."))
+                            .foregroundStyle(CodeEdgeSettingsTheme.warning)
+                    } else if let error = notifications.permissionError {
+                        Text(error).foregroundStyle(CodeEdgeSettingsTheme.warning)
                     }
                 }
                 if lowQuotaEnabled {
@@ -254,6 +256,8 @@ private struct QuotaNotificationSettingsView: View {
                                 .pointerStyle(.link)
                             }
                         }
+                    } footer: {
+                        Text(copy.text("每个额度周期只提醒一次", "Once per threshold each quota cycle"))
                     }
                 }
             }
