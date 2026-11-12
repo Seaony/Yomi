@@ -874,6 +874,29 @@ private struct ProviderDetailPanelShape: Shape {
     }
 }
 
+nonisolated enum QuotaStatus: Equatable {
+    case ok
+    case fast
+    case critical
+
+    static func evaluate(remainingFraction: Double, pace: UsagePace?) -> QuotaStatus {
+        // 减法会让正好 10%、30% 的余量多出一点浮点误差。
+        if remainingFraction <= Double(0.1).nextUp { return .critical }
+        if let pace, pace.predictionReady {
+            return pace.willLastToReset ? .ok : .fast
+        }
+        return remainingFraction > Double(0.3).nextUp ? .ok : .fast
+    }
+
+    var textColor: Color {
+        switch self {
+        case .ok: .green
+        case .fast: .orange
+        case .critical: .red
+        }
+    }
+}
+
 private struct UsageWindowRow: View {
     let window: UsageWindow
     let tint: Color
@@ -892,8 +915,7 @@ private struct UsageWindowRow: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let pace = UsagePace.evaluate(window: window, now: context.date, updatedAt: usageUpdatedAt, refreshInterval: refreshInterval())
-            let isAhead = pace.map { $0.predictionReady && $0.deltaPercent > 0 } ?? false
-            let barTint = isAhead ? Color.orange : tint
+            let status = QuotaStatus.evaluate(remainingFraction: remainingFraction, pace: pace)
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(copy.usageLabel(window.label))
@@ -905,7 +927,7 @@ private struct UsageWindowRow: View {
                     "\(Int((remainingFraction * 100).rounded()))% left"
                 ))
                     .font(.system(size: 11.5, weight: .bold, design: .rounded))
-                    .foregroundStyle(barTint)
+                    .foregroundStyle(status.textColor)
                     .monospacedDigit()
                     .fixedSize(horizontal: true, vertical: false)
                     .contentTransition(.numericText(value: remainingFraction))
@@ -928,7 +950,7 @@ private struct UsageWindowRow: View {
                 HStack(spacing: SegmentedUsageBar.spacing) {
                     ForEach(Array(states.enumerated()), id: \.offset) { _, state in
                         RoundedRectangle(cornerRadius: 1.5)
-                            .fill(barTint.opacity(state == .solid ? 1 : 0.12))
+                            .fill(tint.opacity(state == .solid ? 1 : 0.12))
                             .frame(width: width, height: 12)
                     }
                 }
@@ -941,9 +963,9 @@ private struct UsageWindowRow: View {
             if let pace, pace.predictionReady {
                 Text(paceText(pace, now: context.date, language: language))
                     .font(.system(size: 10.5, weight: .regular))
-                    .foregroundStyle(isAhead && pace.actualUsedPercent < 100
-                        ? Color.orange.opacity(0.75)
-                        : AppTheme.primaryText(for: colorScheme).opacity(0.45))
+                    .foregroundStyle(status == .ok
+                        ? AppTheme.primaryText(for: colorScheme).opacity(0.6)
+                        : status.textColor)
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
             }
