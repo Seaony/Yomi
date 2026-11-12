@@ -157,6 +157,21 @@ struct CodeEdgeFormSwitchStyle: ToggleStyle {
     }
 }
 
+extension View {
+    /// 设置里的下拉菜单：不要底色，文字用正文颜色，窗口激活时也不染成强调色。
+    func codeEdgeMenuPicker() -> some View {
+        labelsHidden()
+            .pickerStyle(.menu)
+            .buttonStyle(.borderless)
+            .tint(CodeEdgeSettingsTheme.primaryText)
+            .foregroundStyle(CodeEdgeSettingsTheme.primaryText)
+            .fixedSize()
+            // 无边框菜单自带右侧留白，抵掉后箭头和同列其他控件右边对齐。
+            .padding(.trailing, -6)
+            .pointerStyle(.link)
+    }
+}
+
 struct CodeEdgeSeparator: View {
     var body: some View {
         Rectangle().fill(CodeEdgeSettingsTheme.border)

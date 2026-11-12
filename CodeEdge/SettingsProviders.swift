@@ -379,8 +379,7 @@ private struct ProviderConfigurationView: View {
                         Text(sourceTitle(source)).tag(source)
                     }
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
+                .codeEdgeMenuPicker()
             }
 
             if configuration.source == .endpoint
@@ -465,8 +464,7 @@ private struct ProviderConfigurationView: View {
                         Text(copy.text("中国大陆", "China"))
                             .tag(MoonshotUsageRegion.china.rawValue)
                     }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
+                    .codeEdgeMenuPicker()
                     .onChange(of: configuration.account) { _, newRegion in
                         guard !configuration.endpoint.isEmpty,
                             configuration.endpoint != newRegion
@@ -500,8 +498,7 @@ private struct ProviderConfigurationView: View {
                         Text(copy.text("关闭", "Off"))
                             .tag(WindsurfSessionSource.off.rawValue)
                     }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
+                    .codeEdgeMenuPicker()
                 }
             }
             if descriptor.id.rawValue == "deepseek", deepSeekProfiles.count > 1 {
@@ -512,8 +509,7 @@ private struct ProviderConfigurationView: View {
                             Text(profile.sourceLabel).tag(profile.id)
                         }
                     }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
+                    .codeEdgeMenuPicker()
                 }
             }
             if configuration.source == .account
@@ -603,8 +599,7 @@ private struct ProviderConfigurationView: View {
                         Text(copy.text("AWS Profile", "AWS profile"))
                             .tag(BedrockAuthMode.profile.rawValue)
                     }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
+                    .codeEdgeMenuPicker()
                 }
                 if bedrockAuthMode == BedrockAuthMode.profile.rawValue {
                     ProviderSettingsTextField(

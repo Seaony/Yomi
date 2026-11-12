@@ -111,9 +111,7 @@ private struct GeneralSettingsView: View {
                             Text("English").tag(AppLanguage.english)
                             Text("简体中文").tag(AppLanguage.simplifiedChinese)
                         }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .fixedSize()
+                        .codeEdgeMenuPicker()
                     }
                 }
                 CodeEdgeFormSection(title: copy.text("悬浮侧边栏背景", "Floating rail background")) {
@@ -130,9 +128,7 @@ private struct GeneralSettingsView: View {
                                     .tag(interval)
                             }
                         }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .fixedSize()
+                        .codeEdgeMenuPicker()
                     } label: {
                         VStack(alignment: .leading, spacing: SettingsSpace.xs) {
                             Text(copy.text("刷新间隔", "Refresh interval"))
