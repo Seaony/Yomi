@@ -40,12 +40,16 @@ struct FullscreenRevealStrip: View {
     let hoverChanged: (Bool) -> Void
     let reveal: () -> Void
     @ObservedObject private var preferences = AppPreferences.shared
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         RoundedRectangle(cornerRadius: 2)
-            .fill((preferences.railBackgroundColor ?? AppTheme.railBackground(for: colorScheme)).opacity(0.7))
+            .fill(AppTheme.revealStrip)
             .frame(width: FullscreenCollapsePolicy.stripWidth, height: FullscreenCollapsePolicy.stripHeight)
+            .overlay {
+                RoundedRectangle(cornerRadius: 2)
+                    .strokeBorder(.white.opacity(0.6), lineWidth: 0.5)
+            }
+            .shadow(color: .black.opacity(0.3), radius: 1.5)
             .contentShape(Rectangle())
             .onHover(perform: hoverChanged)
             .onTapGesture(perform: reveal)

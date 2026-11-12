@@ -7,7 +7,6 @@ nonisolated enum FullscreenCollapsePolicy {
     static let collapseDelay: TimeInterval = 0.45
     static let stripWidth: CGFloat = 4
     static let stripHeight: CGFloat = 48
-    static let slideDuration: TimeInterval = 0.2
 
     enum Edge: Equatable, Sendable {
         case left

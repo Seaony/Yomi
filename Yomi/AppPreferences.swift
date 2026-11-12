@@ -333,6 +333,9 @@ extension Notification.Name {
 }
 
 enum AppTheme {
+    // 细条覆盖任意窗口，固定蓝色避免随强调色变灰。
+    static let revealStrip = Color(red: 10 / 255.0, green: 132 / 255.0, blue: 1)
+
     static func railBackground(for colorScheme: ColorScheme) -> Color {
         colorScheme == .dark ? .black : Color(white: 0.97)
     }

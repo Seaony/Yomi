@@ -17,10 +17,14 @@ final class FullscreenRailController {
     private(set) var state = FullscreenCollapsePolicy.State()
 
     private let context: () -> Context
-    private let onCollapseChanged: (Bool) -> Void
+    private let onCollapseChanged: (Bool, RailPresentationPolicy.Trigger) -> Void
     private var isRunning = false
     private var isFullscreenOnTargetScreen = false
     private var lastFullscreenResult: Bool?
+    private var lastLoggedConfirmedValue: Bool?
+    private var lastDiscardReason: FullscreenDetectionDebounce.DiscardReason?
+    private var detectionState = FullscreenDetectionDebounce.State()
+    private var detectionTrigger = RailPresentationPolicy.Trigger.space
     private var lastEnabled: Bool?
     private var workspaceObservers: [NSObjectProtocol] = []
     private var defaultsObserver: NSObjectProtocol?
@@ -28,11 +32,12 @@ final class FullscreenRailController {
     private var globalMouseMonitor: Any?
     private var fullscreenPoll: Task<Void, Never>?
     private var pointerPoll: Task<Void, Never>?
-    private var workspaceRecheck: Task<Void, Never>?
+    private var detectionCheck: Task<Void, Never>?
+    private var scheduledDetectionCheckAt: Date?
     private var collapseTask: Task<Void, Never>?
     private var scheduledCollapseAt: Date?
 
-    init(context: @escaping () -> Context, onCollapseChanged: @escaping (Bool) -> Void) {
+    init(context: @escaping () -> Context, onCollapseChanged: @escaping (Bool, RailPresentationPolicy.Trigger) -> Void) {
         self.context = context
         self.onCollapseChanged = onCollapseChanged
     }
@@ -41,11 +46,16 @@ final class FullscreenRailController {
         guard !isRunning else { return }
         isRunning = true
         let workspaceCenter = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didActivateApplicationNotification] {
-            workspaceObservers.append(workspaceCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.workspaceChanged() }
-            })
-        }
+        workspaceObservers.append(workspaceCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.spaceChanged() }
+        })
+        workspaceObservers.append(workspaceCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshFullscreen() }
+        })
         defaultsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -81,11 +91,12 @@ final class FullscreenRailController {
         isRunning = false
         fullscreenPoll?.cancel()
         pointerPoll?.cancel()
-        workspaceRecheck?.cancel()
+        detectionCheck?.cancel()
         collapseTask?.cancel()
         fullscreenPoll = nil
         pointerPoll = nil
-        workspaceRecheck = nil
+        detectionCheck = nil
+        scheduledDetectionCheckAt = nil
         collapseTask = nil
         scheduledCollapseAt = nil
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
@@ -99,15 +110,21 @@ final class FullscreenRailController {
         lastEnabled = nil
         isFullscreenOnTargetScreen = false
         lastFullscreenResult = nil
+        lastLoggedConfirmedValue = nil
+        lastDiscardReason = nil
+        detectionState = FullscreenDetectionDebounce.State()
+        detectionTrigger = .space
         let wasCollapsed = state.isCollapsed
         state = FullscreenCollapsePolicy.State()
-        if wasCollapsed { onCollapseChanged(false) }
+        if wasCollapsed { onCollapseChanged(false, .pointer) }
     }
 
     func refreshFullscreen() {
         guard isRunning else { return }
         let current = context()
+        if let lastEnabled, lastEnabled != current.enabled { detectionTrigger = .pointer }
         lastEnabled = current.enabled
+        var rawValue = false
         var desktopCount = 0
         var regularCount = 0
         if current.enabled, let screenFrame = current.screenFrame,
@@ -119,24 +136,41 @@ final class FullscreenRailController {
             let desktopWindows = FullscreenDetection.onScreenDesktopWindows()
             desktopCount = desktopWindows.count
             regularCount = windows.filter { $0.layer == 0 && $0.activationPolicy == .regular }.count
-            isFullscreenOnTargetScreen = FullscreenDetection.hasFullscreenWindow(
+            rawValue = FullscreenDetection.hasFullscreenWindow(
                 screenBounds: bounds,
                 windows: windows,
                 desktopWindows: desktopWindows,
                 excludingPIDs: [ProcessInfo.processInfo.processIdentifier],
                 safeAreaTopInset: current.safeAreaTopInset
             )
-        } else {
-            isFullscreenOnTargetScreen = false
         }
-        if lastFullscreenResult != isFullscreenOnTargetScreen {
-            lastFullscreenResult = isFullscreenOnTargetScreen
+        let decision: FullscreenDetectionDebounce.Decision
+        if current.enabled {
+            decision = FullscreenDetectionDebounce.sample(previous: detectionState, value: rawValue, now: Date())
+        } else {
+            decision = .init(state: .init(committedValue: false), committedValue: nil, nextCheckAt: nil, discardReason: nil)
+        }
+        detectionState = decision.state
+        isFullscreenOnTargetScreen = detectionState.committedValue ?? false
+        scheduleDetectionCheck(at: decision.nextCheckAt)
+
+        let rawChanged = lastFullscreenResult != rawValue
+        if rawChanged || lastLoggedConfirmedValue != detectionState.committedValue || decision.committedValue != nil {
             DiagnosticLog.shared.write(
-                "Fullscreen detection active=\(isFullscreenOnTargetScreen) desktopCount=\(desktopCount) regularCount=\(regularCount)",
+                RailDiagnostics.detection(raw: rawValue, confirmed: detectionState.committedValue,
+                                          desktopCount: desktopCount, regularCount: regularCount),
                 category: .rail
             )
         }
-        updateState(using: current)
+        if let reason = decision.discardReason, rawChanged || reason != lastDiscardReason {
+            DiagnosticLog.shared.write(RailDiagnostics.discarded(reason: reason), category: .rail)
+        }
+        lastFullscreenResult = rawValue
+        lastLoggedConfirmedValue = detectionState.committedValue
+        lastDiscardReason = decision.discardReason
+        let trigger = decision.committedValue != nil ? detectionTrigger : .pointer
+        if decision.nextCheckAt == nil { detectionTrigger = .space }
+        updateState(using: current, trigger: trigger)
     }
 
     func updatePointerState() {
@@ -154,14 +188,29 @@ final class FullscreenRailController {
         updateState(using: context(), revealRequested: true, pointerEntry: true)
     }
 
-    private func workspaceChanged() {
+    private func spaceChanged() {
         guard isRunning else { return }
+        detectionTrigger = .space
+        detectionState = FullscreenDetectionDebounce.spaceChanged(previous: detectionState, now: Date())
+        lastDiscardReason = nil
+        scheduleDetectionCheck(at: nil)
+        state.collapseAt = nil
+        scheduleCollapseIfNeeded()
         refreshFullscreen()
-        workspaceRecheck?.cancel()
-        workspaceRecheck = Task { @MainActor [weak self] in
-            do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
-            guard !Task.isCancelled, let self else { return }
-            self.workspaceRecheck = nil
+    }
+
+    private func scheduleDetectionCheck(at deadline: Date?) {
+        guard scheduledDetectionCheckAt != deadline else { return }
+        detectionCheck?.cancel()
+        detectionCheck = nil
+        scheduledDetectionCheckAt = deadline
+        guard let deadline else { return }
+        detectionCheck = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .seconds(max(0, deadline.timeIntervalSinceNow))) } catch { return }
+            guard !Task.isCancelled, let self, self.isRunning,
+                  self.scheduledDetectionCheckAt == deadline else { return }
+            self.detectionCheck = nil
+            self.scheduledDetectionCheckAt = nil
             self.refreshFullscreen()
         }
     }
@@ -171,7 +220,29 @@ final class FullscreenRailController {
         refreshFullscreen()
     }
 
-    private func updateState(using current: Context, revealRequested: Bool = false, pointerEntry: Bool = false) {
+    nonisolated static func resolveState(
+        previous: FullscreenCollapsePolicy.State,
+        input: FullscreenCollapsePolicy.Input,
+        detectionPending: Bool
+    ) -> FullscreenCollapsePolicy.State {
+        guard detectionPending, input.enabled else {
+            return FullscreenCollapsePolicy.reduce(previous: previous, input: input)
+        }
+        var held = previous
+        held.collapseAt = nil
+        if input.pointerInsideRail || input.pointerInsideRevealStrip || input.detailVisible
+            || input.billVisible || input.revealRequested {
+            held.isCollapsed = false
+        }
+        return held
+    }
+
+    private func updateState(
+        using current: Context,
+        trigger: RailPresentationPolicy.Trigger = .pointer,
+        revealRequested: Bool = false,
+        pointerEntry: Bool = false
+    ) {
         let pointer = pointerEntry ? nil : NSEvent.mouseLocation
         let revealFrame = current.screenFrame.map {
             FullscreenCollapsePolicy.collapsedFrame(
@@ -181,9 +252,10 @@ final class FullscreenRailController {
         let previous = state
         let pointerInsideRevealFrame = pointer.map { revealFrame?.contains($0) == true } ?? false
         if previous.isCollapsed && (pointerEntry || pointerInsideRevealFrame) {
-            DiagnosticLog.shared.write("Reveal strip pointer entered", category: .rail)
+            DiagnosticLog.shared.write(RailDiagnostics.pointerEntered, category: .rail)
         }
-        state = FullscreenCollapsePolicy.reduce(previous: previous, input: .init(
+        let now = Date()
+        let input = FullscreenCollapsePolicy.Input(
             enabled: current.enabled,
             isFullscreenOnTargetScreen: isFullscreenOnTargetScreen,
             pointerInsideRail: pointer.map { current.railFrame.contains($0) } ?? false,
@@ -191,10 +263,17 @@ final class FullscreenRailController {
             detailVisible: current.detailVisible,
             billVisible: current.billVisible,
             revealRequested: revealRequested,
-            now: Date()
-        ))
+            now: now
+        )
+        let detectionPending = detectionState.committedValue == nil || detectionState.candidate != nil
+            || detectionState.ignoreUntil != nil
+        state = Self.resolveState(previous: previous, input: input, detectionPending: detectionPending)
         scheduleCollapseIfNeeded()
-        if previous.isCollapsed != state.isCollapsed { onCollapseChanged(state.isCollapsed) }
+        if previous.isCollapsed != state.isCollapsed {
+            let revealedByInteraction = !state.isCollapsed && (!current.enabled || input.pointerInsideRail
+                || input.pointerInsideRevealStrip || current.detailVisible || current.billVisible || revealRequested)
+            onCollapseChanged(state.isCollapsed, revealedByInteraction ? .pointer : trigger)
+        }
     }
 
     private func scheduleCollapseIfNeeded() {

@@ -9,9 +9,10 @@ struct DiagnosticsTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let log = DiagnosticLog(directoryURL: directory, systemLoggingEnabled: false)
         let start = Date(timeIntervalSince1970: 1_800_000_000.123)
-        log.write("Reveal strip pointer entered", category: .rail, date: start)
-        log.write("Rail expansion started", category: .rail, date: start.addingTimeInterval(0.001))
-        log.write("Rail expansion completed", category: .rail, date: start.addingTimeInterval(0.201))
+        log.write(RailDiagnostics.pointerEntered, category: .rail, date: start)
+        log.write(RailDiagnostics.started(collapsed: false, durationMS: 220, trigger: .pointer),
+                  category: .rail, date: start.addingTimeInterval(0.001))
+        log.write(RailDiagnostics.completed(collapsed: false), category: .rail, date: start.addingTimeInterval(0.221))
         let lines = log.recentLogText().split(separator: "\n")
         #expect(lines.count == 3)
         #expect(lines.allSatisfy { $0.contains("[rail]") })
@@ -24,7 +25,7 @@ struct DiagnosticsTests {
             try #require(formatter.date(from: String(line.split(separator: " ")[0])))
         }
         #expect(abs(dates[1].timeIntervalSince(dates[0]) - 0.001) < 0.0001)
-        #expect(abs(dates[2].timeIntervalSince(dates[1]) - 0.2) < 0.0001)
+        #expect(abs(dates[2].timeIntervalSince(dates[1]) - 0.22) < 0.0001)
     }
 
     @Test
