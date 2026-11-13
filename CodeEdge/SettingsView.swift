@@ -345,7 +345,7 @@ private struct RailColorSwatchStyle: ButtonStyle {
         } else {
             CodeEdgeSettingsTheme.border
         }
-        let borderWidth: CGFloat = isFocused || (highlighted && configuration.isPressed) ? 2 : 1
+        let borderWidth: CGFloat = !isFocused && highlighted && configuration.isPressed ? 3 : 2
         configuration.label
             .background {
                 shape.fill(border)
