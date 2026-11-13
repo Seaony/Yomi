@@ -1,6 +1,15 @@
 {
-  "originHash" : "a73615c1477ef6f501793283f7a54816d021227f44c3e353758df3d1c0625093",
+  "originHash" : "e20f5caf5aa4e05f8c4aa803ae5ffe2f40967cf765785b3e540750b534651a93",
   "pins" : [
+    {
+      "identity" : "colorselector",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/jaywcjlove/ColorSelector",
+      "state" : {
+        "revision" : "d73937d4c68894170001f331ce991ccaeffa73b5",
+        "version" : "2.3.1"
+      }
+    },
     {
       "identity" : "sparkle",
       "kind" : "remoteSourceControl",

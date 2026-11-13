@@ -116,17 +116,15 @@ extension CodeEdgeSideRow where Label == Text {
 
 struct CodeEdgeSettingsRowLabel: View {
     let title: String
-    let detail: String?
+    let detail: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
-            if let detail {
-                Text(detail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(CodeEdgeSettingsTheme.secondaryText.opacity(0.97))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text(detail)
+                .font(.system(size: 11))
+                .foregroundStyle(CodeEdgeSettingsTheme.secondaryText.opacity(0.97))
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

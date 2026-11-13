@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		A10F30A83045000100000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A10F30A93045000100000001 /* Sparkle */; };
 		A30F30A83045000100000001 /* SweetCookieKit in Frameworks */ = {isa = PBXBuildFile; productRef = A30F30A93045000100000001 /* SweetCookieKit */; };
+		A40F30A83045000100000001 /* ColorSelector in Frameworks */ = {isa = PBXBuildFile; productRef = A40F30A93045000100000001 /* ColorSelector */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -49,6 +50,7 @@
 			files = (
 				A10F30A83045000100000001 /* Sparkle in Frameworks */,
 				A30F30A83045000100000001 /* SweetCookieKit in Frameworks */,
+				A40F30A83045000100000001 /* ColorSelector in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -102,6 +104,7 @@
 			packageProductDependencies = (
 				A10F30A93045000100000001 /* Sparkle */,
 				A30F30A93045000100000001 /* SweetCookieKit */,
+				A40F30A93045000100000001 /* ColorSelector */,
 			);
 			productName = CodeEdge;
 			productReference = 752595343045010E00233947 /* CodeEdge.app */;
@@ -173,6 +176,7 @@
 			packageReferences = (
 				A10F30AA3045000100000001 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				A30F30AA3045000100000001 /* XCRemoteSwiftPackageReference "SweetCookieKit" */,
+				A40F30AA3045000100000001 /* XCRemoteSwiftPackageReference "ColorSelector" */,
 			);
 			projectDirPath = "";
 			projectRoot = "";
@@ -499,6 +503,14 @@
 				minimumVersion = 0.5.11;
 			};
 		};
+		A40F30AA3045000100000001 /* XCRemoteSwiftPackageReference "ColorSelector" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/jaywcjlove/ColorSelector";
+			requirement = {
+				kind = exactVersion;
+				version = 2.3.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -511,6 +523,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A30F30AA3045000100000001 /* XCRemoteSwiftPackageReference "SweetCookieKit" */;
 			productName = SweetCookieKit;
+		};
+		A40F30A93045000100000001 /* ColorSelector */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A40F30AA3045000100000001 /* XCRemoteSwiftPackageReference "ColorSelector" */;
+			productName = ColorSelector;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

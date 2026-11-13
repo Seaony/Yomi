@@ -1,4 +1,5 @@
 import AppKit
+import ColorSelector
 import Combine
 import ServiceManagement
 import SwiftUI
@@ -82,6 +83,7 @@ private struct SettingsScrollablePage<Content: View>: View {
 }
 
 private struct GeneralSettingsView: View {
+    private static let refreshIntervals = [0.0, 60, 300, 900, 1_800]
     @ObservedObject private var appPreferences = AppPreferences.shared
     @AppStorage("refresh-interval") private var refreshInterval = 0.0
     @AppStorage("show-provider-names") private var showProviderNames = true
@@ -121,7 +123,7 @@ private struct GeneralSettingsView: View {
                     CodeEdgeSideRow {
                         CodeEdgeMenuPicker(
                             title: copy.text("刷新间隔", "Refresh interval"), selection: $refreshInterval,
-                            options: [0.0, 60, 300, 900, 1_800].map { interval in
+                            options: Self.refreshIntervals.map { interval in
                                 (interval, interval == 0 ? copy.text("自动", "Auto")
                                     : copy.text("\(Int(interval / 60)) 分钟", "\(Int(interval / 60)) min"))
                             }
@@ -129,45 +131,39 @@ private struct GeneralSettingsView: View {
                     } label: {
                         CodeEdgeSettingsRowLabel(
                             title: copy.text("刷新间隔", "Refresh interval"),
-                            detail: refreshInterval == 0 ? copy.text(
-                                "常看时每 2 分钟刷新，闲置时最长间隔 30 分钟",
-                                "Every 2 min while you're looking, up to 30 min when idle."
-                            ) : nil
+                            detail: refreshIntervalDescription
                         )
                     }
                 }
 
                 CodeEdgeFormSection(title: copy.text("行为", "Behavior")) {
-                    Toggle(isOn: $collapseInFullscreen) {
-                        CodeEdgeSettingsRowLabel(
-                            title: copy.text("全屏时收起", "Collapse in full screen"),
-                            detail: copy.text("侧边栏收成细条，鼠标移上去就能展开", "Shrinks the sidebar to a thin strip. Hover to expand.")
-                        )
-                    }
-                    Toggle(isOn: $showServiceIncidents) {
-                        CodeEdgeSettingsRowLabel(
-                            title: copy.text("显示服务故障", "Show service incidents"),
-                            detail: copy.text("在侧边栏标记服务商报告的故障", "Marks incidents reported by providers in the sidebar.")
-                        )
-                    }
-                    Toggle(isOn: $launchAtLogin) {
-                        CodeEdgeSettingsRowLabel(
-                            title: copy.text("登录后自动启动", "Launch at login"),
-                            detail: copy.text("登录这台 Mac 时在后台启动", "Starts in the background when you log in to this Mac.")
-                        )
-                    }
-                    .onChange(of: launchAtLogin) { _, enabled in updateLoginItem(enabled) }
-                    Toggle(isOn: $showProviderNames) {
-                        CodeEdgeSettingsRowLabel(
-                            title: copy.text("显示 Provider 名称", "Show provider names"),
-                            detail: copy.text("在侧边栏图标下方显示名称", "Shows names below the sidebar icons.")
-                        )
-                    }
+                    Toggle(copy.text("全屏时收起", "Collapse in full screen"), isOn: $collapseInFullscreen)
+                    Toggle(copy.text("显示服务故障", "Show service incidents"), isOn: $showServiceIncidents)
+                    Toggle(copy.text("登录后自动启动", "Launch at login"), isOn: $launchAtLogin)
+                        .onChange(of: launchAtLogin) { _, enabled in updateLoginItem(enabled) }
+                    Toggle(copy.text("显示 Provider 名称", "Show provider names"), isOn: $showProviderNames)
                 } footer: {
                     if let loginError { Text(loginError).foregroundStyle(CodeEdgeSettingsTheme.error) }
                 }
             }
         }
+    }
+
+    private var refreshIntervalDescription: String {
+        if refreshInterval == 0 {
+            return copy.text(
+                "常看时每 2 分钟刷新，闲置时最长间隔 30 分钟",
+                "Every 2 min while you're looking, up to 30 min when idle."
+            )
+        }
+        if let interval = Self.refreshIntervals.first(where: { $0 == refreshInterval }) {
+            let minutes = Int(interval / 60)
+            return copy.text(
+                "每 \(minutes) 分钟更新侧边栏的额度和用量",
+                "Updates quota and usage in the sidebar every \(minutes) min."
+            )
+        }
+        return copy.text("定期更新侧边栏的额度和用量", "Updates quota and usage in the sidebar periodically.")
     }
 
     private func appearanceTitle(_ appearance: AppAppearance) -> String {
@@ -277,15 +273,13 @@ private struct RailBackgroundRow: View {
     let title: String
     @ObservedObject private var appPreferences = AppPreferences.shared
     @State private var hex = ""
+    @State private var showsColorPicker = false
     @FocusState private var hexFocused: Bool
     @Environment(\.appLanguage) private var language
     private var copy: AppCopy { AppCopy(language: language) }
 
-    private var color: Binding<Color> {
-        Binding(
-            get: { appPreferences.railBackgroundColor(for: scheme) ?? AppTheme.railBackground(for: scheme) },
-            set: { appPreferences.setRailBackgroundColor($0, for: scheme) }
-        )
+    private var color: Color {
+        appPreferences.railBackgroundColor(for: scheme) ?? AppTheme.railBackground(for: scheme)
     }
 
     var body: some View {
@@ -308,13 +302,61 @@ private struct RailBackgroundRow: View {
                               normalized != value else { return }
                         hex = normalized
                     }
-                ColorPicker(title, selection: color, supportsOpacity: false)
-                    .labelsHidden()
-                    .pointerStyle(.link)
+                Button {
+                    hexFocused = false
+                    showsColorPicker = true
+                } label: {
+                    Capsule()
+                        .fill(color)
+                        .overlay { Capsule().strokeBorder(CodeEdgeSettingsTheme.border) }
+                        .frame(width: 26, height: 16)
+                }
+                .accessibilityLabel(copy.text("\(title)背景颜色", "\(title) background color"))
+                .accessibilityValue(appPreferences.railBackgroundColorHex[scheme] ?? copy.text("默认", "Default"))
+                .popover(isPresented: $showsColorPicker) {
+                    RailColorPopover(color: color) { appPreferences.setRailBackgroundColor($0, for: scheme) }
+                }
             }
         }
         .onAppear { hex = appPreferences.railBackgroundColorHex[scheme] ?? "" }
         .onChange(of: appPreferences.railBackgroundColorHex[scheme]) { _, value in hex = value ?? "" }
+    }
+}
+
+private struct RailColorPopover: View {
+    @State private var hue: CGFloat
+    @State private var saturation: CGFloat
+    @State private var brightness: CGFloat
+    @Environment(\.swatchColors) private var swatchColors
+    @Environment(\.appLanguage) private var language
+    let selectColor: (Color) -> Void
+
+    init(color: Color, selectColor: @escaping (Color) -> Void) {
+        // 打开时从当前颜色初始化色盘，只有拖动、点击色板或取色才保存。
+        let rgb = NSColor(color).usingColorSpace(.sRGB) ?? .black
+        _hue = State(initialValue: rgb.hueComponent)
+        _saturation = State(initialValue: rgb.saturationComponent)
+        _brightness = State(initialValue: rgb.brightnessComponent)
+        self.selectColor = selectColor
+    }
+
+    var body: some View {
+        let copy = AppCopy(language: language)
+        Sketch(hue: $hue, saturation: $saturation, brightness: $brightness, alpha: .constant(1))
+            .showsAlpha(false)
+            .buttonStyle(.automatic)
+            .environment(\.swatchColors, swatchColors.filter { $0.alphaComponent == 1 })
+            .frame(width: 180, height: 230)
+            .accessibilityRepresentation {
+                VStack {
+                    Slider(value: $hue, in: 0...1, step: 0.01) { Text(copy.text("色相", "Hue")) }
+                    Slider(value: $saturation, in: 0...1, step: 0.01) { Text(copy.text("饱和度", "Saturation")) }
+                    Slider(value: $brightness, in: 0...1, step: 0.01) { Text(copy.text("亮度", "Brightness")) }
+                }
+            }
+            .onChange(of: Color(hue: hue, saturation: saturation, brightness: brightness)) { _, color in
+                selectColor(color)
+            }
     }
 }
 
