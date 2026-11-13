@@ -110,7 +110,7 @@ nonisolated struct DeepSeekUsageSnapshot: Sendable, Equatable {
 
         let message: String? = if totalBalance <= 0 {
             AppLocalization.text(
-                "余额为零，请前往 platform.deepseek.com 充值 Credits",
+                "余额为零，请前往 platform.deepseek.com 充值",
                 "Balance is zero. Add credits at platform.deepseek.com.",
                 language: language
             )
