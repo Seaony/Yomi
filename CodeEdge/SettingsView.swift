@@ -106,12 +106,10 @@ private struct GeneralSettingsView: View {
                         .accessibilityLabel(copy.text("外观", "Appearance"))
                     }
                     CodeEdgeSideRow(copy.text("语言", "Language")) {
-                        // 语言名用各自的写法，切到不认识的语言也能找回来。
-                        Picker(copy.text("语言", "Language"), selection: $appPreferences.language) {
-                            Text("English").tag(AppLanguage.english)
-                            Text("简体中文").tag(AppLanguage.simplifiedChinese)
-                        }
-                        .codeEdgeMenuPicker()
+                        CodeEdgeMenuPicker(
+                            title: copy.text("语言", "Language"), selection: $appPreferences.language,
+                            options: [(.english, "English"), (.simplifiedChinese, "简体中文")]
+                        )
                     }
                 }
                 CodeEdgeFormSection(title: copy.text("悬浮侧边栏背景", "Floating rail background")) {
@@ -121,41 +119,50 @@ private struct GeneralSettingsView: View {
 
                 CodeEdgeFormSection(title: copy.text("刷新", "Refresh")) {
                     CodeEdgeSideRow {
-                        Picker(copy.text("刷新间隔", "Refresh interval"), selection: $refreshInterval) {
-                            ForEach([0.0, 60, 300, 900, 1_800], id: \.self) { interval in
-                                Text(interval == 0 ? copy.text("自动", "Auto")
+                        CodeEdgeMenuPicker(
+                            title: copy.text("刷新间隔", "Refresh interval"), selection: $refreshInterval,
+                            options: [0.0, 60, 300, 900, 1_800].map { interval in
+                                (interval, interval == 0 ? copy.text("自动", "Auto")
                                     : copy.text("\(Int(interval / 60)) 分钟", "\(Int(interval / 60)) min"))
-                                    .tag(interval)
                             }
-                        }
-                        .codeEdgeMenuPicker()
+                        )
                     } label: {
-                        VStack(alignment: .leading, spacing: SettingsSpace.xs) {
-                            Text(copy.text("刷新间隔", "Refresh interval"))
-                            if refreshInterval == 0 {
-                                Text(copy.text("常看时 2 分钟刷新一次，闲置时最慢 30 分钟", "Every 2 min while you're looking, up to 30 min when idle"))
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(CodeEdgeSettingsTheme.secondaryText)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
+                        CodeEdgeSettingsRowLabel(
+                            title: copy.text("刷新间隔", "Refresh interval"),
+                            detail: refreshInterval == 0 ? copy.text(
+                                "常看时每 2 分钟刷新，闲置时最长间隔 30 分钟",
+                                "Every 2 min while you're looking, up to 30 min when idle."
+                            ) : nil
+                        )
                     }
                 }
 
                 CodeEdgeFormSection(title: copy.text("行为", "Behavior")) {
                     Toggle(isOn: $collapseInFullscreen) {
-                        VStack(alignment: .leading, spacing: SettingsSpace.xs) {
-                            Text(copy.text("全屏时收起", "Collapse in full screen"))
-                            Text(copy.text("全屏时收成细条，鼠标移到细条上即可展开", "Collapses to a thin bar in full screen. Hover it to expand."))
-                                .font(.system(size: 12))
-                                .foregroundStyle(CodeEdgeSettingsTheme.secondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                        CodeEdgeSettingsRowLabel(
+                            title: copy.text("全屏时收起", "Collapse in full screen"),
+                            detail: copy.text("侧边栏收成细条，鼠标移上去就能展开", "Shrinks the sidebar to a thin strip. Hover to expand.")
+                        )
                     }
-                    Toggle(copy.text("显示服务故障", "Show service incidents"), isOn: $showServiceIncidents)
-                    Toggle(copy.text("登录后自动启动", "Launch at login"), isOn: $launchAtLogin)
-                        .onChange(of: launchAtLogin) { _, enabled in updateLoginItem(enabled) }
-                    Toggle(copy.text("显示 Provider 名称", "Show provider names"), isOn: $showProviderNames)
+                    Toggle(isOn: $showServiceIncidents) {
+                        CodeEdgeSettingsRowLabel(
+                            title: copy.text("显示服务故障", "Show service incidents"),
+                            detail: copy.text("在侧边栏标记服务商报告的故障", "Marks incidents reported by providers in the sidebar.")
+                        )
+                    }
+                    Toggle(isOn: $launchAtLogin) {
+                        CodeEdgeSettingsRowLabel(
+                            title: copy.text("登录后自动启动", "Launch at login"),
+                            detail: copy.text("登录这台 Mac 时在后台启动", "Starts in the background when you log in to this Mac.")
+                        )
+                    }
+                    .onChange(of: launchAtLogin) { _, enabled in updateLoginItem(enabled) }
+                    Toggle(isOn: $showProviderNames) {
+                        CodeEdgeSettingsRowLabel(
+                            title: copy.text("显示 Provider 名称", "Show provider names"),
+                            detail: copy.text("在侧边栏图标下方显示名称", "Shows names below the sidebar icons.")
+                        )
+                    }
                 } footer: {
                     if let loginError { Text(loginError).foregroundStyle(CodeEdgeSettingsTheme.error) }
                 }
@@ -203,9 +210,24 @@ private struct QuotaNotificationSettingsView: View {
         SettingsScrollablePage {
             CodeEdgeSettingsForm {
                 CodeEdgeFormSection(title: copy.text("额度提醒", "Quota notifications")) {
-                    Toggle(copy.text("剩余额度较低", "Low remaining quota"), isOn: $lowQuotaEnabled)
-                    Toggle(copy.text("额度用完", "Quota depleted"), isOn: $depletedEnabled)
-                    Toggle(copy.text("额度重置或恢复", "Quota reset or restored"), isOn: $resetEnabled)
+                    Toggle(isOn: $lowQuotaEnabled) {
+                        CodeEdgeSettingsRowLabel(
+                            title: copy.text("剩余额度较低", "Low remaining quota"),
+                            detail: copy.text("剩余额度降到所选百分比时提醒", "Alerts when remaining quota reaches a selected percentage.")
+                        )
+                    }
+                    Toggle(isOn: $depletedEnabled) {
+                        CodeEdgeSettingsRowLabel(
+                            title: copy.text("额度用完", "Quota depleted"),
+                            detail: copy.text("某个额度窗口的剩余量降到 0% 时提醒", "Alerts when any quota window runs out.")
+                        )
+                    }
+                    Toggle(isOn: $resetEnabled) {
+                        CodeEdgeSettingsRowLabel(
+                            title: copy.text("额度重置或恢复", "Quota reset or restored"),
+                            detail: copy.text("上一周期用量超过 15% 时，新周期开始会提醒", "Alerts when a new cycle starts if you used over 15% last cycle.")
+                        )
+                    }
                 } footer: {
                     if notifications.authorizationDenied {
                         Text(copy.text("通知权限已关闭，请在系统设置 → 通知 → CodeEdge 中允许通知。", "Notifications are disabled. Allow CodeEdge notifications in System Settings → Notifications."))
@@ -277,6 +299,9 @@ private struct RailBackgroundRow: View {
                     .focused($hexFocused)
                     .codeEdgeSettingsField(focused: hexFocused)
                     .frame(width: 98)
+                    .background {
+                        if hexFocused { RailBackgroundFocusDismissal() }
+                    }
                     .accessibilityLabel(title + " #RRGGBB")
                     .onChange(of: hex) { _, value in
                         guard let normalized = appPreferences.setRailBackgroundColor(hex: value, for: scheme),
@@ -290,6 +315,46 @@ private struct RailBackgroundRow: View {
         }
         .onAppear { hex = appPreferences.railBackgroundColorHex[scheme] ?? "" }
         .onChange(of: appPreferences.railBackgroundColorHex[scheme]) { _, value in hex = value ?? "" }
+    }
+}
+
+private struct RailBackgroundFocusDismissal: NSViewRepresentable {
+    func makeNSView(context: Context) -> MonitorView { MonitorView() }
+    func updateNSView(_ nsView: MonitorView, context: Context) {}
+
+    final class MonitorView: NSView {
+        private var monitor: Any?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
+            guard let window else {
+                monitor = nil
+                return
+            }
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(windowDidResignKey(_:)), name: NSWindow.didResignKeyNotification, object: window
+            )
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self, weak window] event in
+                // 先结束编辑，再把原点击交给菜单、按钮或下一个输入框。
+                if let self, let window, event.window === window,
+                   !self.bounds.contains(self.convert(event.locationInWindow, from: nil)) {
+                    window.makeFirstResponder(nil)
+                }
+                return event
+            }
+        }
+
+        @objc private func windowDidResignKey(_ notification: Notification) {
+            window?.makeFirstResponder(nil)
+        }
+
+        deinit {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
     }
 }
 

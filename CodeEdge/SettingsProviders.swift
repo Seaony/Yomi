@@ -374,12 +374,10 @@ private struct ProviderConfigurationView: View {
     private var dataSourceSection: some View {
         CodeEdgeFormSection(title: copy.text("数据来源", "Data source")) {
             ProviderSettingsLabeledRow(title: copy.text("读取方式", "Source")) {
-                Picker("", selection: $configuration.source) {
-                    ForEach(availableSources, id: \.self) { source in
-                        Text(sourceTitle(source)).tag(source)
-                    }
-                }
-                .codeEdgeMenuPicker()
+                CodeEdgeMenuPicker(
+                    title: copy.text("读取方式", "Source"), selection: $configuration.source,
+                    options: availableSources.map { ($0, sourceTitle($0)) }
+                )
             }
 
             if configuration.source == .endpoint
@@ -458,13 +456,13 @@ private struct ProviderConfigurationView: View {
             }
             if descriptor.id.rawValue == "moonshot" {
                 ProviderSettingsLabeledRow(title: copy.text("API 区域", "API region")) {
-                    Picker("", selection: $configuration.account) {
-                        Text(copy.text("国际", "International"))
-                            .tag(MoonshotUsageRegion.international.rawValue)
-                        Text(copy.text("中国大陆", "China"))
-                            .tag(MoonshotUsageRegion.china.rawValue)
-                    }
-                    .codeEdgeMenuPicker()
+                    CodeEdgeMenuPicker(
+                        title: copy.text("API 区域", "API region"), selection: $configuration.account,
+                        options: [
+                            (MoonshotUsageRegion.international.rawValue, copy.text("国际", "International")),
+                            (MoonshotUsageRegion.china.rawValue, copy.text("中国大陆", "China"))
+                        ]
+                    )
                     .onChange(of: configuration.account) { _, newRegion in
                         guard !configuration.endpoint.isEmpty,
                             configuration.endpoint != newRegion
@@ -490,26 +488,23 @@ private struct ProviderConfigurationView: View {
             }
             if descriptor.id.rawValue == "windsurf", configuration.source != .account {
                 ProviderSettingsLabeledRow(title: copy.text("会话来源", "Session source")) {
-                    Picker("", selection: $configuration.account) {
-                        Text(copy.text("自动", "Automatic"))
-                            .tag(WindsurfSessionSource.automatic.rawValue)
-                        Text(copy.text("手动", "Manual"))
-                            .tag(WindsurfSessionSource.manual.rawValue)
-                        Text(copy.text("关闭", "Off"))
-                            .tag(WindsurfSessionSource.off.rawValue)
-                    }
-                    .codeEdgeMenuPicker()
+                    CodeEdgeMenuPicker(
+                        title: copy.text("会话来源", "Session source"), selection: $configuration.account,
+                        options: [
+                            (WindsurfSessionSource.automatic.rawValue, copy.text("自动", "Automatic")),
+                            (WindsurfSessionSource.manual.rawValue, copy.text("手动", "Manual")),
+                            (WindsurfSessionSource.off.rawValue, copy.text("关闭", "Off"))
+                        ]
+                    )
                 }
             }
             if descriptor.id.rawValue == "deepseek", deepSeekProfiles.count > 1 {
                 ProviderSettingsLabeledRow(title: copy.text("Chrome Profile", "Chrome profile")) {
-                    Picker("", selection: $configuration.account) {
-                        Text(copy.text("未选择", "Not selected")).tag("")
-                        ForEach(deepSeekProfiles, id: \.id) { profile in
-                            Text(profile.sourceLabel).tag(profile.id)
-                        }
-                    }
-                    .codeEdgeMenuPicker()
+                    CodeEdgeMenuPicker(
+                        title: copy.text("Chrome Profile", "Chrome profile"), selection: $configuration.account,
+                        options: [("", copy.text("未选择", "Not selected"))]
+                            + deepSeekProfiles.map { ($0.id, $0.sourceLabel) }
+                    )
                 }
             }
             if configuration.source == .account
@@ -593,13 +588,13 @@ private struct ProviderConfigurationView: View {
         CodeEdgeFormSection(title: copy.text("认证", "Authentication")) {
             if descriptor.id.rawValue == "bedrock" {
                 ProviderSettingsLabeledRow(title: copy.text("认证方式", "Authentication")) {
-                    Picker("", selection: $bedrockAuthMode) {
-                        Text(copy.text("Access keys", "Access keys"))
-                            .tag(BedrockAuthMode.keys.rawValue)
-                        Text(copy.text("AWS Profile", "AWS profile"))
-                            .tag(BedrockAuthMode.profile.rawValue)
-                    }
-                    .codeEdgeMenuPicker()
+                    CodeEdgeMenuPicker(
+                        title: copy.text("认证方式", "Authentication"), selection: $bedrockAuthMode,
+                        options: [
+                            (BedrockAuthMode.keys.rawValue, "Access keys"),
+                            (BedrockAuthMode.profile.rawValue, copy.text("AWS Profile", "AWS profile"))
+                        ]
+                    )
                 }
                 if bedrockAuthMode == BedrockAuthMode.profile.rawValue {
                     ProviderSettingsTextField(

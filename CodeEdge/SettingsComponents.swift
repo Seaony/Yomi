@@ -114,6 +114,23 @@ extension CodeEdgeSideRow where Label == Text {
     }
 }
 
+struct CodeEdgeSettingsRowLabel: View {
+    let title: String
+    let detail: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+            if let detail {
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodeEdgeSettingsTheme.secondaryText.opacity(0.97))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
 struct CodeEdgeFormRow<Label: View, Content: View>: View {
     let label: Label
     let content: Content
@@ -157,18 +174,66 @@ struct CodeEdgeFormSwitchStyle: ToggleStyle {
     }
 }
 
-extension View {
-    /// 设置里的下拉菜单：不要底色，文字用正文颜色，窗口激活时也不染成强调色。
-    func codeEdgeMenuPicker() -> some View {
-        labelsHidden()
-            .pickerStyle(.menu)
-            .buttonStyle(.borderless)
-            .tint(CodeEdgeSettingsTheme.primaryText)
-            .foregroundStyle(CodeEdgeSettingsTheme.primaryText)
-            .fixedSize()
-            // 无边框菜单自带右侧留白，抵掉后箭头和同列其他控件右边对齐。
-            .padding(.trailing, -6)
-            .pointerStyle(.link)
+struct CodeEdgeMenuPicker<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let options: [(value: Value, title: String)]
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        let currentTitle = options.first { $0.value == selection }?.title ?? ""
+        Menu {
+            Picker(title, selection: $selection) {
+                ForEach(options, id: \.value) { option in
+                    Text(option.title).tag(option.value)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            Text(currentTitle)
+        }
+        .menuStyle(.button)
+        .buttonStyle(CodeEdgeMenuPickerButtonStyle())
+        .menuIndicator(.hidden)
+        .fixedSize(horizontal: false, vertical: true)
+        .pointerStyle(isEnabled ? .link : nil)
+        .accessibilityLabel(title)
+        .accessibilityValue(currentTitle)
+    }
+}
+
+private struct CodeEdgeMenuPickerButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.isFocused) private var isFocused
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 4)
+        HStack(spacing: SettingsSpace.xs) {
+            configuration.label
+                .font(.system(size: 13))
+                .foregroundStyle(isEnabled ? CodeEdgeSettingsTheme.primaryText : CodeEdgeSettingsTheme.disabledText)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(CodeEdgeSettingsTheme.secondaryText.opacity(0.75))
+                .accessibilityHidden(true)
+        }
+        .frame(minHeight: 22)
+        .background {
+            if isEnabled && (hovering || configuration.isPressed) {
+                shape.fill(CodeEdgeSettingsTheme.primaryText.opacity(configuration.isPressed ? 0.12 : 0.06))
+                    .padding(.horizontal, -4)
+            }
+        }
+        .overlay {
+            if isFocused {
+                shape.strokeBorder(CodeEdgeSettingsTheme.focus, lineWidth: 2)
+                    .padding(.horizontal, -4)
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
     }
 }
 
@@ -235,8 +300,8 @@ private struct CodeEdgeChoiceSegment: View {
                 !isEnabled ? CodeEdgeSettingsTheme.disabledText
                     : selected ? CodeEdgeSettingsTheme.actionText : CodeEdgeSettingsTheme.primaryText
             )
-            .padding(.horizontal, 14)
-            .frame(height: 28)
+            .padding(.horizontal, iconOnly ? SettingsSpace.sm : 14)
+            .frame(height: iconOnly ? 22 : 28)
             .background {
                 if selected {
                     shape.fill(isEnabled ? CodeEdgeSettingsTheme.accent : CodeEdgeSettingsTheme.disabledSurface)
