@@ -306,11 +306,9 @@ private struct RailBackgroundRow: View {
                     hexFocused = false
                     showsColorPicker = true
                 } label: {
-                    Capsule()
-                        .fill(color)
-                        .frame(width: 54, height: 28)
+                    Color.clear.frame(width: 54, height: 28)
                 }
-                .buttonStyle(RailColorSwatchStyle())
+                .buttonStyle(RailColorSwatchStyle(color: color))
                 .accessibilityLabel(copy.text("\(title)背景颜色", "\(title) background color"))
                 .accessibilityValue(appPreferences.railBackgroundColorHex[scheme] ?? copy.text("默认", "Default"))
                 .popover(isPresented: $showsColorPicker) {
@@ -324,6 +322,7 @@ private struct RailBackgroundRow: View {
 }
 
 private struct RailColorSwatchStyle: ButtonStyle {
+    let color: Color
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.isFocused) private var isFocused
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -331,18 +330,23 @@ private struct RailColorSwatchStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         let scale = configuration.isPressed ? 0.94 : hovering ? 1.04 : 1
+        let shape = Capsule()
+        let highlighted = isEnabled && reduceMotion && (hovering || configuration.isPressed)
+        let border = if isFocused {
+            CodeEdgeSettingsTheme.focus
+        } else if highlighted {
+            CodeEdgeSettingsTheme.accent
+        } else {
+            CodeEdgeSettingsTheme.secondaryText.opacity(0.85)
+        }
+        let borderWidth: CGFloat = isFocused || (highlighted && configuration.isPressed) ? 2 : 1
         configuration.label
-            .overlay {
-                if isFocused {
-                    Capsule().strokeBorder(CodeEdgeSettingsTheme.focus, lineWidth: 2)
-                } else if isEnabled && reduceMotion && (hovering || configuration.isPressed) {
-                    Capsule().strokeBorder(
-                        CodeEdgeSettingsTheme.accent, lineWidth: configuration.isPressed ? 2 : 1
-                    )
-                }
+            .background {
+                shape.fill(border)
+                    .overlay { shape.fill(color).padding(borderWidth) }
             }
             .opacity(isEnabled ? 1 : 0.5)
-            .contentShape(Capsule())
+            .contentShape(shape)
             .pointerStyle(isEnabled ? .link : nil)
             .scaleEffect(isEnabled && !reduceMotion ? scale : 1)
             .onHover { hovering = $0 }
