@@ -197,7 +197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.panelDragEnded()
         }
         self.panel = panel
-        let hostingView = NSHostingView(rootView: UsageRailView(
+        let hostingView = FirstClickHostingView(rootView: UsageRailView(
             store: store,
             openSettings: { [weak self] providerID in self?.openSettings(providerID: providerID) },
             showProviderDetail: { [weak self] descriptor, localY in
@@ -231,7 +231,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func startFullscreenRailController() {
-        let stripHostingView = NSHostingView(rootView: FullscreenRevealStrip(
+        let stripHostingView = FirstClickHostingView(rootView: FullscreenRevealStrip(
             hoverChanged: { [weak self] hovering in
                 if hovering { self?.fullscreenRailController?.pointerEnteredRevealStrip() }
                 else { self?.fullscreenRailController?.updatePointerState() }
@@ -691,6 +691,11 @@ private struct DailyBillWindowContent: View {
     }
 }
 
+// 悬浮面板不主动激活应用，承载视图仍需把第一次点击交给内容。
+final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 final class FloatingPanel: NSPanel {
     var allowsDragging = true
     var originConstraint: ((NSPoint, NSSize) -> NSPoint)?
@@ -770,7 +775,7 @@ final class ProviderDetailPanel: NSPanel {
             .onGeometryChange(for: NSSize.self) { $0.size } action: { contentSizeChanged($0) }
             // 在这里解析尺寸动画，窗口跟随同一组中间尺寸，不再另起追赶动画。
             .geometryGroup()
-        let hostingView = NSHostingView(rootView: content)
+        let hostingView = FirstClickHostingView(rootView: content)
         let contentRect = NSRect(origin: .zero, size: hostingView.fittingSize)
         super.init(
             contentRect: contentRect,
