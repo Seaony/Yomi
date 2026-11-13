@@ -272,7 +272,7 @@ private struct RailBackgroundRow: View {
     let scheme: ColorScheme
     let title: String
     @ObservedObject private var appPreferences = AppPreferences.shared
-    @State private var hex = ""
+    @State private var hexDraft: String?
     @State private var showsColorPicker = false
     @FocusState private var hexFocused: Bool
     @Environment(\.appLanguage) private var language
@@ -282,13 +282,22 @@ private struct RailBackgroundRow: View {
         appPreferences.railBackgroundColor(for: scheme) ?? AppTheme.railBackground(for: scheme)
     }
 
+    private var currentHex: String {
+        appPreferences.railBackgroundColorHex[scheme] ?? AppTheme.railBackgroundHex(for: scheme)
+    }
+
     var body: some View {
         CodeEdgeSideRow(title) {
             HStack(spacing: SettingsSpace.sm) {
                 if appPreferences.railBackgroundColorHex[scheme] != nil {
                     Button(copy.text("恢复默认", "Reset")) { appPreferences.setRailBackgroundColor(nil, for: scheme) }
                 }
-                TextField("#RRGGBB", text: $hex)
+                TextField("#RRGGBB", text: Binding(
+                    get: { hexDraft ?? currentHex },
+                    set: { value in
+                        hexDraft = appPreferences.setRailBackgroundColor(hex: value, for: scheme) == nil ? value : nil
+                    }
+                ))
                     .font(.system(size: 13, design: .monospaced))
                     .focused($hexFocused)
                     .codeEdgeSettingsField(focused: hexFocused)
@@ -297,11 +306,7 @@ private struct RailBackgroundRow: View {
                         if hexFocused { RailBackgroundFocusDismissal() }
                     }
                     .accessibilityLabel(title + " #RRGGBB")
-                    .onChange(of: hex) { _, value in
-                        guard let normalized = appPreferences.setRailBackgroundColor(hex: value, for: scheme),
-                              normalized != value else { return }
-                        hex = normalized
-                    }
+                    .onSubmit { hexFocused = false }
                 Button {
                     hexFocused = false
                     showsColorPicker = true
@@ -310,14 +315,15 @@ private struct RailBackgroundRow: View {
                 }
                 .buttonStyle(RailColorSwatchStyle(color: color))
                 .accessibilityLabel(copy.text("\(title)背景颜色", "\(title) background color"))
-                .accessibilityValue(appPreferences.railBackgroundColorHex[scheme] ?? copy.text("默认", "Default"))
+                .accessibilityValue(currentHex)
                 .popover(isPresented: $showsColorPicker) {
                     RailColorPopover(color: color) { appPreferences.setRailBackgroundColor($0, for: scheme) }
                 }
             }
         }
-        .onAppear { hex = appPreferences.railBackgroundColorHex[scheme] ?? "" }
-        .onChange(of: appPreferences.railBackgroundColorHex[scheme]) { _, value in hex = value ?? "" }
+        .onChange(of: hexFocused) { _, focused in
+            if !focused { hexDraft = nil }
+        }
     }
 }
 

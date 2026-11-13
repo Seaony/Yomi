@@ -321,8 +321,8 @@ final class AppPreferences: ObservableObject {
     private static func normalizedHex(_ hex: String) -> String? {
         let trimmed = hex.trimmingCharacters(in: .whitespacesAndNewlines)
         let value = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
-        guard value.count == 6, UInt32(value, radix: 16) != nil else { return nil }
-        return "#" + value.uppercased()
+        guard value.count == 6, let rgb = UInt32(value, radix: 16) else { return nil }
+        return String(format: "#%06X", rgb)
     }
 
     private static func color(from hex: String) -> Color? {
@@ -355,7 +355,16 @@ enum AppTheme {
     static let revealStrip = Color(red: 10 / 255.0, green: 132 / 255.0, blue: 1)
 
     static func railBackground(for colorScheme: ColorScheme) -> Color {
-        colorScheme == .dark ? .black : Color(white: 0.97)
+        Color(white: Double(railBackgroundShade(for: colorScheme)) / 255)
+    }
+
+    static func railBackgroundHex(for colorScheme: ColorScheme) -> String {
+        let shade = railBackgroundShade(for: colorScheme)
+        return String(format: "#%02X%02X%02X", shade, shade, shade)
+    }
+
+    private static func railBackgroundShade(for colorScheme: ColorScheme) -> Int {
+        colorScheme == .dark ? 0 : 0xF7
     }
 
     static func primaryText(for colorScheme: ColorScheme) -> Color {
