@@ -157,8 +157,10 @@ struct UsageRailView: View {
                                 )
                             }
                         }
+                        .transition(.opacity)
                     }
                 }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: railProviders.map(\.id))
                 .padding(.vertical, UsageRailLayout.providerSectionVerticalPadding)
                 .padding(.horizontal, UsageRailLayout.providerSectionHorizontalPadding)
             }
@@ -202,6 +204,7 @@ struct UsageRailView: View {
             }
         }
         .contentShape(UsageRailHitShape(side: railSide))
+        .pointerStyle(.link)
         .scaleEffect(
             appeared ? 1 : 0.96,
             anchor: railSide == .right ? .trailing : .leading
@@ -847,13 +850,17 @@ private struct ProviderRailItem: View {
                         .accessibilityElement()
                         .accessibilityLabel(status.title ?? AppCopy(language: language).text("服务异常", "Service incident"))
                         .help(status.title ?? AppCopy(language: language).text("服务异常", "Service incident"))
+                        .transition(.opacity)
                 } else if let status = cachedUsageStatus(usage, language: language) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: UsageRailLayout.scaled(11), weight: .semibold))
                         .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.65))
                         .help(status)
+                        .transition(.opacity)
                 }
             }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: serviceStatus?.severity)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: cachedUsageStatus(usage, language: language) != nil)
             .shadow(
                 color: tint.opacity(hovered ? 0.35 : 0),
                 radius: UsageRailLayout.scaled(12)
@@ -873,6 +880,11 @@ private struct ProviderRailItem: View {
                     .minimumScaleFactor(0.72)
                     .foregroundStyle(AppTheme.primaryText(for: colorScheme))
                     .padding(.top, UsageRailLayout.scaled(4))
+                    .contentTransition(.numericText(value: showsTodayTokens
+                        ? Double(usage.today?.tokens ?? 0)
+                        : (remainingFraction * 100).rounded()))
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: railValue)
+                    .transition(.opacity)
             }
 
             if showName {
@@ -880,10 +892,13 @@ private struct ProviderRailItem: View {
                     .font(.system(size: UsageRailLayout.scaled(9), weight: .medium))
                     .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
                     .lineLimit(1)
+                    .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: railValue != nil)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: showName)
         .scaleEffect(hovered ? 1.045 : 1)
         .onHover { value in
             hoverChanged(value)

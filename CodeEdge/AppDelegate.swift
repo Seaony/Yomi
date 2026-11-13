@@ -477,7 +477,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             localY: localY,
             panel: panel
         )
-        detailPanel.updateFrame(frame, duration: animated ? animationDuration(0.14) : 0)
+        detailPanel.updateFrame(frame, duration: animated ? animationDuration(0.18) : 0)
     }
 
     private func closeProviderDetail() {
@@ -768,6 +768,8 @@ final class ProviderDetailPanel: NSPanel {
         let content = rootView
             .fixedSize()
             .onGeometryChange(for: NSSize.self) { $0.size } action: { contentSizeChanged($0) }
+            // 在这里解析尺寸动画，窗口跟随同一组中间尺寸，不再另起追赶动画。
+            .geometryGroup()
         let hostingView = NSHostingView(rootView: content)
         let contentRect = NSRect(origin: .zero, size: hostingView.fittingSize)
         super.init(
@@ -789,7 +791,7 @@ final class ProviderDetailPanel: NSPanel {
         // 两种更新都走同一个动画属性，新尺寸能立即替换尚未完成的位置动画。
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             animator().setFrame(frame, display: true)
         }
     }

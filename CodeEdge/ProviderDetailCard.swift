@@ -86,11 +86,15 @@ struct ProviderDetailCard: View {
         ProviderBrandColors.color(for: descriptor.id)
     }
 
+    private var headlineUsage: DailyTokenUsage? {
+        isOverview ? selectedPoint?.usage ?? usage.today : usage.today
+    }
+
     private var headlineValue: String {
-        if let requests = usage.todayRequests?.requests {
+        if !isOverview, let requests = usage.todayRequests?.requests {
             return compactTokenCount(requests)
         }
-        guard let tokens = usage.today?.tokens else { return "—" }
+        guard let tokens = headlineUsage?.tokens else { return "—" }
         return formatDetailTokensInMillions(tokens)
     }
 
@@ -248,6 +252,8 @@ struct ProviderDetailCard: View {
             .foregroundStyle(AppTheme.primaryText(for: colorScheme))
             .animation(detailAnimation, value: descriptor.id)
             .animation(detailAnimation, value: usage)
+            .animation(detailAnimation, value: serviceStatus)
+            .animation(detailAnimation, value: context.date)
             .onChange(of: descriptor.id) { _, _ in selectedDay = nil }
             .onChange(of: usage.last30DaysDaily.map(\.id)) { _, ids in
                 if let selectedDay, !ids.contains(selectedDay) { self.selectedDay = nil }
@@ -273,8 +279,6 @@ struct ProviderDetailCard: View {
                         }
                     }
                 }
-                .id(selectedPoint?.date)
-                .frame(height: modelBreakdownHeight, alignment: .topLeading)
                 .animation(detailAnimation, value: selectedPoint?.date)
                 .transition(.opacity)
             }
@@ -298,12 +302,6 @@ struct ProviderDetailCard: View {
         return usage.last30DaysDaily.first { $0.id == date }
     }
 
-    private var modelBreakdownHeight: CGFloat {
-        let groups = [usage.todayByModel ?? []] + usage.last30DaysDaily.compactMap(\.models)
-        let rowCount = groups.map { ModelUsageBreakdown.displayRows($0).count }.max() ?? 0
-        return 28 + CGFloat(max(1, rowCount)) * 20
-    }
-
     private var modelBreakdownTitle: String {
         guard isOverview, let point = selectedPoint else {
             return copy.text("今日模型用量", "Today's model usage")
@@ -313,19 +311,24 @@ struct ProviderDetailCard: View {
     }
 
     private func modelBreakdown(_ models: [ModelTokenUsage]) -> some View {
-        ModelUsageBreakdownView(models: models, title: modelBreakdownTitle, previewHoveredIndex: preview?.modelIndex)
+        let groups = [usage.todayByModel ?? []] + usage.last30DaysDaily.compactMap(\.models)
+        var seen: Set<String> = []
+        let colorOrder = groups.flatMap { ModelUsageBreakdown.displayRows($0).map(\.model) }
+            .filter { seen.insert($0).inserted }
+        return ModelUsageBreakdownView(models: models, title: modelBreakdownTitle,
+                                       colorOrder: colorOrder, previewHoveredIndex: preview?.modelIndex)
+            .transition(.opacity)
     }
 
     private var usageHeadline: some View {
         let layout = isOverview
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 7))
-        let todayCost = costText(usage.today)
-        let todayCostText = Text(todayCost)
+        let headlineCostText = Text(costText(headlineUsage))
             .font(.system(size: 11.5, weight: .semibold, design: .rounded))
             .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.48))
         let headline = isOverview
-            ? Text("\(Text(headlineValue)) \(todayCostText)")
+            ? Text("\(Text(headlineValue)) \(headlineCostText)")
             : Text(headlineValue)
 
         return layout {
@@ -340,8 +343,8 @@ struct ProviderDetailCard: View {
                 .monospacedDigit()
                 .lineLimit(isOverview ? 1 : nil)
                 .minimumScaleFactor(isOverview ? 0.75 : 1)
-                .contentTransition(.numericText(value: Double(usage.todayRequests?.requests ?? usage.today?.tokens ?? 0)))
-                .help(isOverview ? partialCostHelp(usage.today) : "")
+                .contentTransition(.numericText(value: Double(usage.todayRequests?.requests ?? headlineUsage?.tokens ?? 0)))
+                .help(isOverview ? partialCostHelp(headlineUsage) : "")
 
             Text(isOverview ? overviewCaption : headlineCaption)
                 .help(partialCostHelp(isOverview ? usage.last30Days : usage.today))
@@ -390,31 +393,39 @@ struct ProviderDetailCard: View {
             case .maintenance: copy.text("计划维护：", "Scheduled maintenance:")
             default: ""
             }
-            HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(prefix).fixedSize()
+            let row = HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text(prefix).fixedSize().contentTransition(.opacity)
                 Text(title)
+                    .contentTransition(.opacity)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .help(title)
                 if status.severity != .maintenance {
-                    Button { NSWorkspace.shared.open(status.pageURL) } label: {
-                        Text("›")
-                            .frame(width: 18, height: 18)
-                            .background(color.opacity(isStatusLinkHovering ? 0.12 : 0),
-                                        in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                    }
-                    .buttonStyle(ServiceIncidentLinkStyle())
-                    .fixedSize()
-                    .pointerStyle(.link)
-                    .help(copy.text("打开状态页", "Open status page"))
-                    .accessibilityLabel(copy.text("打开状态页", "Open status page"))
-                    .onHover { isStatusLinkHovering = $0 }
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isStatusLinkHovering)
+                    Text("›").frame(width: 18, height: 18)
                 }
             }
             .font(.system(size: 10.5, weight: .medium))
             .foregroundStyle(color)
+            if status.severity == .maintenance {
+                row.help(title)
+            } else {
+                Button { NSWorkspace.shared.open(status.pageURL) } label: {
+                    row
+                        .contentShape(Rectangle())
+                        .background {
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(color.opacity(isStatusLinkHovering || preview?.statusHover == true ? 0.12 : 0))
+                                .padding(.horizontal, -4)
+                                .padding(.vertical, -2)
+                        }
+                }
+                .buttonStyle(ServiceIncidentLinkStyle())
+                .pointerStyle(.link)
+                .help(title + " · " + copy.text("点按打开状态页", "Click to open status page"))
+                .accessibilityLabel(prefix + title + "，" + copy.text("打开状态页", "Open status page"))
+                .onHover { isStatusLinkHovering = $0 }
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isStatusLinkHovering)
+            }
         }
     }
 
@@ -627,6 +638,7 @@ struct ProviderDetailPreviewState {
     var selectedDay: Date? = nil
     var quotaSegment: Int? = nil
     var modelIndex: Int? = nil
+    var statusHover = false
 }
 
 extension EnvironmentValues {
@@ -638,11 +650,27 @@ private struct ModelUsageBreakdownView: View {
     let title: String
     var previewHoveredIndex: Int? = nil
     @State private var hoveredIndex: Int?
+    @State private var colorOrder: [String]
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.appLanguage) private var language
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.providerDetailPreview) private var preview
+
+    init(models: [ModelTokenUsage], title: String, colorOrder: [String], previewHoveredIndex: Int? = nil) {
+        self.models = models
+        self.title = title
+        self.previewHoveredIndex = previewHoveredIndex
+        // 配色只按首次出现顺序分配，日期和排行变化不重新分配。
+        _colorOrder = State(initialValue: colorOrder)
+    }
 
     private var activeIndex: Int? { hoveredIndex ?? previewHoveredIndex }
+    private var dataAnimation: Animation? { reduceMotion ? nil : .easeInOut(duration: 0.18) }
+
+    private func color(for model: String) -> Color {
+        let colors: [Color] = [.blue, .purple, .cyan, .pink, .indigo, .gray]
+        return colors[(colorOrder.firstIndex(of: model) ?? colorOrder.count) % colors.count]
+    }
     private var hoverAnimation: Animation? {
         reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.75)
     }
@@ -650,35 +678,51 @@ private struct ModelUsageBreakdownView: View {
     var body: some View {
         let rows = ModelUsageBreakdown.displayRows(models)
         let total = models.reduce(Int64.zero) { $0 + $1.tokens }
-        let colors: [Color] = [.blue, .purple, .cyan, .pink, .indigo, .gray]
+        let byModel = Dictionary(uniqueKeysWithValues: rows.map { ($0.model, $0) })
+        let barModels = colorOrder + rows.map(\.model).filter { !colorOrder.contains($0) }
+        let visibleModels = barModels.filter { (byModel[$0]?.tokens ?? 0) > 0 }
+        let activeModel = activeIndex.flatMap { rows.indices.contains($0) ? rows[$0].model : nil }
         VStack(alignment: .leading, spacing: 7) {
             Text(title)
                 .font(.system(size: 11.5, weight: .semibold))
+                .contentTransition(.opacity)
             GeometryReader { proxy in
                 HStack(spacing: 0) {
-                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                        RoundedRectangle(cornerRadius: 1, style: .continuous)
-                            .fill(colors[index % colors.count])
-                            .frame(width: proxy.size.width * ModelUsageBreakdown.fraction(row, totalTokens: total), height: 6)
-                            .scaleEffect(x: 1, y: activeIndex == index && !reduceMotion ? 1.5 : 1)
-                            .opacity(activeIndex == nil || activeIndex == index ? 1 : 0.45)
+                    ForEach(barModels, id: \.self) { model in
+                        let fraction = byModel[model].map { ModelUsageBreakdown.fraction($0, totalTokens: total) } ?? 0
+                        let height: CGFloat = activeModel == model && !reduceMotion ? 9 : 6
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: visibleModels.first == model ? height / 2 : 0,
+                            bottomLeadingRadius: visibleModels.first == model ? height / 2 : 0,
+                            bottomTrailingRadius: visibleModels.last == model ? height / 2 : 0,
+                            topTrailingRadius: visibleModels.last == model ? height / 2 : 0,
+                            style: .continuous
+                        )
+                        .fill(color(for: model))
+                        .frame(width: proxy.size.width * fraction, height: height)
+                        .opacity(activeModel == nil || activeModel == model ? 1 : 0.45)
                     }
                 }
+                .frame(height: 6)
                 .contentShape(Rectangle())
+                .background { if preview == nil { PointingHandCursorRegion() } }
                 .onContinuousHover { phase in
                     switch phase {
                     case let .active(location):
                         var edge: CGFloat = 0
-                        hoveredIndex = rows.indices.first { index in
-                            edge += proxy.size.width * ModelUsageBreakdown.fraction(rows[index], totalTokens: total)
+                        let model = barModels.first { model in
+                            edge += proxy.size.width * (byModel[model].map { ModelUsageBreakdown.fraction($0, totalTokens: total) } ?? 0)
                             return location.x < edge
                         }
+                        hoveredIndex = rows.firstIndex { $0.model == model }
                     case .ended: hoveredIndex = nil
                     }
                 }
                 .overlay(alignment: .topLeading) {
                     if let index = activeIndex, rows.indices.contains(index) {
-                        let preceding = rows.prefix(index).reduce(0.0) { $0 + ModelUsageBreakdown.fraction($1, totalTokens: total) }
+                        let preceding = barModels.prefix { $0 != rows[index].model }.reduce(0.0) {
+                            $0 + (byModel[$1].map { ModelUsageBreakdown.fraction($0, totalTokens: total) } ?? 0)
+                        }
                         let center = proxy.size.width * (preceding + ModelUsageBreakdown.fraction(rows[index], totalTokens: total) / 2)
                         Text(modelName(rows[index].model))
                             .lineLimit(1)
@@ -705,18 +749,21 @@ private struct ModelUsageBreakdownView: View {
             .zIndex(1)
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                 HStack(spacing: 4) {
-                    Circle().fill(colors[index % colors.count]).frame(width: 5, height: 5)
+                    Circle().fill(color(for: row.model)).frame(width: 5, height: 5)
                     Text(modelName(row.model))
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .help(fullModelUsageName(row.model == ModelUsageBreakdown.unknownModel ? "" : row.model, language: language))
                     Text(formatDetailTokensInMillions(row.tokens))
+                        .contentTransition(.numericText(value: Double(row.tokens)))
                         .frame(width: 50, alignment: .trailing)
                     Text(row.valueUSD != nil || row.partialValueUSD != nil ? costText(row.usage) : "—")
+                        .contentTransition(.numericText(value: row.valueUSD ?? row.partialValueUSD ?? 0))
                         .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
                         .frame(width: 60, alignment: .trailing)
                     Text(ModelUsageBreakdown.fraction(row, totalTokens: total).formatted(.percent.precision(.fractionLength(0...1))))
+                        .contentTransition(.numericText(value: ModelUsageBreakdown.fraction(row, totalTokens: total)))
                         .frame(width: 36, alignment: .trailing)
                 }
                 .font(.system(size: 10.5))
@@ -725,9 +772,15 @@ private struct ModelUsageBreakdownView: View {
                 .opacity(activeIndex == nil || activeIndex == index ? 1 : 0.45)
                 .animation(hoverAnimation, value: activeIndex)
                 .accessibilityElement(children: .combine)
+                .transition(.modifier(active: ModelRowTransition(collapsed: true), identity: ModelRowTransition(collapsed: false)))
             }
         }
-        .onChange(of: models) { _, _ in hoveredIndex = nil }
+        .animation(dataAnimation, value: models)
+        .animation(dataAnimation, value: title)
+        .onChange(of: models) { _, _ in
+            hoveredIndex = nil
+            for row in rows where !colorOrder.contains(row.model) { colorOrder.append(row.model) }
+        }
     }
 
     private func modelName(_ model: String) -> String {
@@ -738,6 +791,17 @@ private struct ModelUsageBreakdownView: View {
         if let value = usage.valueUSD { return "≈ " + compactDollarValue(value) }
         if let value = usage.partialValueUSD { return "≥ " + compactDollarValue(value) }
         return "$—"
+    }
+}
+
+private struct ModelRowTransition: ViewModifier {
+    let collapsed: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(collapsed ? 0 : 1)
+            .frame(height: collapsed ? 0 : nil)
+            .clipped()
     }
 }
 
@@ -1058,6 +1122,7 @@ private struct UsageWindowRow: View {
     var usageUpdatedAt: Date? = nil
     var refreshInterval: () -> TimeInterval = { 300 }
     var previewHoveredSegment: Int? = nil
+    @Environment(\.providerDetailPreview) private var preview
     @State private var hoveredSegment: Int?
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.appLanguage) private var language
@@ -1114,6 +1179,7 @@ private struct UsageWindowRow: View {
                     }
                 }
                 .contentShape(Rectangle())
+                .background { if preview == nil { PointingHandCursorRegion() } }
                 .onContinuousHover { phase in
                     switch phase {
                     case let .active(location):
