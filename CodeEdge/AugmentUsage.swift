@@ -142,7 +142,7 @@ nonisolated enum AugmentUsageFetcher {
             email: nil,
             organization: nil,
             plan: monthlyMaximum.map {
-                AppLocalization.text("\(compact($0)) 积分/月", "\(compact($0)) credits/month")
+                AppLocalization.text("\(compact($0)) Credits/月", "\(compact($0)) credits/month")
             }
         )
     }

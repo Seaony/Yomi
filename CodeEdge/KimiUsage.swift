@@ -540,7 +540,7 @@ nonisolated enum KimiUsageFetcher {
             }
             return UsageDetail(
                 id: "kimi-gift-\(index)",
-                label: cleaned(balance.displayName) ?? AppLocalization.text("赠送额度", "Bonus credits"),
+                label: cleaned(balance.displayName) ?? AppLocalization.text("赠送 Credits", "Bonus credits"),
                 value: value
             )
         }

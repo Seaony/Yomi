@@ -274,7 +274,7 @@ struct CodexUsageTests {
         #expect(usage.windows.map(\.label) == ["Weekly"])
         #expect(usage.windows.map(\.usedFraction) == [0.38])
         #expect(usage.windows.count == 1)
-        #expect(usage.balance == AppLocalization.text("42.50 积分", "42.50 credits"))
+        #expect(usage.balance == AppLocalization.text("42.50 Credits", "42.50 credits"))
         #expect(usage.plan == "Pro 20x")
         #expect(usage.updatedAt == Self.now)
     }

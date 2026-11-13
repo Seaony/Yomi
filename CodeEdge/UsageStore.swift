@@ -599,25 +599,31 @@ final class UsageStore: ObservableObject {
 
     nonisolated static func overviewTodayByModel(usages: [ProviderUsage]) -> [ModelTokenUsage] {
         let rows = usages.flatMap { usage -> [ModelTokenUsage] in
-            if let models = usage.todayByModel, !models.isEmpty { return models }
             guard let today = usage.today
                 ?? usage.todayRequests.map({ DailyTokenUsage(tokens: 0, valueUSD: $0.valueUSD) }) else {
-                return []
+                return usage.todayByModel ?? []
             }
-            return [ModelTokenUsage(
-                model: ModelUsageBreakdown.unknownModel,
-                inputTokens: today.tokens,
-                cacheReadTokens: 0,
-                cacheWriteTokens: 0,
-                outputTokens: 0,
-                inputIncludesCache: false,
-                valueUSD: today.valueUSD,
-                partialValueUSD: today.partialValueUSD
-            )]
+            return modelsOrUnknown(usage.todayByModel, usage: today)
         }
         return ModelUsageBreakdown.merged(rows).filter {
             $0.tokens > 0 || ($0.valueUSD ?? $0.partialValueUSD ?? 0) != 0
         }
+    }
+
+    private nonisolated static func modelsOrUnknown(
+        _ models: [ModelTokenUsage]?, usage: DailyTokenUsage
+    ) -> [ModelTokenUsage] {
+        if let models, !models.isEmpty { return models }
+        return [ModelTokenUsage(
+            model: ModelUsageBreakdown.unknownModel,
+            inputTokens: usage.tokens,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            outputTokens: 0,
+            inputIncludesCache: false,
+            valueUSD: usage.valueUSD,
+            partialValueUSD: usage.partialValueUSD
+        )]
     }
 
     private nonisolated static func combinedUsage(_ usages: [DailyTokenUsage]) -> DailyTokenUsage? {
@@ -652,28 +658,32 @@ final class UsageStore: ObservableObject {
         guard let start = calendar.date(byAdding: .day, value: -29, to: todayStart) else {
             return []
         }
-        var valuesByDay: [Date: [ProviderID: [DailyTokenUsage]]] = [:]
+        var valuesByDay: [Date: [ProviderID: [DailyTokenUsagePoint]]] = [:]
         for usage in usages {
             for point in usage.last30DaysDaily {
                 let day = calendar.startOfDay(for: point.date)
                 guard day >= start, day <= todayStart else { continue }
-                valuesByDay[day, default: [:]][usage.id, default: []].append(point.usage)
+                valuesByDay[day, default: [:]][usage.id, default: []].append(point)
             }
             let current = usageForCurrentDay(usage, now: now)
             if let today = current.today
                 ?? current.todayRequests.map({ DailyTokenUsage(tokens: 0, valueUSD: $0.valueUSD) }) {
-                valuesByDay[todayStart, default: [:]][usage.id] = [today]
+                valuesByDay[todayStart, default: [:]][usage.id] = [
+                    DailyTokenUsagePoint(date: todayStart, usage: today, models: current.todayByModel)
+                ]
             }
         }
         guard !valuesByDay.isEmpty else { return [] }
+        let todayModels = overviewTodayByModel(usages: usages.map { usageForCurrentDay($0, now: now) })
         return (0..<30).compactMap { offset in
             guard let date = calendar.date(byAdding: .day, value: offset, to: start) else {
                 return nil
             }
-            let providerBreakdown = (valuesByDay[date] ?? [:]).compactMap {
+            let pointsByProvider = valuesByDay[date] ?? [:]
+            let providerBreakdown = pointsByProvider.compactMap {
                 providerID,
-                usages -> ProviderTokenUsageBreakdown? in
-                combinedUsage(usages).map {
+                points -> ProviderTokenUsageBreakdown? in
+                combinedUsage(points.map(\.usage)).map {
                     ProviderTokenUsageBreakdown(providerID: providerID, usage: $0)
                 }
             }.sorted { lhs, rhs in
@@ -682,11 +692,19 @@ final class UsageStore: ObservableObject {
                 }
                 return lhs.providerID.rawValue < rhs.providerID.rawValue
             }
+            let points = pointsByProvider.values.flatMap { $0 }
+            let hasModelDetails = points.contains { $0.models?.isEmpty == false }
+            // 有些来源只有总量；与已知模型一起显示时保留为未知模型，不能少算这部分。
+            let dailyModels = hasModelDetails ? ModelUsageBreakdown.merged(points.flatMap {
+                modelsOrUnknown($0.models, usage: $0.usage)
+            }).filter { $0.tokens > 0 || ($0.valueUSD ?? $0.partialValueUSD ?? 0) != 0 } : nil
+            let models = date == todayStart ? (todayModels.isEmpty ? nil : todayModels) : dailyModels
             return DailyTokenUsagePoint(
                 date: date,
                 usage: combinedUsage(providerBreakdown.map(\.usage))
                     ?? DailyTokenUsage(tokens: 0, valueUSD: 0),
-                providerBreakdown: providerBreakdown
+                providerBreakdown: providerBreakdown,
+                models: models
             )
         }
     }

@@ -28,7 +28,13 @@ enum OpenCodeGoLocalUsageReader {
         enriched.last30Days = tokenUsage(last30Days)
         enriched.last30DaysDaily = Dictionary(grouping: last30Days) { calendar.startOfDay(for: $0.date) }
             .compactMap { date, rows in
-                tokenUsage(rows).map { DailyTokenUsagePoint(date: date, usage: $0) }
+                tokenUsage(rows).map {
+                    DailyTokenUsagePoint(
+                        date: date, usage: $0,
+                        models: rows.allSatisfy { $0.modelUsage != nil }
+                            ? ModelUsageBreakdown.merged(rows.compactMap(\.modelUsage)) : nil
+                    )
+                }
             }
             .sorted { $0.date < $1.date }
         enriched.todayDate = now

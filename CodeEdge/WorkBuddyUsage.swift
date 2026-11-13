@@ -139,23 +139,23 @@ nonisolated enum WorkBuddyUsageFetcher {
         if total > 0 {
             windows = [UsageWindow(
                 id: "workbuddy-credits",
-                label: AppLocalization.text("积分", "Credits"),
+                label: "Credits",
                 usedFraction: min(1, max(0, (total - remaining) / total)),
                 resetsAt: nil,
                 detail: AppLocalization.text(
-                    "剩余 \(format(remaining)) / \(format(total)) 积分",
+                    "剩余 \(format(remaining)) / \(format(total)) Credits",
                     "\(format(remaining)) / \(format(total)) credits left"
                 )
             )]
         } else {
             details = [
-                UsageDetail(id: "workbuddy-left", label: AppLocalization.text("剩余积分", "Credits left"), value: format(remaining)),
-                UsageDetail(id: "workbuddy-total", label: AppLocalization.text("积分总额", "Total credits"), value: format(total)),
+                UsageDetail(id: "workbuddy-left", label: AppLocalization.text("剩余 Credits", "Credits left"), value: format(remaining)),
+                UsageDetail(id: "workbuddy-total", label: AppLocalization.text("Credits 总额", "Total credits"), value: format(total)),
             ]
         }
         if frozen > 0 {
             details.append(UsageDetail(
-                id: "workbuddy-reserved", label: AppLocalization.text("冻结积分", "Reserved credits"), value: format(frozen)
+                id: "workbuddy-reserved", label: AppLocalization.text("冻结 Credits", "Reserved credits"), value: format(frozen)
             ))
         }
         // CreditGroups 按来源拆分同一份额度；奖励部分可选，格式不对时跳过，不影响总余额。
@@ -173,11 +173,11 @@ nonisolated enum WorkBuddyUsageFetcher {
         if rewardTotal > 0 {
             additional.append(UsageWindow(
                 id: rewardsWindowID,
-                label: AppLocalization.text("奖励积分", "Rewards"),
+                label: AppLocalization.text("奖励 Credits", "Rewards"),
                 usedFraction: min(1, max(0, (rewardTotal - rewardRemaining) / rewardTotal)),
                 resetsAt: nil,
                 detail: AppLocalization.text(
-                    "剩余 \(format(rewardRemaining)) / \(format(rewardTotal)) 积分",
+                    "剩余 \(format(rewardRemaining)) / \(format(rewardTotal)) Credits",
                     "\(format(rewardRemaining)) / \(format(rewardTotal)) credits left"
                 )
             ))

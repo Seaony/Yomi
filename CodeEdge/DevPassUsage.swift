@@ -112,7 +112,7 @@ nonisolated enum DevPassUsageFetcher {
             if limit > 0 {
                 windows.append(UsageWindow(
                     id: "devpass-cycle",
-                    label: AppLocalization.text("套餐额度", "Plan credits"),
+                    label: AppLocalization.text("套餐 Credits", "Plan credits"),
                     usedFraction: min(1, used / limit),
                     resetsAt: nil,
                     detail: "\(usd(used)) / \(usd(limit))"

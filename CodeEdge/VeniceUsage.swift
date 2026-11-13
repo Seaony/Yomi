@@ -34,9 +34,9 @@ nonisolated enum VeniceUsageError: LocalizedError, Equatable {
                 "The Venice session is invalid or expired. Keep a signed-in venice.ai tab active and retry; Clerk sessions last about 60 seconds. Manual mode needs a fresh Cookie header."
             )
         case .anonymousSession:
-            AppLocalization.text("Venice 浏览器会话未登录，没有订阅积分", "The Venice browser session is anonymous and has no subscription credits.")
+            AppLocalization.text("Venice 浏览器会话未登录，没有订阅 Credits", "The Venice browser session is anonymous and has no subscription credits.")
         case .missingQuota:
-            AppLocalization.text("Venice 浏览器会话未返回订阅积分", "The Venice browser session did not include subscription credits.")
+            AppLocalization.text("Venice 浏览器会话未返回订阅 Credits", "The Venice browser session did not include subscription credits.")
         }
     }
 }
@@ -258,15 +258,15 @@ nonisolated enum VeniceUsageFetcher {
         }
         var details: [UsageDetail] = []
         if let available = webNumber(usage["availableCredits"]) ?? webNumber(claims["bundledCredits"]) {
-            details.append(UsageDetail(id: "venice-subscription-credits", label: AppLocalization.text("可用订阅积分", "Subscription credits available"), value: formatCredits(available)))
+            details.append(UsageDetail(id: "venice-subscription-credits", label: AppLocalization.text("可用订阅 Credits", "Subscription credits available"), value: formatCredits(available)))
         }
         if let total = webNumber(claims["veniceCredits"]) {
-            details.append(UsageDetail(id: "venice-total-credits", label: AppLocalization.text("可用总积分", "Total credits available"), value: formatCredits(total)))
+            details.append(UsageDetail(id: "venice-total-credits", label: AppLocalization.text("可用总 Credits", "Total credits available"), value: formatCredits(total)))
         }
         details.append(UsageDetail(id: "venice-cycle-spending", label: AppLocalization.text("本周期已用", "Used this cycle"), value: formatCredits(spent)))
-        details.append(UsageDetail(id: "venice-monthly-refill", label: AppLocalization.text("每月补充积分", "Monthly refill"), value: formatCredits(refill)))
+        details.append(UsageDetail(id: "venice-monthly-refill", label: AppLocalization.text("每月补充 Credits", "Monthly refill"), value: formatCredits(refill)))
         if let cap = webNumber(usage["tierCap"]) {
-            details.append(UsageDetail(id: "venice-bank-cap", label: AppLocalization.text("积分累计上限", "Bank cap"), value: formatCredits(cap)))
+            details.append(UsageDetail(id: "venice-bank-cap", label: AppLocalization.text("Credits 累计上限", "Bank cap"), value: formatCredits(cap)))
         }
         if let milliseconds = webNumber(usage["nextRefillAt"]),
            (1_000_000_000...4_000_000_000).contains(milliseconds / 1_000) {

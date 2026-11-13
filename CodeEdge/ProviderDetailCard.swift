@@ -76,6 +76,8 @@ struct ProviderDetailCard: View {
     @State private var isRefreshHovering = false
     @State private var isBillHovering = false
     @State private var isStatusLinkHovering = false
+    @State private var selectedDay: Date?
+    @Environment(\.providerDetailPreview) private var preview
 
     private var copy: AppCopy { AppCopy(language: language) }
     private var isOverview: Bool { descriptor.id == ProviderCatalog.overview.id }
@@ -116,6 +118,8 @@ struct ProviderDetailCard: View {
         guard let balance = usage.balance else { return nil }
         guard descriptor.id.rawValue == "codex" else { return balance }
         let raw = balance.replacingOccurrences(of: " credits", with: "")
+            .replacingOccurrences(of: " Credits", with: "")
+            // 旧缓存可能还带旧单位，读出来仍只显示数值。
             .replacingOccurrences(of: " 积分", with: "")
         guard let value = Double(raw), value.isFinite else { return balance }
         return value.formatted(.number.locale(Locale(identifier: "en_US")).precision(.fractionLength(0...2)))
@@ -229,7 +233,8 @@ struct ProviderDetailCard: View {
                 if !isOverview, !displayedWindows.isEmpty {
                     VStack(spacing: 11) {
                         ForEach(displayedWindows) { window in
-                            UsageWindowRow(window: window, tint: tint, usageUpdatedAt: usage.updatedAt, refreshInterval: refreshInterval)
+                            UsageWindowRow(window: window, tint: tint, usageUpdatedAt: usage.updatedAt,
+                                           refreshInterval: refreshInterval, previewHoveredSegment: preview?.quotaSegment)
                                 .transition(sectionTransition)
                         }
                     }
@@ -243,6 +248,10 @@ struct ProviderDetailCard: View {
             .foregroundStyle(AppTheme.primaryText(for: colorScheme))
             .animation(detailAnimation, value: descriptor.id)
             .animation(detailAnimation, value: usage)
+            .onChange(of: descriptor.id) { _, _ in selectedDay = nil }
+            .onChange(of: usage.last30DaysDaily.map(\.id)) { _, ids in
+                if let selectedDay, !ids.contains(selectedDay) { self.selectedDay = nil }
+            }
         }
     }
 
@@ -251,8 +260,23 @@ struct ProviderDetailCard: View {
         if isOverview {
             overviewChart
                 .transition(sectionTransition)
-            if let models = usage.todayByModel, !models.isEmpty {
-                modelBreakdown(models)
+            if usage.todayByModel?.isEmpty == false || usage.last30DaysDaily.contains(where: { $0.usage.tokens > 0 }) {
+                Group {
+                    if let models = selectedPoint?.models ?? (selectedPoint == nil ? usage.todayByModel : nil), !models.isEmpty {
+                        modelBreakdown(models)
+                    } else {
+                        VStack(alignment: .leading, spacing: 7) {
+                            Text(modelBreakdownTitle).font(.system(size: 11.5, weight: .semibold))
+                            Text(copy.text("这天没有按模型的明细", "No per-model data for this day"))
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
+                        }
+                    }
+                }
+                .id(selectedPoint?.date)
+                .frame(height: modelBreakdownHeight, alignment: .topLeading)
+                .animation(detailAnimation, value: selectedPoint?.date)
+                .transition(.opacity)
             }
         } else {
             if let models = usage.todayByModel, !models.isEmpty {
@@ -269,50 +293,27 @@ struct ProviderDetailCard: View {
         }
     }
 
-    private func modelBreakdown(_ models: [ModelTokenUsage]) -> some View {
-        let rows = ModelUsageBreakdown.displayRows(models)
-        let total = models.reduce(Int64.zero) { $0 + $1.tokens }
-        let colors: [Color] = [.blue, .purple, .cyan, .pink, .indigo, .gray]
-        return VStack(alignment: .leading, spacing: 7) {
-            Text(copy.text("今日模型用量", "Today's model usage"))
-                .font(.system(size: 11.5, weight: .semibold))
-            GeometryReader { proxy in
-                HStack(spacing: 0) {
-                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                        Rectangle()
-                            .fill(colors[index % colors.count])
-                            .frame(width: proxy.size.width * ModelUsageBreakdown.fraction(row, totalTokens: total))
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 3))
-            }
-            .frame(height: 6)
-            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                HStack(spacing: 4) {
-                    Circle().fill(colors[index % colors.count]).frame(width: 5, height: 5)
-                    Text(modelName(row.model))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .help(fullModelUsageName(row.model == ModelUsageBreakdown.unknownModel ? "" : row.model, language: language))
-                    Text(formatDetailTokensInMillions(row.tokens))
-                        .frame(width: 50, alignment: .trailing)
-                    Text(row.valueUSD != nil || row.partialValueUSD != nil ? costText(row.usage) : "—")
-                        .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
-                        .frame(width: 60, alignment: .trailing)
-                    Text(ModelUsageBreakdown.fraction(row, totalTokens: total).formatted(.percent.precision(.fractionLength(0...1))))
-                        .frame(width: 36, alignment: .trailing)
-                }
-                .font(.system(size: 10.5))
-                .lineLimit(1)
-                .monospacedDigit()
-                .accessibilityElement(children: .combine)
-            }
-        }
+    private var selectedPoint: DailyTokenUsagePoint? {
+        let date = preview?.selectedDay ?? selectedDay
+        return usage.last30DaysDaily.first { $0.id == date }
     }
 
-    private func modelName(_ model: String) -> String {
-        compactModelUsageName(model == ModelUsageBreakdown.unknownModel ? "" : model, language: language)
+    private var modelBreakdownHeight: CGFloat {
+        let groups = [usage.todayByModel ?? []] + usage.last30DaysDaily.compactMap(\.models)
+        let rowCount = groups.map { ModelUsageBreakdown.displayRows($0).count }.max() ?? 0
+        return 28 + CGFloat(max(1, rowCount)) * 20
+    }
+
+    private var modelBreakdownTitle: String {
+        guard isOverview, let point = selectedPoint else {
+            return copy.text("今日模型用量", "Today's model usage")
+        }
+        let date = point.date.formatted(.dateTime.month(.abbreviated).day().locale(language.locale))
+        return copy.text("\(date)模型用量", "Model usage · \(date)")
+    }
+
+    private func modelBreakdown(_ models: [ModelTokenUsage]) -> some View {
+        ModelUsageBreakdownView(models: models, title: modelBreakdownTitle, previewHoveredIndex: preview?.modelIndex)
     }
 
     private var usageHeadline: some View {
@@ -366,7 +367,11 @@ struct ProviderDetailCard: View {
                 .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.38))
                 .frame(maxWidth: .infinity, minHeight: 52, alignment: .center)
         } else {
-            DailyUsageBarChart(points: usage.last30DaysDaily, tint: tint)
+            DailyUsageBarChart(points: usage.last30DaysDaily, tint: tint, selectedDay: selectedPoint?.date) { point in
+                withAnimation(detailAnimation) {
+                    selectedDay = selectedDay == point.date || Calendar.current.isDateInToday(point.date) ? nil : point.date
+                }
+            }
         }
     }
 
@@ -394,13 +399,18 @@ struct ProviderDetailCard: View {
                     .help(title)
                 if status.severity != .maintenance {
                     Button { NSWorkspace.shared.open(status.pageURL) } label: {
-                        Text(copy.text("状态页 ›", "Status ›"))
-                            .underline(isStatusLinkHovering)
+                        Text("›")
+                            .frame(width: 18, height: 18)
+                            .background(color.opacity(isStatusLinkHovering ? 0.12 : 0),
+                                        in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                     }
                     .buttonStyle(ServiceIncidentLinkStyle())
                     .fixedSize()
                     .pointerStyle(.link)
+                    .help(copy.text("打开状态页", "Open status page"))
+                    .accessibilityLabel(copy.text("打开状态页", "Open status page"))
                     .onHover { isStatusLinkHovering = $0 }
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isStatusLinkHovering)
                 }
             }
             .font(.system(size: 10.5, weight: .medium))
@@ -613,6 +623,138 @@ struct ProviderDetailCard: View {
     }
 }
 
+struct ProviderDetailPreviewState {
+    var selectedDay: Date? = nil
+    var quotaSegment: Int? = nil
+    var modelIndex: Int? = nil
+}
+
+extension EnvironmentValues {
+    @Entry var providerDetailPreview: ProviderDetailPreviewState? = nil
+}
+
+private struct ModelUsageBreakdownView: View {
+    let models: [ModelTokenUsage]
+    let title: String
+    var previewHoveredIndex: Int? = nil
+    @State private var hoveredIndex: Int?
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.appLanguage) private var language
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var activeIndex: Int? { hoveredIndex ?? previewHoveredIndex }
+    private var hoverAnimation: Animation? {
+        reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.75)
+    }
+
+    var body: some View {
+        let rows = ModelUsageBreakdown.displayRows(models)
+        let total = models.reduce(Int64.zero) { $0 + $1.tokens }
+        let colors: [Color] = [.blue, .purple, .cyan, .pink, .indigo, .gray]
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title)
+                .font(.system(size: 11.5, weight: .semibold))
+            GeometryReader { proxy in
+                HStack(spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                        RoundedRectangle(cornerRadius: 1, style: .continuous)
+                            .fill(colors[index % colors.count])
+                            .frame(width: proxy.size.width * ModelUsageBreakdown.fraction(row, totalTokens: total), height: 6)
+                            .scaleEffect(x: 1, y: activeIndex == index && !reduceMotion ? 1.5 : 1)
+                            .opacity(activeIndex == nil || activeIndex == index ? 1 : 0.45)
+                    }
+                }
+                .contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    switch phase {
+                    case let .active(location):
+                        var edge: CGFloat = 0
+                        hoveredIndex = rows.indices.first { index in
+                            edge += proxy.size.width * ModelUsageBreakdown.fraction(rows[index], totalTokens: total)
+                            return location.x < edge
+                        }
+                    case .ended: hoveredIndex = nil
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    if let index = activeIndex, rows.indices.contains(index) {
+                        let preceding = rows.prefix(index).reduce(0.0) { $0 + ModelUsageBreakdown.fraction($1, totalTokens: total) }
+                        let center = proxy.size.width * (preceding + ModelUsageBreakdown.fraction(rows[index], totalTokens: total) / 2)
+                        Text(modelName(rows[index].model))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                            .foregroundStyle(AppTheme.primaryText(for: colorScheme))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 8)
+                            .background { UsageTooltipBackground() }
+                            .fixedSize(horizontal: false, vertical: true)
+                            .visualEffect { content, geometry in
+                                content.offset(
+                                    x: min(max(0, center - geometry.size.width / 2), max(0, proxy.size.width - geometry.size.width)),
+                                    y: -geometry.size.height - 8
+                                )
+                            }
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(hoverAnimation, value: activeIndex)
+            }
+            .frame(height: 6)
+            .zIndex(1)
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                HStack(spacing: 4) {
+                    Circle().fill(colors[index % colors.count]).frame(width: 5, height: 5)
+                    Text(modelName(row.model))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .help(fullModelUsageName(row.model == ModelUsageBreakdown.unknownModel ? "" : row.model, language: language))
+                    Text(formatDetailTokensInMillions(row.tokens))
+                        .frame(width: 50, alignment: .trailing)
+                    Text(row.valueUSD != nil || row.partialValueUSD != nil ? costText(row.usage) : "—")
+                        .foregroundStyle(AppTheme.primaryText(for: colorScheme).opacity(0.55))
+                        .frame(width: 60, alignment: .trailing)
+                    Text(ModelUsageBreakdown.fraction(row, totalTokens: total).formatted(.percent.precision(.fractionLength(0...1))))
+                        .frame(width: 36, alignment: .trailing)
+                }
+                .font(.system(size: 10.5))
+                .lineLimit(1)
+                .monospacedDigit()
+                .opacity(activeIndex == nil || activeIndex == index ? 1 : 0.45)
+                .animation(hoverAnimation, value: activeIndex)
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .onChange(of: models) { _, _ in hoveredIndex = nil }
+    }
+
+    private func modelName(_ model: String) -> String {
+        compactModelUsageName(model == ModelUsageBreakdown.unknownModel ? "" : model, language: language)
+    }
+
+    private func costText(_ usage: DailyTokenUsage) -> String {
+        if let value = usage.valueUSD { return "≈ " + compactDollarValue(value) }
+        if let value = usage.partialValueUSD { return "≥ " + compactDollarValue(value) }
+        return "$—"
+    }
+}
+
+private struct UsageTooltipBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .fill(colorScheme == .dark ? Color(red: 0.15, green: 0.15, blue: 0.17) : Color.white)
+            .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(AppTheme.primaryText(for: colorScheme).opacity(0.1), lineWidth: 0.5)
+            }
+            .shadow(color: Color.black.opacity(0.24), radius: 8, y: 3)
+    }
+}
+
 private struct ServiceIncidentLinkStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.opacity(configuration.isPressed ? 0.55 : 1)
@@ -681,10 +823,13 @@ struct ProviderDetailPanelView: View {
 private struct DailyUsageBarChart: View {
     let points: [DailyTokenUsagePoint]
     let tint: Color
+    let selectedDay: Date?
+    let select: (DailyTokenUsagePoint) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var appeared = false
     @State private var hoveredPointID: Date?
+    @Environment(\.providerDetailPreview) private var preview
 
     private let tooltipWidth: CGFloat = 176
 
@@ -701,7 +846,7 @@ private struct DailyUsageBarChart: View {
             HStack(alignment: .bottom, spacing: spacing) {
                 ForEach(Array(points.enumerated()), id: \.element.id) { index, point in
                     let fraction = Double(point.usage.tokens) / maximumTokens
-                    let isHovered = hoveredPointID == point.id
+                    let isHovered = hoveredPointID == point.id || selectedDay == point.id
                     ZStack(alignment: .bottom) {
                         Color.clear
                         RoundedRectangle(cornerRadius: 2, style: .continuous)
@@ -736,8 +881,11 @@ private struct DailyUsageBarChart: View {
                     .frame(width: barWidth, height: proxy.size.height)
                     .contentShape(Rectangle())
                     .background {
-                        PointingHandCursorRegion()
+                        if preview == nil { PointingHandCursorRegion() }
                     }
+                    .onTapGesture { if point.usage.tokens > 0 { select(point) } }
+                    .accessibilityAddTraits(point.usage.tokens > 0 ? .isButton : [])
+                    .accessibilityAction { if point.usage.tokens > 0 { select(point) } }
                     .onHover { hovering in
                         if hovering {
                             hoveredPointID = point.id
@@ -784,7 +932,8 @@ private struct DailyUsageBarChart: View {
 
     private func barOpacity(for point: DailyTokenUsagePoint, isHovered: Bool) -> Double {
         if isHovered { return 1 }
-        return Calendar.current.isDateInToday(point.date) ? 0.9 : 0.58
+        let opacity = Calendar.current.isDateInToday(point.date) ? 0.9 : 0.58
+        return selectedDay == nil ? opacity : opacity * 0.55
     }
 }
 
@@ -838,19 +987,7 @@ private struct DailyUsageTooltip: View {
         .foregroundStyle(AppTheme.primaryText(for: colorScheme))
         .padding(.horizontal, 9)
         .padding(.vertical, 8)
-        .background {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(
-                    colorScheme == .dark
-                        ? Color(red: 0.15, green: 0.15, blue: 0.17)
-                        : Color.white
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .stroke(AppTheme.primaryText(for: colorScheme).opacity(0.1), lineWidth: 0.5)
-                }
-                .shadow(color: Color.black.opacity(0.24), radius: 8, y: 3)
-        }
+        .background { UsageTooltipBackground() }
     }
 
     private func providerName(for id: ProviderID) -> String {
@@ -920,6 +1057,8 @@ private struct UsageWindowRow: View {
     let tint: Color
     var usageUpdatedAt: Date? = nil
     var refreshInterval: () -> TimeInterval = { 300 }
+    var previewHoveredSegment: Int? = nil
+    @State private var hoveredSegment: Int?
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.appLanguage) private var language
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -965,12 +1104,24 @@ private struct UsageWindowRow: View {
                 let width = max(0, (proxy.size.width - SegmentedUsageBar.spacing * Double(SegmentedUsageBar.segmentCount - 1))
                     / Double(SegmentedUsageBar.segmentCount))
                 HStack(spacing: SegmentedUsageBar.spacing) {
-                    ForEach(Array(states.enumerated()), id: \.offset) { _, state in
+                    ForEach(Array(states.enumerated()), id: \.offset) { index, state in
+                        let isHovered = (hoveredSegment ?? previewHoveredSegment) == index
                         RoundedRectangle(cornerRadius: 1.5)
-                            .fill(tint.opacity(state == .solid ? 1 : 0.12))
+                            .fill(tint.opacity(state == .solid ? 1 : (isHovered ? 0.25 : 0.12)))
+                            .brightness(isHovered && state == .solid ? 0.08 : 0)
                             .frame(width: width, height: 12)
+                            .scaleEffect(x: 1, y: isHovered && !reduceMotion ? 1.18 : 1)
                     }
                 }
+                .contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    switch phase {
+                    case let .active(location):
+                        hoveredSegment = min(states.count - 1, max(0, Int(location.x / (width + SegmentedUsageBar.spacing))))
+                    case .ended: hoveredSegment = nil
+                    }
+                }
+                .animation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.75), value: hoveredSegment)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: states)
             }
             .frame(height: 12)

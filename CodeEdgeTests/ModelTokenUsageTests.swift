@@ -187,20 +187,125 @@ struct ModelTokenUsageTests {
         let restored = try #require(await scan("codex", home: home))
         #expect(restored.todayByModel == original.todayByModel)
         #expect(restored.today == original.today)
+        #expect(restored.last30DaysDaily == original.last30DaysDaily)
         try expectTotals(restored)
+    }
+
+    @Test(arguments: ["codex", "claude"])
+    func dailyModelGroupsSeparateDaysAndMatchToday(provider: String) async throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let yesterday = try #require(Calendar.current.date(byAdding: .day, value: -1, to: now))
+        if provider == "codex" {
+            try codexSession("past", model: "gpt-6.1-sol", input: 100, cached: 20, output: 10,
+                             at: yesterday, home: home)
+            try codexSession("current-a", model: "gpt-6.1-sol", input: 50, output: 5, home: home)
+            try codexSession("current-b", model: "unpriced-model", input: 10, output: 1, home: home)
+        } else {
+            try write([
+                claudeRow("past", model: "claude-sonnet-4-5", input: 100, cached: 20, output: 10,
+                          at: yesterday),
+                claudeRow("current-a", model: "claude-sonnet-4-5", input: 50, output: 5),
+                claudeRow("current-b", model: "unpriced-model", input: 10, output: 1),
+            ], to: home.appending(path: ".claude/projects/test/usage.jsonl"))
+        }
+        let summary = try #require(await scan(provider, home: home))
+        let daily = summary.last30DaysDaily
+        #expect(daily.count == 2)
+        #expect(daily.first?.date == Calendar.current.startOfDay(for: yesterday))
+        #expect(daily.first?.models?.count == 1)
+        #expect(daily.first?.models?.map(\.tokens).reduce(0, +) == (provider == "codex" ? 110 : 130))
+        #expect(daily.last?.models == summary.todayByModel)
+        #expect(daily.last?.usage == summary.today)
+        for point in daily {
+            #expect(point.models?.map(\.tokens).reduce(0, +) == point.usage.tokens)
+        }
+    }
+
+    @Test
+    func openCodeDailyModelsKeepDatesAndDoNotInventMissingBreakdowns() throws {
+        let yesterday = try #require(Calendar.current.date(byAdding: .day, value: -1, to: now))
+        let older = try #require(Calendar.current.date(byAdding: .day, value: -2, to: now))
+        func row(_ date: Date, model: String, tokens: Int64, cost: Double) -> OpenCodeGoLocalRow {
+            OpenCodeGoLocalRow(date: date, cost: cost, requestCount: 1, tokens: tokens,
+                               modelUsage: ModelTokenUsage(
+                                   model: model, inputTokens: tokens, cacheReadTokens: 0, cacheWriteTokens: 0,
+                                   outputTokens: 0, inputIncludesCache: false, valueUSD: cost
+                               ))
+        }
+        let rows = [
+            row(yesterday, model: "glm", tokens: 100, cost: 1),
+            row(yesterday, model: "glm", tokens: 50, cost: 0.5),
+            row(now, model: "minimax", tokens: 20, cost: 0.2),
+            row(now, model: "glm", tokens: 10, cost: 0.1),
+            OpenCodeGoLocalRow(date: older, cost: 0.3, requestCount: 1, tokens: 30),
+        ]
+        let usage = OpenCodeGoLocalUsageReader.enrich(
+            ProviderUsage(id: ProviderID(rawValue: "opencodego"), state: .ready, windows: []),
+            rows: rows, now: now
+        )
+        #expect(usage.last30DaysDaily.count == 3)
+        #expect(usage.last30DaysDaily.first?.models == nil)
+        let past = try #require(usage.last30DaysDaily.dropFirst().first)
+        #expect(past.models?.map(\.model) == ["glm"])
+        #expect(past.models?.first?.tokens == 150)
+        #expect(past.models?.first?.valueUSD == 1.5)
+        #expect(usage.last30DaysDaily.last?.models == usage.todayByModel)
+        #expect(usage.last30DaysDaily.last?.usage == usage.today)
+    }
+
+    @Test
+    func overviewDailyModelsMergeProvidersWithoutLosingUnattributedUsage() throws {
+        let day = Calendar.current.startOfDay(for: now)
+        let past = try #require(Calendar.current.date(byAdding: .day, value: -2, to: day))
+        let missing = try #require(Calendar.current.date(byAdding: .day, value: -1, to: day))
+        let first = ModelTokenUsage(model: "shared", inputTokens: 100, cacheReadTokens: 20,
+                                   cacheWriteTokens: 0, outputTokens: 10, inputIncludesCache: true, valueUSD: 1)
+        let second = ModelTokenUsage(model: "shared", inputTokens: 50, cacheReadTokens: 5,
+                                    cacheWriteTokens: 0, outputTokens: 5, inputIncludesCache: false, valueUSD: 2)
+        let unattributed = DailyTokenUsage(tokens: 30, valueUSD: nil, partialValueUSD: 0.5)
+        let usages = [
+            ProviderUsage(id: ProviderID(rawValue: "codex"), state: .ready, windows: [], today: first.usage,
+                          last30DaysDaily: [.init(date: past, usage: first.usage, models: [first])],
+                          updatedAt: now, todayByModel: [first]),
+            ProviderUsage(id: ProviderID(rawValue: "claude"), state: .ready, windows: [], today: second.usage,
+                          last30DaysDaily: [.init(date: past, usage: second.usage, models: [second])],
+                          updatedAt: now, todayByModel: [second]),
+            ProviderUsage(id: ProviderID(rawValue: "other"), state: .ready, windows: [], today: unattributed,
+                          last30DaysDaily: [.init(date: past, usage: unattributed),
+                                           .init(date: missing, usage: unattributed)], updatedAt: now),
+        ]
+        let daily = UsageStore.overviewDailyUsage(usages: usages, now: now)
+        let combined = try #require(daily.first { $0.date == past })
+        let models = try #require(combined.models)
+        #expect(models.map(\.model) == ["shared", ModelUsageBreakdown.unknownModel])
+        #expect(models[0].tokens == 170)
+        #expect(models[0].inputTokens == 130)
+        #expect(models[0].cacheReadTokens == 25)
+        #expect(models[0].valueUSD == 3)
+        #expect(models[1].usage == unattributed)
+        #expect(models.map(\.tokens).reduce(0, +) == combined.usage.tokens)
+        #expect(models.compactMap { $0.valueUSD ?? $0.partialValueUSD }.reduce(0, +)
+                == combined.usage.partialValueUSD)
+        #expect(daily.first { $0.date == missing }?.models == nil)
+        #expect(daily.last?.models == UsageStore.overviewTodayByModel(usages: usages))
     }
 
     @Test
     func oldUsageCacheDecodesWithoutModelDataAndNewModelDataRoundTrips() throws {
-        let old = try JSONDecoder().decode(ProviderUsage.self, from: Data(#"{"id":"codex","state":"ready","windows":[]}"#.utf8))
+        let old = try JSONDecoder().decode(ProviderUsage.self, from: Data(#"{"id":"codex","state":"ready","windows":[],"last30DaysDaily":[{"date":0,"usage":{"tokens":42,"valueUSD":1.25}}]}"#.utf8))
         #expect(old.todayByModel == nil)
+        #expect(old.last30DaysDaily.first?.models == nil)
+        #expect(old.last30DaysDaily.first?.usage.tokens == 42)
         var updated = old
         updated.todayByModel = [ModelTokenUsage(
             model: "test", inputTokens: 10, cacheReadTokens: 5, cacheWriteTokens: 0, outputTokens: 2,
             inputIncludesCache: false, valueUSD: nil, reportedTotalTokens: 30
         )]
+        updated.last30DaysDaily[0].models = updated.todayByModel
         let restored = try JSONDecoder().decode(ProviderUsage.self, from: JSONEncoder().encode(updated))
         #expect(restored.todayByModel == updated.todayByModel)
+        #expect(restored.last30DaysDaily == updated.last30DaysDaily)
     }
 
     private func expectTotals(_ summary: LocalTokenUsageSummary) throws {
@@ -232,7 +337,7 @@ struct ModelTokenUsageTests {
 
     private func codexSession(
         _ id: String, model: String, input: Int, cached: Int = 0, output: Int,
-        priority: Bool = false, home: URL
+        priority: Bool = false, at date: Date? = nil, home: URL
     ) throws {
         try write([
             ["type": "session_meta", "payload": ["id": id]],
@@ -240,7 +345,7 @@ struct ModelTokenUsageTests {
                                                    "thread_settings": ["service_tier": priority ? "priority" : "default"]]],
             ["type": "event_msg", "payload": ["type": "task_started", "turn_id": id]],
             ["type": "turn_context", "payload": ["model": model, "turn_id": id]],
-            ["type": "event_msg", "timestamp": ISO8601DateFormatter().string(from: now),
+            ["type": "event_msg", "timestamp": ISO8601DateFormatter().string(from: date ?? now),
              "payload": ["type": "token_count", "turn_id": id,
                          "info": ["last_token_usage": ["input_tokens": input, "cached_input_tokens": cached,
                                                        "output_tokens": output]]]],
@@ -249,9 +354,9 @@ struct ModelTokenUsageTests {
 
     private func claudeRow(
         _ id: String, model: String, input: Int, cached: Int = 0, written: Int = 0, output: Int,
-        vertex: Bool = false
+        vertex: Bool = false, at date: Date? = nil
     ) -> [String: Any] {
-        ["type": "assistant", "timestamp": ISO8601DateFormatter().string(from: now),
+        ["type": "assistant", "timestamp": ISO8601DateFormatter().string(from: date ?? now),
          "metadata": ["provider": vertex ? "vertexai" : "anthropic"],
          "message": ["id": id, "model": model,
                      "usage": ["input_tokens": input, "cache_read_input_tokens": cached,

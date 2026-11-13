@@ -587,7 +587,7 @@ nonisolated enum QwenCloudUsageFetcher {
         let used = total - remaining
         var details = [
             UsageDetail(id: "qwencloud-team-remaining", label: AppLocalization.text("剩余额度", "Remaining"),
-                        value: AppLocalization.text("\(format(remaining)) 信用点", "\(format(remaining)) credits")),
+                        value: AppLocalization.text("\(format(remaining)) Credits", "\(format(remaining)) credits")),
         ]
         if let assigned = group["SubscriptionAssignedNumber"] as? NSNumber,
            let seats = group["SubscriptionTotalNumber"] as? NSNumber,
@@ -608,7 +608,7 @@ nonisolated enum QwenCloudUsageFetcher {
             id: ProviderID(rawValue: "qwencloud"), state: .ready,
             windows: [UsageWindow(id: "qwencloud-team", label: AppLocalization.text("团队", "Team"),
                                   usedFraction: used / total, resetsAt: reset,
-                                  detail: AppLocalization.text("\(format(used)) / \(format(total)) 信用点已用",
+                                  detail: AppLocalization.text("\(format(used)) / \(format(total)) Credits 已用",
                                                                "\(format(used)) / \(format(total)) credits used"))],
             plan: plan, details: details, updatedAt: now
         )
@@ -693,7 +693,7 @@ nonisolated enum QwenCloudUsageFetcher {
                 resetsAt: date(usage["per1MonthResetTime"]),
                 detail: totals?.monthly.flatMap { total in
                     total > 0 ? AppLocalization.text(
-                        "\(format(total * fraction)) / \(format(total)) 信用点已用",
+                        "\(format(total * fraction)) / \(format(total)) Credits 已用",
                         "\(format(total * fraction)) / \(format(total)) credits used"
                     ) : nil
                 }

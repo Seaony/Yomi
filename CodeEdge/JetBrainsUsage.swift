@@ -162,7 +162,7 @@ nonisolated enum JetBrainsUsageFetcher {
         let quota = snapshot.quota
         let fraction = quota.maximum > 0 ? min(1, max(0, quota.used / quota.maximum)) : 0
         let topUpBalance = quota.topUpAvailableCredits.map {
-            AppLocalization.text(String(format: "%.2f 点额度", $0), String(format: "%.2f credits", $0))
+            AppLocalization.text(String(format: "%.2f Credits", $0), String(format: "%.2f credits", $0))
         }
         let details = topUpBalance.map {
             [UsageDetail(

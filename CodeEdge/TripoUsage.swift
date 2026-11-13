@@ -79,10 +79,10 @@ nonisolated enum TripoUsageFetcher {
             id: ProviderID(rawValue: "tripo"),
             state: .ready,
             windows: [],
-            balance: AppLocalization.text("\(balanceText) 积分", "\(balanceText) credits"),
+            balance: AppLocalization.text("\(balanceText) Credits", "\(balanceText) credits"),
             details: [
-                UsageDetail(id: "tripo-balance", label: AppLocalization.text("可用积分", "Balance"), value: balanceText),
-                UsageDetail(id: "tripo-reserved", label: AppLocalization.text("冻结积分", "Reserved"), value: format(frozen)),
+                UsageDetail(id: "tripo-balance", label: AppLocalization.text("可用 Credits", "Balance"), value: balanceText),
+                UsageDetail(id: "tripo-reserved", label: AppLocalization.text("冻结 Credits", "Reserved"), value: format(frozen)),
             ],
             updatedAt: now,
             message: nil

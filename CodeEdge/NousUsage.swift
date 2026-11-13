@@ -93,7 +93,7 @@ nonisolated enum NousUsageFetcher {
         if let monthly, monthly > 0, let remaining {
             windows = [UsageWindow(
                 id: "nous-monthly-credits",
-                label: AppLocalization.text("每月额度", "Monthly credits"),
+                label: AppLocalization.text("每月 Credits", "Monthly credits"),
                 usedFraction: max(0, monthly - max(0, remaining)) / monthly,
                 resetsAt: renewal,
                 detail: AppLocalization.text(
@@ -107,7 +107,7 @@ nonisolated enum NousUsageFetcher {
             let grant = monthly.flatMap { $0 > 0 ? " / \(usd($0))" : nil } ?? ""
             details.append(UsageDetail(
                 id: "nous-subscription-credits",
-                label: AppLocalization.text("订阅剩余额度", "Subscription credits"),
+                label: AppLocalization.text("订阅剩余 Credits", "Subscription credits"),
                 value: "\(usd(max(0, remaining)))\(grant)"
             ))
         } else if let monthly {
@@ -119,7 +119,7 @@ nonisolated enum NousUsageFetcher {
         }
         if let rollover, rollover > 0 {
             details.append(UsageDetail(
-                id: "nous-rollover", label: AppLocalization.text("结转额度", "Rollover credits"), value: usd(rollover)
+                id: "nous-rollover", label: AppLocalization.text("结转 Credits", "Rollover credits"), value: usd(rollover)
             ))
         }
         if let renewal {
@@ -132,7 +132,7 @@ nonisolated enum NousUsageFetcher {
         }
         if let purchased {
             details.append(UsageDetail(
-                id: "nous-top-up", label: AppLocalization.text("充值额度", "Top-up credits"), value: usd(purchased)
+                id: "nous-top-up", label: AppLocalization.text("充值 Credits", "Top-up credits"), value: usd(purchased)
             ))
         }
         if let total {

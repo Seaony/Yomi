@@ -15,7 +15,7 @@ nonisolated enum AiAndUsageError: LocalizedError, Equatable {
         case .unauthorized:
             AppLocalization.text("ai& API Key 无效", "The ai& API key was rejected")
         case .insufficientCredits:
-            AppLocalization.text("ai& 组织额度已用尽", "The ai& organization is out of credits")
+            AppLocalization.text("ai& 组织 Credits 已用尽", "The ai& organization is out of credits")
         case .rateLimited:
             AppLocalization.text("ai& 请求过于频繁", "The ai& rate limit was exceeded")
         case let .apiError(status):

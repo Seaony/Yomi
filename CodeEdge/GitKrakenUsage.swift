@@ -56,12 +56,12 @@ nonisolated enum GitKrakenUsageFetcher {
                     ? AppLocalization.text("不限量", "Unlimited")
                     : AppLocalization.text("无额度", "No allowance")
                 return AppLocalization.text(
-                    "已用 \(GitKrakenUsageFetcher.amount(used)) 积分 · \(allowance)",
+                    "已用 \(GitKrakenUsageFetcher.amount(used)) Credits · \(allowance)",
                     "\(GitKrakenUsageFetcher.amount(used)) credits used · \(allowance)"
                 )
             }
             return AppLocalization.text(
-                "已用 \(GitKrakenUsageFetcher.amount(used)) / \(GitKrakenUsageFetcher.amount(limit)) 积分",
+                "已用 \(GitKrakenUsageFetcher.amount(used)) / \(GitKrakenUsageFetcher.amount(limit)) Credits",
                 "\(GitKrakenUsageFetcher.amount(used)) / \(GitKrakenUsageFetcher.amount(limit)) credits used"
             )
         }
@@ -151,12 +151,12 @@ nonisolated enum GitKrakenUsageFetcher {
                 details.append(UsageDetail(
                     id: "gitkraken-shared-used",
                     label: AppLocalization.text("你使用的共享额度", "Your shared usage"),
-                    value: AppLocalization.text("\(amount(shared)) 积分", "\(amount(shared)) credits")
+                    value: AppLocalization.text("\(amount(shared)) Credits", "\(amount(shared)) credits")
                 ))
                 details.append(UsageDetail(
                     id: "gitkraken-organization-rest",
                     label: AppLocalization.text("组织内其他成员", "Rest of organization"),
-                    value: AppLocalization.text("\(amount(pool.used - shared)) 积分", "\(amount(pool.used - shared)) credits")
+                    value: AppLocalization.text("\(amount(pool.used - shared)) Credits", "\(amount(pool.used - shared)) credits")
                 ))
             }
         }

@@ -72,7 +72,7 @@ nonisolated enum OpenDesignUsageFetcher {
                 id: id, label: label, usedFraction: min(1, used / limit),
                 resetsAt: (item["resetsAt"] as? String).flatMap(parseDate),
                 detail: AppLocalization.text(
-                    "\(number(used)) / \(number(limit)) 点数", "\(number(used)) / \(number(limit)) credits"
+                    "\(number(used)) / \(number(limit)) Credits", "\(number(used)) / \(number(limit)) credits"
                 )
             )
         }

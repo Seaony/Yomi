@@ -138,14 +138,14 @@ nonisolated struct AppCopy {
         "Request quota": "请求额度",
         "Claude and GPT models": "Claude 与 GPT 模型",
         "Claude and GPT-OSS models": "Claude 与 GPT-OSS 模型",
-        "Credits": "点数",
+        "Credits": "Credits",
         "Usage": "用量",
         "Standard": "标准",
         "Premium": "高级",
         "Daily": "每日",
         "Prompts": "提示词",
         "Window": "窗口",
-        "Monthly credits": "每月点数",
+        "Monthly credits": "每月 Credits",
         "Daily refresh": "每日刷新",
         "7-day usage": "7 天用量",
         "5-hour usage": "5 小时用量",
@@ -160,7 +160,7 @@ nonisolated struct AppCopy {
         "Agent usage": "Agent 用量",
         "Monthly agent allowance": "每月 Agent 额度",
         "Monthly Orb allowance": "每月 Orb 额度",
-        "Individual credits": "个人点数",
+        "Individual credits": "个人 Credits",
         "Base": "基础",
         "Overage": "超额",
         "Five-hour quota": "5 小时额度",
@@ -181,11 +181,11 @@ nonisolated struct AppCopy {
         "Rate limit": "速率限制",
         "Last 30 days": "最近 30 天",
         "Last 30 days requests": "最近 30 天请求",
-        "Add-on credits": "附加点数",
+        "Add-on credits": "附加 Credits",
         "Edit predictions": "编辑预测",
         "Billing cycle": "计费周期",
-        "Bonus credits": "赠送点数",
-        "Purchased": "已购买点数",
+        "Bonus credits": "赠送 Credits",
+        "Purchased": "已购买 Credits",
         "Budget": "预算",
         "Cost": "费用",
         "Personal budget": "个人预算",
@@ -213,10 +213,10 @@ nonisolated struct AppCopy {
         "Models": "模型",
         "Daily free tokens": "每日免费 Token",
         "Plan": "套餐",
-        "Plan credits": "套餐额度",
-        "AI credits": "AI 点数",
+        "Plan credits": "套餐 Credits",
+        "AI credits": "AI Credits",
         "Gateway requests": "Gateway 请求",
-        "Top-up credits": "加油包点数",
+        "Top-up credits": "加油包 Credits",
         "Premium weekly": "Premium 周额度",
         "Secondary budget": "次要预算",
         "API key": "API Key",
@@ -230,10 +230,10 @@ nonisolated struct AppCopy {
         "Inference": "推理",
         "Personal": "个人额度",
         "Shared pool": "共享额度",
-        "API credit": "API 额度",
-        "Purchased credit": "购买额度",
-        "Credit balance": "额度余额",
-        "Monthly credits used": "本月已用额度",
+        "API credit": "API Credits",
+        "Purchased credit": "购买 Credits",
+        "Credit balance": "Credits 余额",
+        "Monthly credits used": "本月已用 Credits",
         "Next refill": "下次补充",
     ]
 }
@@ -280,7 +280,7 @@ final class AppPreferences: ObservableObject {
         scheme == .dark ? "rail-background-color.dark" : "rail-background-color.light"
     }
 
-    private init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         appearance = AppAppearance(
             rawValue: defaults.string(forKey: appearanceKey) ?? ""
@@ -296,8 +296,9 @@ final class AppPreferences: ObservableObject {
             defaults.removeObject(forKey: Self.legacyRailBackgroundColorKey)
         }
         for scheme in [ColorScheme.light, .dark] {
-            railBackgroundColorHex[scheme] = defaults.string(forKey: Self.railBackgroundColorKey(for: scheme))
-                .flatMap(Self.normalizedHex(_:))
+            if let hex = defaults.string(forKey: Self.railBackgroundColorKey(for: scheme)) {
+                setRailBackgroundColor(hex: hex, for: scheme)
+            }
         }
     }
 
@@ -313,8 +314,12 @@ final class AppPreferences: ObservableObject {
     @discardableResult
     func setRailBackgroundColor(hex: String, for scheme: ColorScheme) -> String? {
         guard let normalized = Self.normalizedHex(hex) else { return nil }
-        railBackgroundColorHex[scheme] = normalized
-        defaults.set(normalized, forKey: Self.railBackgroundColorKey(for: scheme))
+        if normalized == AppTheme.railBackgroundHex(for: scheme) {
+            setRailBackgroundColor(nil, for: scheme)
+        } else {
+            railBackgroundColorHex[scheme] = normalized
+            defaults.set(normalized, forKey: Self.railBackgroundColorKey(for: scheme))
+        }
         return normalized
     }
 

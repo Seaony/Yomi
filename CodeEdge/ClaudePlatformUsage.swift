@@ -129,8 +129,8 @@ nonisolated enum ClaudePlatformUsageFetcher {
                 grants.append(Grant(
                     id: grants.count,
                     label: text(tranche["name"]) ?? (purchased
-                        ? AppLocalization.text("购买额度", "Purchased credit")
-                        : AppLocalization.text("API 额度", "API credit")),
+                        ? AppLocalization.text("购买 Credits", "Purchased credit")
+                        : AppLocalization.text("API Credits", "API credit")),
                     program: text(tranche["program_id"]), purchased: purchased,
                     remaining: max(0, remaining), granted: granted, expiresAt: expiresAt
                 ))
@@ -143,7 +143,7 @@ nonisolated enum ClaudePlatformUsageFetcher {
             guard let grant else { return nil }
             return UsageWindow(
                 id: grant.purchased ? "claudeplatform-purchased" : "claudeplatform-api-credit",
-                label: grant.purchased ? AppLocalization.text("购买额度", "Purchased credit") : AppLocalization.text("API 额度", "API credit"),
+                label: grant.purchased ? AppLocalization.text("购买 Credits", "Purchased credit") : AppLocalization.text("API Credits", "API credit"),
                 usedFraction: min(1, max(0, (grant.granted - grant.remaining) / grant.granted)),
                 resetsAt: nil,
                 detail: grantDescription(grant, currency: currency, now: now)
@@ -157,7 +157,7 @@ nonisolated enum ClaudePlatformUsageFetcher {
             balance: money(balance, currency: currency),
             providerCost: ProviderCostSummary(
                 used: balance, limit: 0, currencyCode: currency,
-                period: AppLocalization.text("预付余额", "Prepaid credits"), balance: balance
+                period: AppLocalization.text("预付 Credits", "Prepaid credits"), balance: balance
             ),
             details: details, updatedAt: now
         )

@@ -358,7 +358,7 @@ actor LocalDailyUsageScanner {
         var last30Days = PeriodAccumulator()
         var currentWeek = PeriodAccumulator()
         var last30DaysDaily: [Date: PeriodAccumulator] = [:]
-        var todayModels: [String: ModelTokenUsage] = [:]
+        var modelsByDay: [Date: [String: ModelTokenUsage]] = [:]
 
         mutating func add(
             timestamp: Date, tokens: Int, valueUSD: Double?,
@@ -367,16 +367,6 @@ actor LocalDailyUsageScanner {
             guard timestamp < end else { return }
             if timestamp >= todayStart {
                 today.add(tokens: tokens, valueUSD: valueUSD)
-                if tokens > 0 {
-                    var row = ModelTokenUsage(
-                        model: model ?? ModelUsageBreakdown.unknownModel,
-                        inputTokens: Int64(counts.input), cacheReadTokens: Int64(counts.cacheRead),
-                        cacheWriteTokens: Int64(counts.cacheWrite), outputTokens: Int64(counts.output),
-                        inputIncludesCache: inputIncludesCache, valueUSD: valueUSD
-                    )
-                    if row.tokens != Int64(tokens) { row.reportedTotalTokens = Int64(tokens) }
-                    ModelUsageBreakdown.add(row, to: &todayModels)
-                }
             }
             if timestamp >= last30DaysStart {
                 last30Days.add(tokens: tokens, valueUSD: valueUSD)
@@ -385,6 +375,16 @@ actor LocalDailyUsageScanner {
                     tokens: tokens,
                     valueUSD: valueUSD
                 )
+                if tokens > 0 {
+                    var row = ModelTokenUsage(
+                        model: model ?? ModelUsageBreakdown.unknownModel,
+                        inputTokens: Int64(counts.input), cacheReadTokens: Int64(counts.cacheRead),
+                        cacheWriteTokens: Int64(counts.cacheWrite), outputTokens: Int64(counts.output),
+                        inputIncludesCache: inputIncludesCache, valueUSD: valueUSD
+                    )
+                    if row.tokens != Int64(tokens) { row.reportedTotalTokens = Int64(tokens) }
+                    ModelUsageBreakdown.add(row, to: &modelsByDay[day, default: [:]])
+                }
             }
             if timestamp >= currentWeekStart {
                 currentWeek.add(tokens: tokens, valueUSD: valueUSD)
@@ -403,9 +403,14 @@ actor LocalDailyUsageScanner {
                 last30Days: last30DaysUsage,
                 currentWeek: currentWeekUsage,
                 last30DaysDaily: last30DaysDaily.compactMap { date, accumulator in
-                    accumulator.usage.map { DailyTokenUsagePoint(date: date, usage: $0) }
+                    accumulator.usage.map {
+                        DailyTokenUsagePoint(
+                            date: date, usage: $0,
+                            models: ModelUsageBreakdown.sorted(Array((modelsByDay[date] ?? [:]).values))
+                        )
+                    }
                 }.sorted { $0.date < $1.date },
-                todayByModel: ModelUsageBreakdown.sorted(Array(todayModels.values))
+                todayByModel: ModelUsageBreakdown.sorted(Array((modelsByDay[todayStart] ?? [:]).values))
             )
         }
     }

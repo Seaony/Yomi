@@ -46,7 +46,7 @@ nonisolated struct WarpUsageSnapshot: Sendable, Equatable {
         let primaryDetail = isUnlimited
             ? AppLocalization.text("无限", "Unlimited", language: language)
             : AppLocalization.text(
-                "\(requestsUsed)/\(requestLimit) 点数",
+                "\(requestsUsed)/\(requestLimit) Credits",
                 "\(requestsUsed)/\(requestLimit) credits",
                 language: language
             )
@@ -75,7 +75,7 @@ nonisolated struct WarpUsageSnapshot: Sendable, Equatable {
                     Date.FormatStyle(date: .abbreviated, time: .shortened).locale(language.locale)
                 )
                 bonusDetail = AppLocalization.text(
-                    "\(bonusNextExpirationRemaining) 点数将于 \(dateText) 到期",
+                    "\(bonusNextExpirationRemaining) Credits 将于 \(dateText) 到期",
                     "\(bonusNextExpirationRemaining) credits expire on \(dateText)",
                     language: language
                 )

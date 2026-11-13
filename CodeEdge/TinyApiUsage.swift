@@ -22,9 +22,9 @@ nonisolated enum TinyApiUsageError: LocalizedError, Equatable {
         case let .providerUnavailable(status):
             AppLocalization.text("TinyApi 服务暂时不可用（HTTP \(status)）", "TinyApi is unavailable (HTTP \(status))")
         case let .requestFailed(status):
-            AppLocalization.text("TinyApi 余额请求失败（HTTP \(status)）", "TinyApi credits request failed (HTTP \(status))")
+            AppLocalization.text("TinyApi Credits 请求失败（HTTP \(status)）", "TinyApi credits request failed (HTTP \(status))")
         case .invalidResponse:
-            AppLocalization.text("TinyApi 未返回有效的积分余额", "TinyApi did not return a valid available credit balance")
+            AppLocalization.text("TinyApi 未返回有效的 Credits 余额", "TinyApi did not return a valid available credit balance")
         }
     }
 }
@@ -81,7 +81,7 @@ nonisolated enum TinyApiUsageFetcher {
         formatter.maximumFractionDigits = 2
         let value = envelope.data.totalAvailable
         let amount = formatter.string(from: NSNumber(value: value)) ?? String(value)
-        let balance = AppLocalization.text("\(amount) 积分", "\(amount) credits")
+        let balance = AppLocalization.text("\(amount) Credits", "\(amount) credits")
         return ProviderUsage(
             id: ProviderID(rawValue: "tinyapi"),
             state: .ready,
@@ -89,7 +89,7 @@ nonisolated enum TinyApiUsageFetcher {
             balance: balance,
             details: [UsageDetail(
                 id: "tinyapi-available-credits",
-                label: AppLocalization.text("可用积分", "Available credits"),
+                label: AppLocalization.text("可用 Credits", "Available credits"),
                 value: balance
             )],
             updatedAt: now,

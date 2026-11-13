@@ -18,13 +18,13 @@ nonisolated enum RaycastUsageError: LocalizedError, Equatable {
         case .expiredSession:
             AppLocalization.text("Raycast 网站会话已过期，请重新登录并更新 Cookie。", "Raycast website session expired. Sign in again and update the Cookie header.")
         case .permissionDenied:
-            AppLocalization.text("Raycast 不允许此账号读取积分。", "Raycast denied access to credits for this account.")
+            AppLocalization.text("Raycast 不允许此账号读取 Credits。", "Raycast denied access to credits for this account.")
         case .rateLimited:
-            AppLocalization.text("Raycast 积分请求过于频繁，请稍后刷新。", "Raycast credit requests are rate limited. Refresh later.")
+            AppLocalization.text("Raycast Credits 请求过于频繁，请稍后刷新。", "Raycast credit requests are rate limited. Refresh later.")
         case let .apiError(status):
-            AppLocalization.text("Raycast 积分请求失败（HTTP \(status)）", "Raycast credits request failed (HTTP \(status))")
+            AppLocalization.text("Raycast Credits 请求失败（HTTP \(status)）", "Raycast credits request failed (HTTP \(status))")
         case let .parseFailed(field):
-            AppLocalization.text("无法解析 Raycast 积分：\(field)", "Could not parse Raycast credits: \(field)")
+            AppLocalization.text("无法解析 Raycast Credits：\(field)", "Could not parse Raycast credits: \(field)")
         }
     }
 }
@@ -103,20 +103,20 @@ nonisolated enum RaycastUsageFetcher {
         if let remaining, let total, total > 0 {
             windows.append(UsageWindow(
                 id: "raycast-credits",
-                label: AppLocalization.text("积分", "Credits"),
+                label: "Credits",
                 usedFraction: max(0, total - remaining) / total,
                 resetsAt: renewal,
                 detail: AppLocalization.text(
-                    "剩余 \(formatted(remaining)) / \(formatted(total)) 积分",
+                    "剩余 \(formatted(remaining)) / \(formatted(total)) Credits",
                     "\(formatted(remaining)) / \(formatted(total)) credits left"
                 )
             ))
         } else {
             if let remaining {
-                details.append(UsageDetail(id: "raycast-left", label: AppLocalization.text("剩余积分", "Credits left"), value: formatted(remaining)))
+                details.append(UsageDetail(id: "raycast-left", label: AppLocalization.text("剩余 Credits", "Credits left"), value: formatted(remaining)))
             }
             if let total {
-                details.append(UsageDetail(id: "raycast-total", label: AppLocalization.text("总积分", "Total credits"), value: formatted(total)))
+                details.append(UsageDetail(id: "raycast-total", label: AppLocalization.text("总 Credits", "Total credits"), value: formatted(total)))
             }
             if let renewal {
                 details.append(UsageDetail(

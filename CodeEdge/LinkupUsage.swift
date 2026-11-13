@@ -17,7 +17,7 @@ nonisolated enum LinkupUsageError: LocalizedError, Equatable {
         case .authenticationExpired:
             AppLocalization.text("Linkup API Key 无效或已过期", "The Linkup API key is invalid or expired")
         case .permissionDenied:
-            AppLocalization.text("Linkup API Key 无权读取余额", "The Linkup API key cannot read the credit balance")
+            AppLocalization.text("Linkup API Key 无权读取 Credits 余额", "The Linkup API key cannot read the credit balance")
         case .rateLimited:
             AppLocalization.text("Linkup 请求频率受限", "Linkup rate limit reached")
         case let .providerUnavailable(status):
@@ -27,7 +27,7 @@ nonisolated enum LinkupUsageError: LocalizedError, Equatable {
         case let .networkFailure(message):
             AppLocalization.text("Linkup 网络错误：\(message)", "Linkup network error: \(message)")
         case .parseFailure:
-            AppLocalization.text("Linkup 未返回有效的余额", "Linkup returned an unrecognized credit balance")
+            AppLocalization.text("Linkup 未返回有效的 Credits 余额", "Linkup returned an unrecognized credit balance")
         }
     }
 }
@@ -77,7 +77,7 @@ nonisolated enum LinkupUsageFetcher {
             balance: formatted,
             details: [UsageDetail(
                 id: "linkup-credit-balance",
-                label: AppLocalization.text("信用余额", "Credit balance"),
+                label: AppLocalization.text("Credits 余额", "Credit balance"),
                 value: formatted
             )],
             updatedAt: now

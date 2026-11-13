@@ -24,7 +24,7 @@ nonisolated enum SofyaUsageError: LocalizedError, Equatable {
         case let .apiError(status):
             AppLocalization.text("Sofya 请求失败（HTTP \(status)）", "Sofya request failed (HTTP \(status)).")
         case .invalidResponse:
-            AppLocalization.text("无法解析 Sofya 账户积分", "Could not parse Sofya account credits.")
+            AppLocalization.text("无法解析 Sofya 账户 Credits", "Could not parse Sofya account credits.")
         }
     }
 }
@@ -94,21 +94,21 @@ nonisolated enum SofyaUsageFetcher {
         if let credits = account.credits {
             details.append(UsageDetail(
                 id: "sofya-available-credits",
-                label: AppLocalization.text("可用积分", "Available credits"),
+                label: AppLocalization.text("可用 Credits", "Available credits"),
                 value: formatCredits(credits)
             ))
         }
         if let credits = account.planCredits {
             details.append(UsageDetail(
                 id: "sofya-plan-credits",
-                label: AppLocalization.text("套餐积分", "Plan credits"),
+                label: AppLocalization.text("套餐 Credits", "Plan credits"),
                 value: formatCredits(credits)
             ))
         }
         if let credits = account.purchasedCredits {
             details.append(UsageDetail(
                 id: "sofya-purchased-credits",
-                label: AppLocalization.text("购买积分", "Purchased credits"),
+                label: AppLocalization.text("购买 Credits", "Purchased credits"),
                 value: formatCredits(credits)
             ))
         }
@@ -133,7 +133,7 @@ nonisolated enum SofyaUsageFetcher {
             id: ProviderID(rawValue: "sofya"),
             state: .ready,
             windows: [],
-            balance: account.credits.map { AppLocalization.text("\(formatCredits($0)) 积分", "\(formatCredits($0)) credits") },
+            balance: account.credits.map { AppLocalization.text("\(formatCredits($0)) Credits", "\(formatCredits($0)) credits") },
             plan: plan,
             details: details,
             updatedAt: now

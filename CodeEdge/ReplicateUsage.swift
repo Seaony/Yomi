@@ -144,7 +144,7 @@ nonisolated enum ReplicateUsageFetcher {
         )]
         if let balance {
             details.append(UsageDetail(
-                id: "replicate-credit", label: AppLocalization.text("预付余额", "Credit balance"),
+                id: "replicate-credit", label: AppLocalization.text("预付 Credits 余额", "Credit balance"),
                 value: String(format: "$%.2f", balance)
             ))
         }

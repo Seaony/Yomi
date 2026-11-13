@@ -132,7 +132,7 @@ nonisolated enum LithosAIUsageFetcher {
             balance: money(balance),
             providerCost: ProviderCostSummary(
                 used: balance, limit: 0, currencyCode: "USD",
-                period: AppLocalization.text("预付余额", "Prepaid credits"), balance: balance
+                period: AppLocalization.text("预付 Credits", "Prepaid credits"), balance: balance
             ),
             details: details, updatedAt: now
         )

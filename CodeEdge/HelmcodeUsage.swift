@@ -154,7 +154,7 @@ nonisolated enum HelmcodeUsageFetcher {
             let detail = "\(name) · \(format(used)) / \(format(cap)) tokens" + (hours.map {
                 AppLocalization.text(" · \(format($0)) 小时窗口", " · \(format($0))-hour window")
             } ?? "") + (credit > 0
-                ? AppLocalization.text(" · \(format(credit)) 由余额支付", " · \(format(credit)) credit-funded") : "")
+                ? AppLocalization.text(" · \(format(credit)) 由 Credits 支付", " · \(format(credit)) credit-funded") : "")
             windows.append(UsageWindow(
                 id: "helmcode-\(name)",
                 label: name,

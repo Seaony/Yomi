@@ -624,7 +624,7 @@ nonisolated enum CodexUsageFetcher {
             return nil
         }
         guard let number = Double(raw), number.isFinite else { return nil }
-        return AppLocalization.text("\(raw) 积分", "\(raw) credits")
+        return AppLocalization.text("\(raw) Credits", "\(raw) credits")
     }
 
     private static func applyPATHeaders(_ request: inout URLRequest, token: String, userAgent: String) {

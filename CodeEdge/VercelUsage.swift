@@ -18,7 +18,7 @@ nonisolated enum VercelUsageError: LocalizedError, Equatable {
                 "Vercel Gateway request failed (HTTP \(status))"
             )
         case .invalidResponse:
-            AppLocalization.text("Vercel Gateway 返回的余额数据无效", "Vercel Gateway returned an invalid credit balance")
+            AppLocalization.text("Vercel Gateway 返回的 Credits 余额数据无效", "Vercel Gateway returned an invalid credit balance")
         }
     }
 }

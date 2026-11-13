@@ -303,7 +303,7 @@ nonisolated enum OllamaUsageFetcher {
 
     static func parseAPIBalance(_ data: Data, now: Date = Date()) throws -> ProviderUsage {
         let invalid = OllamaUsageError.parseFailed(AppLocalization.text(
-            "无法识别额度余额数据。", "Unrecognized credit balance response."
+            "无法识别 Credits 余额数据。", "Unrecognized credit balance response."
         ))
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { throw invalid }
         var details: [UsageDetail] = []

@@ -524,11 +524,11 @@ nonisolated enum KiroUsageFetcher {
         if report.hasUsageMetrics {
             windows.append(UsageWindow(
                 id: "kiro-credits",
-                label: AppLocalization.text("额度", "Credits"),
+                label: "Credits",
                 usedFraction: report.creditsPercent / 100,
                 resetsAt: report.resetsAt,
                 detail: AppLocalization.text(
-                    "剩余 \(formatCredits(remaining)) / \(formatCredits(report.creditsTotal)) 点额度",
+                    "剩余 \(formatCredits(remaining)) / \(formatCredits(report.creditsTotal)) Credits",
                     "\(formatCredits(remaining)) of \(formatCredits(report.creditsTotal)) credits left"
                 ),
                 windowMinutes: monthlyWindowMinutes(endingAt: report.resetsAt)
@@ -545,7 +545,7 @@ nonisolated enum KiroUsageFetcher {
                 usedFraction: used / total,
                 resetsAt: expiry,
                 detail: AppLocalization.text(
-                    "剩余 \(formatCredits(max(0, total - used))) / \(formatCredits(total)) 点奖励额度",
+                    "剩余 \(formatCredits(max(0, total - used))) / \(formatCredits(total)) 奖励 Credits",
                     "\(formatCredits(max(0, total - used))) of \(formatCredits(total)) bonus credits left"
                 )
             ))
@@ -559,7 +559,7 @@ nonisolated enum KiroUsageFetcher {
                 usedFraction: min(1, limits.overageUsed / cap),
                 resetsAt: limits.resetsAt,
                 detail: AppLocalization.text(
-                    "剩余 \(formatCredits(max(0, cap - limits.overageUsed))) / \(formatCredits(cap)) 点额度",
+                    "剩余 \(formatCredits(max(0, cap - limits.overageUsed))) / \(formatCredits(cap)) Credits",
                     "\(formatCredits(max(0, cap - limits.overageUsed))) of \(formatCredits(cap)) credits left"
                 )
             ))
@@ -569,7 +569,7 @@ nonisolated enum KiroUsageFetcher {
         if report.hasUsageMetrics {
             details.append(UsageDetail(
                 id: "kiro-used",
-                label: AppLocalization.text("已用额度", "Credits used"),
+                label: AppLocalization.text("已用 Credits", "Credits used"),
                 value: formatCredits(report.creditsUsed)
             ))
         }
@@ -593,7 +593,7 @@ nonisolated enum KiroUsageFetcher {
            let used = report.overageCreditsUsed {
             details.append(UsageDetail(
                 id: "kiro-overage-left",
-                label: AppLocalization.text("剩余超额额度", "Overage credits left"),
+                label: AppLocalization.text("剩余超额 Credits", "Overage credits left"),
                 value: formatCredits(max(0, cap - used))
             ))
         }
@@ -621,7 +621,7 @@ nonisolated enum KiroUsageFetcher {
             windows: windows,
             additionalWindows: additional,
             balance: report.hasUsageMetrics ? AppLocalization.text(
-                "\(formatCredits(remaining)) 点额度",
+                "\(formatCredits(remaining)) Credits",
                 "\(formatCredits(remaining)) credits"
             ) : nil,
             plan: report.displayPlanName,

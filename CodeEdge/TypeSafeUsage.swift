@@ -147,7 +147,7 @@ nonisolated enum TypeSafeUsageFetcher {
             let date = formatter.string(from: expires)
             credits.append(UsageDetail(
                 id: "typesafe-credit-\(credits.count)",
-                label: AppLocalization.text("赠送额度", "Credit"),
+                label: AppLocalization.text("赠送 Credits", "Credit"),
                 value: AppLocalization.text("剩余 \(left) / \(total)，\(date)到期", "\(left) of \(total), expires \(date)")
             ))
         }
@@ -155,7 +155,7 @@ nonisolated enum TypeSafeUsageFetcher {
         if credits.count > 24 {
             details = Array(credits.prefix(23)) + [UsageDetail(
                 id: "typesafe-additional-credits",
-                label: AppLocalization.text("其他额度", "Additional credits"),
+                label: AppLocalization.text("其他 Credits", "Additional credits"),
                 value: String(credits.count - 23)
             )]
         }

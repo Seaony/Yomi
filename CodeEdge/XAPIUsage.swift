@@ -71,8 +71,8 @@ nonisolated enum XAPIUsageFetcher {
             plan: nil,
             details: [
                 UsageDetail(id: "xapi-balance", label: AppLocalization.text("余额", "Balance"), value: currency(credits.balance)),
-                UsageDetail(id: "xapi-purchased", label: AppLocalization.text("购买额度", "Purchased credits"), value: currency(credits.purchased)),
-                UsageDetail(id: "xapi-free", label: AppLocalization.text("免费额度", "Free credits"), value: currency(credits.free)),
+                UsageDetail(id: "xapi-purchased", label: AppLocalization.text("购买 Credits", "Purchased credits"), value: currency(credits.purchased)),
+                UsageDetail(id: "xapi-free", label: AppLocalization.text("免费 Credits", "Free credits"), value: currency(credits.free)),
             ],
             updatedAt: now,
             message: nil

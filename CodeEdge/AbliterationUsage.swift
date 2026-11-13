@@ -76,8 +76,8 @@ nonisolated enum AbliterationUsageFetcher {
             balance: usd(max(0, total - used)),
             details: [
                 UsageDetail(id: "abliteration-balance", label: AppLocalization.text("余额", "Balance"), value: usd(max(0, total - used))),
-                UsageDetail(id: "abliteration-used", label: AppLocalization.text("已用额度", "Credits used"), value: usd(used)),
-                UsageDetail(id: "abliteration-total", label: AppLocalization.text("总额度", "Credits"), value: usd(total)),
+                UsageDetail(id: "abliteration-used", label: AppLocalization.text("已用 Credits", "Credits used"), value: usd(used)),
+                UsageDetail(id: "abliteration-total", label: AppLocalization.text("总 Credits", "Credits"), value: usd(total)),
             ],
             updatedAt: now,
             message: nil

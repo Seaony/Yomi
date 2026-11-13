@@ -23,11 +23,11 @@ nonisolated enum FalUsageError: LocalizedError, Equatable {
         case .rateLimited:
             AppLocalization.text("fal 请求频率受限", "fal rate limit reached")
         case .providerUnavailable:
-            AppLocalization.text("fal 服务或信用余额暂时不可用，请稍后刷新", "fal service or credit balance is temporarily unavailable. Refresh again later.")
+            AppLocalization.text("fal 服务或 Credits 余额暂时不可用，请稍后刷新", "fal service or credit balance is temporarily unavailable. Refresh again later.")
         case let .requestFailed(status):
             AppLocalization.text("fal 账单请求失败（HTTP \(status)）", "fal billing request failed (HTTP \(status))")
         case .invalidResponse:
-            AppLocalization.text("fal 返回了无法识别的信用余额", "fal returned an unrecognized credit balance")
+            AppLocalization.text("fal 返回了无法识别的 Credits 余额", "fal returned an unrecognized credit balance")
         }
     }
 }
@@ -107,7 +107,7 @@ nonisolated enum FalUsageFetcher {
         let balanceText = formatter.string(from: NSNumber(value: balance)) ?? "\(currency) \(String(format: "%.2f", balance))"
         var details = [UsageDetail(
             id: "fal-credit-balance",
-            label: AppLocalization.text("信用余额", "Credit balance"),
+            label: AppLocalization.text("Credits 余额", "Credit balance"),
             value: balanceText
         )]
         if let username = root["username"] as? String,

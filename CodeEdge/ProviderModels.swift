@@ -129,6 +129,7 @@ nonisolated struct DailyTokenUsagePoint: Codable, Hashable, Sendable, Identifiab
     var date: Date
     var usage: DailyTokenUsage
     var providerBreakdown: [ProviderTokenUsageBreakdown]? = nil
+    var models: [ModelTokenUsage]? = nil
 
     var id: Date { date }
 }

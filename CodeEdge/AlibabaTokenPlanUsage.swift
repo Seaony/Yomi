@@ -386,7 +386,7 @@ nonisolated enum AlibabaTokenPlanFetcher {
             id: "alibaba-token-plan-monthly", label: "Credits",
             usedFraction: used / total, resetsAt: resetsAt,
             detail: AppLocalization.text(
-                "已用 \(format(used)) / \(format(total)) 点数", "\(format(used)) / \(format(total)) credits used"
+                "已用 \(format(used)) / \(format(total)) Credits", "\(format(used)) / \(format(total)) credits used"
             )
         )], plan: "Token Plan", now: now)
     }
@@ -900,7 +900,7 @@ nonisolated enum AlibabaTokenPlanFetcher {
     private static func quotaDetail(fraction: Double, total: Double?) -> String? {
         guard let total, total > 0 else { return nil }
         return AppLocalization.text(
-            "已用 \(format(total * fraction)) / \(format(total)) 点数",
+            "已用 \(format(total * fraction)) / \(format(total)) Credits",
             "\(format(total * fraction)) / \(format(total)) credits used"
         )
     }

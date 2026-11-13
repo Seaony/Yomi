@@ -28,7 +28,7 @@ nonisolated enum TavilyUsageError: LocalizedError, Equatable {
         case let .apiError(status):
             AppLocalization.text("Tavily 请求失败（HTTP \(status)）", "Tavily request failed (HTTP \(status)).")
         case .parseFailed:
-            AppLocalization.text("无法识别 Tavily 返回的积分用量", "The Tavily credit usage response could not be read.")
+            AppLocalization.text("无法识别 Tavily 返回的 Credits 用量", "The Tavily credit usage response could not be read.")
         }
     }
 }
@@ -87,7 +87,7 @@ nonisolated enum TavilyUsageFetcher {
         if planLimit > 0 {
             windows.append(UsageWindow(
                 id: "tavily-plan",
-                label: AppLocalization.text("套餐积分", "Plan credits"),
+                label: AppLocalization.text("套餐 Credits", "Plan credits"),
                 usedFraction: min(1, planUsed / planLimit),
                 resetsAt: nil,
                 detail: "\(credits(planUsed)) / \(credits(planLimit))"
@@ -174,7 +174,7 @@ nonisolated enum TavilyUsageFetcher {
         formatter.numberStyle = .decimal
         formatter.maximumFractionDigits = 0
         let number = formatter.string(from: NSNumber(value: value)) ?? String(value)
-        return AppLocalization.text("\(number) 积分", "\(number) credits")
+        return AppLocalization.text("\(number) Credits", "\(number) credits")
     }
 
     private static func cleaned(_ raw: String?) -> String? {

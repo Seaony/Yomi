@@ -112,8 +112,8 @@ nonisolated enum ChatboxUsageFetcher {
         }
         add("plan", label: AppLocalization.text("套餐剩余", "Plan"), plan)
         if plan == nil { add("quota", label: AppLocalization.text("额度剩余", "Quota"), total) }
-        add("rewards", label: AppLocalization.text("奖励点数剩余", "Credits"), rewards)
-        add("top-up", label: AppLocalization.text("加油包剩余", "Top-up credits"), expansion)
+        add("rewards", label: AppLocalization.text("奖励 Credits 剩余", "Credits"), rewards)
+        add("top-up", label: AppLocalization.text("加油包 Credits 剩余", "Top-up credits"), expansion)
         add("images", label: AppLocalization.text("图片生成剩余", "Image Generation"), images)
         if details.isEmpty {
             details.append(UsageDetail(id: "chatbox-quota", label: AppLocalization.text("额度剩余", "Quota"), value: "0 / 0"))

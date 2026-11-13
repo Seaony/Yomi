@@ -41,8 +41,8 @@ struct AlibabaTokenPlanTests {
         #expect(usage.plan == "Pro")
         #expect(usage.windows.map(\.usedFraction) == [0.125, 0.4])
         #expect(usage.windows.map(\.detail) == [
-            AppLocalization.text("已用 250 / 2,000 点数", "250 / 2,000 credits used"),
-            AppLocalization.text("已用 4,000 / 10,000 点数", "4,000 / 10,000 credits used"),
+            AppLocalization.text("已用 250 / 2,000 Credits", "250 / 2,000 credits used"),
+            AppLocalization.text("已用 4,000 / 10,000 Credits", "4,000 / 10,000 credits used"),
         ])
     }
 
@@ -79,7 +79,7 @@ struct AlibabaTokenPlanTests {
         #expect(usage.windows.count == 1)
         #expect(abs(usage.windows[0].usedFraction - 1250.0 / 3000) < 0.000_001)
         #expect(usage.windows[0].resetsAt == Date(timeIntervalSince1970: Self.cycleEnd / 1000))
-        #expect(usage.windows[0].detail == AppLocalization.text("已用 1,250 / 3,000 点数", "1,250 / 3,000 credits used"))
+        #expect(usage.windows[0].detail == AppLocalization.text("已用 1,250 / 3,000 Credits", "1,250 / 3,000 credits used"))
     }
 
     @Test
@@ -122,7 +122,7 @@ struct AlibabaTokenPlanTests {
         seatObject["EquityList"] = equities
         let withResource = seatObject
         #expect(try parseSeats([withResource]).windows.first?.detail
-            == AppLocalization.text("已用 50 / 100 点数", "50 / 100 credits used"))
+            == AppLocalization.text("已用 50 / 100 Credits", "50 / 100 credits used"))
         equities.append(equities[0])
         seatObject["EquityList"] = equities
         let duplicated = seatObject

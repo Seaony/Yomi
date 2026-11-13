@@ -19,7 +19,7 @@ nonisolated enum SailResearchUsageError: LocalizedError, Equatable {
         case .unauthorized:
             AppLocalization.text("Sail Research API Key 无效或已过期", "The Sail Research API key is invalid or expired")
         case .creditsExhausted:
-            AppLocalization.text("Sail Research 余额已用完，API Key 已停用", "Sail Research disabled this API key because credits are exhausted")
+            AppLocalization.text("Sail Research Credits 已用完，API Key 已停用", "Sail Research disabled this API key because credits are exhausted")
         case .permissionDenied:
             AppLocalization.text("Sail Research API Key 无权访问组织账单", "The Sail Research API key cannot access organization billing")
         case .rateLimited:
@@ -121,7 +121,7 @@ nonisolated enum SailResearchUsageFetcher {
             details: [
                 UsageDetail(
                     id: "sailresearch-balance",
-                    label: AppLocalization.text("组织余额", "Organization credit balance"),
+                    label: AppLocalization.text("组织 Credits 余额", "Organization credit balance"),
                     value: balance ?? AppLocalization.text("暂不可用", "Unavailable")
                 ),
                 UsageDetail(id: "sailresearch-spend", label: spendLabel, value: usd(spend)),
