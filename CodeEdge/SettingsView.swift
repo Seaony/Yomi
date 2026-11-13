@@ -337,7 +337,7 @@ private struct RailColorSwatchStyle: ButtonStyle {
         } else if highlighted {
             CodeEdgeSettingsTheme.accent
         } else {
-            CodeEdgeSettingsTheme.secondaryText.opacity(0.85)
+            CodeEdgeSettingsTheme.border
         }
         let borderWidth: CGFloat = isFocused || (highlighted && configuration.isPressed) ? 2 : 1
         configuration.label
