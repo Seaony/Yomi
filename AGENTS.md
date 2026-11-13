@@ -28,7 +28,7 @@ CodeEdge 是使用 SwiftUI 与 AppKit 构建的原生 macOS 应用，用悬浮�
 - `CodeEdge/LegacyMigration.swift`：启动入口在任何偏好或单例初始化前迁移旧设置、钥匙串和 Application Support；只补新域缺失项，保留旧凭据。持久化 ID `yomi-overview` 和模型缓存键前缀 `yomi-fallback:` 沿用旧标识。
 - `CodeEdge/ProviderPreferences.swift`：Provider 启用状态与密钥的钥匙串存储。
 - `CodeEdge/UsageParser.swift`：接口返回解析与缓存恢复。
-- `scripts/`、`docs/RELEASING.md`：签名、公证版本的发布脚本与说明；发布会推送标签并创建 GitHub Release。
+- `scripts/release-config.sh`、`docs/RELEASING.md`：发版配置与说明。发版用全局技能 `mac-release` 的共用脚本，会公证、推送标签并创建 GitHub Release。
 
 ## 实现约束
 
@@ -64,4 +64,4 @@ xcodebuild \
 
 - 每次完成代码修改后，重新启动上述最新 Debug 构建供用户检查。
 - 未经用户明确允许，不使用 UI 自动化工具进行视觉验收。
-- commit、push 和发布新版本不用逐次征求用户确认：改动验证通过后直接提交并推送，值得发版时自行运行 `scripts/publish-release.sh` 发布，事后汇报。
+- commit、push 和发布新版本不用逐次征求用户确认：改动验证通过后直接提交并推送，值得发版时按全局技能 `mac-release` 运行共用发版脚本，事后汇报。

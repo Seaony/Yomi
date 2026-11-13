@@ -2,16 +2,14 @@
 
 CodeEdge 使用 Sparkle 进行应用内更新，更新文件托管在 GitHub Releases。发布版本用 Developer ID 签名并经过 Apple 公证，用户下载后可以直接打开。
 
-发布脚本会自动完成以下工作：
+发版用所有 App 共用的脚本 `~/.agents/skills/mac-release/scripts/mac-release`（全局技能 `mac-release`，用法和失败重跑说明见它的 `SKILL.md`）。CodeEdge 自己的差异写在 `scripts/release-config.sh`：用 `scripts/dmg/` 的配置打 DMG，用 `scripts/validate-release.sh` 检查产物。脚本依次：
 
-1. 检查当前是否位于 `master`，并确认工作区干净且与 `origin/master` 完全一致。
-2. 检查版本标签和 GitHub Release 是否已经存在。
-3. 根据上一个正式 Release 的 `appcast.xml` 自动递增 build number；首次发布从 `1` 开始。
-4. 构建包含 `arm64` 和 `x86_64` 的 Release 应用。
-5. 用 Developer ID 从里往外签名 Sparkle 的组件和应用，开启 Hardened Runtime 并带时间戳。
-6. 用 `dmgbuild` 打包 DMG，打开后是带背景图、大图标、拖到 Applications 的安装窗口。DMG 签名后交给 Apple 公证，只交这一次：里面的应用会一起检查。通过后把票据装订到 DMG 和应用上。
-7. 用装订好的应用打 ZIP，生成 Release Notes 和带 EdDSA 签名的 `appcast.xml`。
-8. 创建并推送版本标签，随后创建 GitHub Release 并上传全部产物。
+1. 检查分支、工作区、远端同步、GitHub 登录、签名证书、公证凭据、Sparkle 密钥和版本是否已发布。
+2. 按上一个正式 Release 的 `appcast.xml` 把 build number 加 1。
+3. 构建 `arm64` + `x86_64` 通用应用，用 Developer ID 由内到外逐个签名，开启 Hardened Runtime 并带时间戳。
+4. 用 `dmgbuild` 打 DMG 并签名，只把 DMG 交给 Apple 公证一次，通过后给 DMG 和应用装订票据。
+5. 用装订好的应用打 ZIP，生成 Release Notes 和带 EdDSA 签名的 `appcast.xml`。
+6. 推送版本标签，先建草稿 Release 上传 DMG、ZIP、`appcast.xml`，再正式发布，并核对线上更新源已指向新版本。
 
 应用固定读取以下更新源：
 
@@ -34,7 +32,7 @@ gh auth status
 gh xcodebuild ditto hdiutil xmllint lipo codesign dmgbuild xcrun spctl
 ```
 
-登录钥匙串里要有 Developer ID Application 证书。脚本默认用 `Developer ID Application: SHEN WANG (JJJKGPY7T7)`，换证书时设置 `SIGNING_IDENTITY`。确认证书在：
+登录钥匙串里要有 Developer ID Application 证书。脚本默认用 `Developer ID Application: SHEN WANG (JJJKGPY7T7)`，换证书时在 `scripts/release-config.sh` 里设置 `SIGN_IDENTITY`。确认证书在：
 
 ```bash
 security find-identity -v -p codesigning
@@ -46,7 +44,7 @@ security find-identity -v -p codesigning
 xcrun notarytool store-credentials notary --team-id JJJKGPY7T7
 ```
 
-脚本默认读取名为 `notary` 的凭据，换名字时设置 `NOTARY_PROFILE`。凭据不能用时，脚本会在开始构建前停下。
+脚本默认读取名为 `notary` 的凭据，换名字时在 `scripts/release-config.sh` 里设置 `NOTARY_PROFILE`。凭据不能用时，脚本会在开始构建前停下。
 
 `dmgbuild` 用 uv 安装：
 
@@ -87,53 +85,42 @@ Sparkle 的 EdDSA 签名是自动更新校验所必需的，和 Developer ID 签
 
 ## 发布新版本
 
-发布前先把准备发布的内容 commit 并推送到 `origin/master`，确保工作区完全干净。然后只传入三段式版本号：
+发布前先把准备发布的内容 commit 并推送到 `origin/master`，确保工作区完全干净。然后在仓库根目录后台运行，只传入三段式版本号：
 
 ```bash
-scripts/publish-release.sh 1.0.1
+~/.agents/skills/mac-release/scripts/mac-release 1.0.1
 ```
+
+加 `--dry-run` 只试跑：完整构建、公证、生成产物并验证，不打标签、不发布。
 
 某一版需要额外提醒用户时（比如换签名后第一次启动会弹钥匙串确认），用 `RELEASE_NOTE` 追加一段说明，它会出现在 GitHub Release 和 Sparkle 更新窗口里：
 
 ```bash
-RELEASE_NOTE="……" scripts/publish-release.sh 1.0.1
+RELEASE_NOTE="……" ~/.agents/skills/mac-release/scripts/mac-release 1.0.1
 ```
 
-脚本会执行外部写操作，包括：
+脚本会把 DMG 上传给 Apple 公证、推送标签 `v1.0.1`、在 `Seaony/CodeEdge` 创建 Release 并上传 ZIP、DMG 和 `appcast.xml`。它不会 commit，也不会推送 `master`。
 
-- 把 DMG 上传给 Apple 公证；
-- 创建本地标签 `v1.0.1`；
-- 将该标签推送到 `origin`；
-- 创建 `Seaony/CodeEdge` 的 GitHub Release；
-- 上传 ZIP、DMG 和 `appcast.xml`。
+中途失败（断网、公证等太久被打断）时原样重跑同一条命令：同一提交的产物会接着用，已提交的公证按 `notary-id` 接着等，不会重新上传。
 
-脚本不会自动 commit，也不会推送 `master`。如果工作区不干净、本地提交尚未推送、版本已存在或 GitHub CLI 未登录，脚本会在发布前停止。
-
-本地产物保存在：
-
-```text
-build/releases/v1.0.1/
-```
-
-其中包括：
+本地产物和日志保存在 `build/releases/v1.0.1/`：
 
 ```text
 CodeEdge-1.0.1.zip
 CodeEdge-1.0.1.dmg
 appcast.xml
+notes.md
+release.log
+stage/CodeEdge.app
 ```
 
-## 单独验证产物
-
-构建完成后可单独验证应用和 appcast：
+需要单独复查时：
 
 ```bash
 scripts/validate-release.sh \
-  build/releases/v1.0.1/CodeEdge.app \
+  build/releases/v1.0.1/stage/CodeEdge.app \
   build/releases/v1.0.1/appcast.xml
 ```
-
-发布脚本生成的目录默认不保留独立 `CodeEdge.app`，因此通常无需手动执行该命令；脚本已经在打包前自动验证构建产物，并在生成 appcast 后再次验证。
 
 ## 从未签名版本升级
 

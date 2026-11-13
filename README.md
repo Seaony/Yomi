@@ -98,7 +98,7 @@ xcodebuild -project CodeEdge.xcodeproj -scheme CodeEdge -configuration Debug \
 open DerivedData/Build/Products/Debug/CodeEdge.app
 ```
 
-To publish a release from a clean, pushed `master`, run `scripts/publish-release.sh <version>`. It builds a universal app, signs and notarises it, creates the ZIP, the DMG and the Sparkle appcast, then tags and publishes a GitHub Release. See [docs/RELEASING.md](docs/RELEASING.md) for the details.
+To publish a release from a clean, pushed `master`, run the shared release script `~/.agents/skills/mac-release/scripts/mac-release <version>` (settings in `scripts/release-config.sh`). It builds a universal app, signs and notarises it, creates the ZIP, the DMG and the Sparkle appcast, then tags and publishes a GitHub Release. See [docs/RELEASING.md](docs/RELEASING.md) for the details.
 
 ## Acknowledgements
 

@@ -98,7 +98,7 @@ xcodebuild -project CodeEdge.xcodeproj -scheme CodeEdge -configuration Debug \
 open DerivedData/Build/Products/Debug/CodeEdge.app
 ```
 
-要从干净且已推送的 `master` 发布版本，运行 `scripts/publish-release.sh <版本号>`。脚本会构建通用应用并签名、公证，生成 ZIP、DMG 和 Sparkle appcast，然后打标签并发布 GitHub Release。详细说明见 [docs/RELEASING.md](docs/RELEASING.md)。
+要从干净且已推送的 `master` 发布版本，运行共用发版脚本 `~/.agents/skills/mac-release/scripts/mac-release <版本号>`（配置在 `scripts/release-config.sh`）。脚本会构建通用应用并签名、公证，生成 ZIP、DMG 和 Sparkle appcast，然后打标签并发布 GitHub Release。详细说明见 [docs/RELEASING.md](docs/RELEASING.md)。
 
 ## 致谢
 
