@@ -308,9 +308,9 @@ private struct RailBackgroundRow: View {
                 } label: {
                     Capsule()
                         .fill(color)
-                        .overlay { Capsule().strokeBorder(CodeEdgeSettingsTheme.border) }
-                        .frame(width: 26, height: 16)
+                        .frame(width: 54, height: 28)
                 }
+                .buttonStyle(RailColorSwatchStyle())
                 .accessibilityLabel(copy.text("\(title)背景颜色", "\(title) background color"))
                 .accessibilityValue(appPreferences.railBackgroundColorHex[scheme] ?? copy.text("默认", "Default"))
                 .popover(isPresented: $showsColorPicker) {
@@ -320,6 +320,33 @@ private struct RailBackgroundRow: View {
         }
         .onAppear { hex = appPreferences.railBackgroundColorHex[scheme] ?? "" }
         .onChange(of: appPreferences.railBackgroundColorHex[scheme]) { _, value in hex = value ?? "" }
+    }
+}
+
+private struct RailColorSwatchStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        let scale = configuration.isPressed ? 0.94 : hovering ? 1.04 : 1
+        configuration.label
+            .overlay {
+                if isFocused {
+                    Capsule().strokeBorder(CodeEdgeSettingsTheme.focus, lineWidth: 2)
+                } else if isEnabled && reduceMotion && (hovering || configuration.isPressed) {
+                    Capsule().strokeBorder(
+                        CodeEdgeSettingsTheme.accent, lineWidth: configuration.isPressed ? 2 : 1
+                    )
+                }
+            }
+            .opacity(isEnabled ? 1 : 0.5)
+            .contentShape(Capsule())
+            .pointerStyle(isEnabled ? .link : nil)
+            .scaleEffect(isEnabled && !reduceMotion ? scale : 1)
+            .onHover { hovering = $0 }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: scale)
     }
 }
 
