@@ -17,10 +17,7 @@ without opening a single dashboard.
 
 <br>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/product-dark-en.jpg">
-  <img src="docs/assets/product-light-en.jpg" width="900" alt="CodeEdge's rail docked to the right edge of the screen, with Claude's quota details open">
-</picture>
+<img src="docs/assets/promo/codeedge-hero.png" width="900" alt="CodeEdge's rail docked to the right edge of a Mac screen, with Claude's quota details open">
 
 </div>
 

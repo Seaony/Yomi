@@ -17,10 +17,7 @@
 
 <br>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/product-dark-zh.jpg">
-  <img src="docs/assets/product-light-zh.jpg" width="900" alt="CodeEdge 侧边栏停靠在屏幕右边缘，展开了 Claude 的额度详情">
-</picture>
+<img src="docs/assets/promo/codeedge-hero.png" width="900" alt="CodeEdge 侧边栏停靠在 Mac 屏幕右边缘，展开了 Claude 的额度详情">
 
 </div>
 
