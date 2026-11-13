@@ -11,7 +11,7 @@
 不用再打开任何一个控制台。
 
 [![Release](https://img.shields.io/github/v/release/Seaony/CodeEdge?label=release&color=111111)](https://github.com/Seaony/CodeEdge/releases/latest) [![Stars](https://img.shields.io/github/stars/Seaony/CodeEdge?style=flat&color=111111)](https://github.com/Seaony/CodeEdge/stargazers)<br>
-![macOS 26.5+](https://img.shields.io/badge/macOS-26.5%2B-000000?logo=apple&logoColor=white) ![Swift 5](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white) ![SwiftUI](https://img.shields.io/badge/UI-SwiftUI-0A84FF?logo=swift&logoColor=white)
+![macOS 15+](https://img.shields.io/badge/macOS-15%2B-000000?logo=apple&logoColor=white) ![Swift 5](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white) ![SwiftUI](https://img.shields.io/badge/UI-SwiftUI-0A84FF?logo=swift&logoColor=white)
 
 **[下载](https://github.com/Seaony/CodeEdge/releases/latest)** &nbsp;·&nbsp; **[发布说明](docs/RELEASING.md)** &nbsp;·&nbsp; [English](README.md) · **简体中文**
 
@@ -43,7 +43,7 @@ CodeEdge 把这些都收进屏幕边缘的一条细栏里：
 
 **1 · 安装。** 从 **[最新版本](https://github.com/Seaony/CodeEdge/releases/latest)** 下载 DMG，把 `CodeEdge.app` 拖进“应用程序”。
 
-<sub>安装包同时支持 Apple 芯片和 Intel，需要 macOS 26.5 或更高版本。已使用 Developer ID 签名并通过 Apple 公证。CodeEdge 会通过 Sparkle 从 GitHub Releases 自动更新。</sub>
+<sub>安装包同时支持 Apple 芯片和 Intel，需要 macOS 15 或更高版本。已使用 Developer ID 签名并通过 Apple 公证。CodeEdge 会通过 Sparkle 从 GitHub Releases 自动更新。</sub>
 
 **2 · 启用 Provider。** 打开设置，进入 **Providers**，打开你在用的服务。每一项都会说明需要什么：本机登录、API Key、浏览器会话或环境变量。
 

@@ -11,7 +11,7 @@ Remaining quota, reset times, today's tokens and estimated spend,<br>
 without opening a single dashboard.
 
 [![Release](https://img.shields.io/github/v/release/Seaony/CodeEdge?label=release&color=111111)](https://github.com/Seaony/CodeEdge/releases/latest) [![Stars](https://img.shields.io/github/stars/Seaony/CodeEdge?style=flat&color=111111)](https://github.com/Seaony/CodeEdge/stargazers)<br>
-![macOS 26.5+](https://img.shields.io/badge/macOS-26.5%2B-000000?logo=apple&logoColor=white) ![Swift 5](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white) ![SwiftUI](https://img.shields.io/badge/UI-SwiftUI-0A84FF?logo=swift&logoColor=white)
+![macOS 15+](https://img.shields.io/badge/macOS-15%2B-000000?logo=apple&logoColor=white) ![Swift 5](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white) ![SwiftUI](https://img.shields.io/badge/UI-SwiftUI-0A84FF?logo=swift&logoColor=white)
 
 **[Download](https://github.com/Seaony/CodeEdge/releases/latest)** &nbsp;·&nbsp; **[Releasing](docs/RELEASING.md)** &nbsp;·&nbsp; **English** · [简体中文](README.zh-CN.md)
 
@@ -43,7 +43,7 @@ It's for you if you use more than one AI tool or plan. If you use one service an
 
 **1 · Install.** Download the DMG from the **[latest release](https://github.com/Seaony/CodeEdge/releases/latest)** and drag `CodeEdge.app` into Applications.
 
-<sub>Builds are universal (Apple silicon and Intel) and need macOS 26.5 or later. They are signed with a Developer ID and notarised by Apple. CodeEdge updates itself from GitHub Releases through Sparkle.</sub>
+<sub>Builds are universal (Apple silicon and Intel) and need macOS 15 or later. They are signed with a Developer ID and notarised by Apple. CodeEdge updates itself from GitHub Releases through Sparkle.</sub>
 
 **2 · Enable providers.** Open Settings, go to **Providers**, and turn on the services you use. Each one says what it needs: a local sign-in, an API key, a browser session or an environment variable.
 

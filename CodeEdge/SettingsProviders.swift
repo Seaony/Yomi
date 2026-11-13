@@ -83,7 +83,7 @@ struct ProviderSettingsView: View {
                     }
                 }
             }
-            .scrollEdgeEffectHidden(true)
+            .codeEdgeScrollEdgeEffectHidden()
         }
         .frame(maxHeight: .infinity, alignment: .top)
     }

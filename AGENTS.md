@@ -9,7 +9,7 @@ CodeEdge 是使用 SwiftUI 与 AppKit 构建的原生 macOS 应用，用悬浮�
 - 主要 Target：`CodeEdge`
 - 测试 Target：`CodeEdgeTests`
 - Swift：5.0
-- macOS Deployment Target：26.5
+- macOS Deployment Target：15.0
 - Swift Package 依赖：Sparkle、SweetCookieKit
 - 应用入口：`CodeEdge/CodeEdgeApp.swift`
 - 窗口与悬浮面板：`CodeEdge/AppDelegate.swift`

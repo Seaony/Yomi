@@ -431,8 +431,17 @@ private struct CodeEdgeSettingsFieldModifier: ViewModifier {
 }
 
 extension View {
+    @ViewBuilder
+    func codeEdgeScrollEdgeEffectHidden(for edges: Edge.Set = .all) -> some View {
+        if #available(macOS 26, *) {
+            scrollEdgeEffectHidden(true, for: edges)
+        } else {
+            self
+        }
+    }
+
     func codeEdgeSettingsPageTop() -> some View {
-        scrollEdgeEffectHidden(true, for: .top)
+        codeEdgeScrollEdgeEffectHidden(for: .top)
             .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
             .overlay(alignment: .top) { CodeEdgeSeparator() }
     }
