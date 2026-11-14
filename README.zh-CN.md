@@ -81,7 +81,8 @@ Codex · Claude · Claude Platform · Cursor · Gemini · Antigravity · Copilot
 - 密钥和凭据保存在 macOS 钥匙串中。
 - 用量缓存、偏好设置和侧边栏位置都只保存在本机。
 - 本地会话日志只用于统计 Token 和金额，聊天内容和代码文本不会被解析成额度。
-- CodeEdge 只访问各 Provider 自己的数据源，以及用于更新的 CodeEdge GitHub Releases。
+- CodeEdge 会访问各 Provider 自己的数据源、用于更新的 GitHub Releases，以及用于匿名统计的 TelemetryDeck。
+- 默认会通过 TelemetryDeck 发送匿名使用统计（安装数、App 和系统版本），不含账号、密钥、额度和用量，可以在设置里关闭。
 
 ## 从源码构建
 

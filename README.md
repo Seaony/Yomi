@@ -81,7 +81,8 @@ Native SwiftUI and AppKit. System, dark and light appearance. English and Simpli
 - Keys and credentials are stored in the macOS Keychain.
 - Usage caches, preferences and the rail's position stay on your Mac.
 - Local session logs are read only for token and cost totals; chat and code text are never parsed into quotas.
-- CodeEdge talks only to each provider's own data source, and to CodeEdge's GitHub Releases feed for updates.
+- CodeEdge connects to each provider's own data sources, GitHub Releases for updates, and TelemetryDeck for anonymous statistics.
+- Anonymous usage statistics (install counts, app and OS versions) are sent through TelemetryDeck by default. They contain no accounts, keys, quotas or usage, and can be turned off in Settings.
 
 ## Build from source
 

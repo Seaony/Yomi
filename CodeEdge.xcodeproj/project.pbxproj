@@ -10,6 +10,7 @@
 		A10F30A83045000100000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A10F30A93045000100000001 /* Sparkle */; };
 		A30F30A83045000100000001 /* SweetCookieKit in Frameworks */ = {isa = PBXBuildFile; productRef = A30F30A93045000100000001 /* SweetCookieKit */; };
 		A40F30A83045000100000001 /* ColorSelector in Frameworks */ = {isa = PBXBuildFile; productRef = A40F30A93045000100000001 /* ColorSelector */; };
+		A50F30A83045000100000001 /* TelemetryDeck in Frameworks */ = {isa = PBXBuildFile; productRef = A50F30A93045000100000001 /* TelemetryDeck */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -51,6 +52,7 @@
 				A10F30A83045000100000001 /* Sparkle in Frameworks */,
 				A30F30A83045000100000001 /* SweetCookieKit in Frameworks */,
 				A40F30A83045000100000001 /* ColorSelector in Frameworks */,
+				A50F30A83045000100000001 /* TelemetryDeck in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -105,6 +107,7 @@
 				A10F30A93045000100000001 /* Sparkle */,
 				A30F30A93045000100000001 /* SweetCookieKit */,
 				A40F30A93045000100000001 /* ColorSelector */,
+				A50F30A93045000100000001 /* TelemetryDeck */,
 			);
 			productName = CodeEdge;
 			productReference = 752595343045010E00233947 /* CodeEdge.app */;
@@ -177,6 +180,7 @@
 				A10F30AA3045000100000001 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				A30F30AA3045000100000001 /* XCRemoteSwiftPackageReference "SweetCookieKit" */,
 				A40F30AA3045000100000001 /* XCRemoteSwiftPackageReference "ColorSelector" */,
+				A50F30AA3045000100000001 /* XCRemoteSwiftPackageReference "SwiftSDK" */,
 			);
 			projectDirPath = "";
 			projectRoot = "";
@@ -511,6 +515,14 @@
 				version = 2.3.1;
 			};
 		};
+		A50F30AA3045000100000001 /* XCRemoteSwiftPackageReference "SwiftSDK" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/TelemetryDeck/SwiftSDK";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.14.2;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -528,6 +540,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A40F30AA3045000100000001 /* XCRemoteSwiftPackageReference "ColorSelector" */;
 			productName = ColorSelector;
+		};
+		A50F30A93045000100000001 /* TelemetryDeck */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A50F30AA3045000100000001 /* XCRemoteSwiftPackageReference "SwiftSDK" */;
+			productName = TelemetryDeck;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

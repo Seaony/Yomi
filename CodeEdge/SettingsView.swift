@@ -82,11 +82,12 @@ private struct SettingsScrollablePage<Content: View>: View {
     }
 }
 
-private struct GeneralSettingsView: View {
+struct GeneralSettingsView: View {
     private static let refreshIntervals = [0.0, 60, 300, 900, 1_800]
     @ObservedObject private var appPreferences = AppPreferences.shared
     @AppStorage("refresh-interval") private var refreshInterval = 0.0
     @AppStorage("show-provider-names") private var showProviderNames = true
+    @AppStorage(UsageAnalytics.settingKey) private var shareAnonymousUsageStatistics = true
     @AppStorage(FullscreenCollapsePolicy.settingKey) private var collapseInFullscreen = FullscreenCollapsePolicy.defaultEnabled
     @AppStorage(ProviderServiceStatusMonitor.settingKey) private var showServiceIncidents = ProviderServiceStatusMonitor.defaultEnabled
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -142,6 +143,18 @@ private struct GeneralSettingsView: View {
                     Toggle(copy.text("登录后自动启动", "Launch at login"), isOn: $launchAtLogin)
                         .onChange(of: launchAtLogin) { _, enabled in updateLoginItem(enabled) }
                     Toggle(copy.text("显示 Provider 名称", "Show provider names"), isOn: $showProviderNames)
+                    Toggle(isOn: $shareAnonymousUsageStatistics) {
+                        CodeEdgeSettingsRowLabel(
+                            title: copy.text("发送匿名使用统计", "Share anonymous usage statistics"),
+                            detail: copy.text(
+                                "只用来统计使用人数和版本分布，不包含账号、密钥、额度和用量。",
+                                "Only used to count installs and versions. No accounts, keys, quotas or usage."
+                            )
+                        )
+                    }
+                    .onChange(of: shareAnonymousUsageStatistics) { _, enabled in
+                        UsageAnalytics.shared.setEnabled(enabled)
+                    }
                 } footer: {
                     if let loginError { Text(loginError).foregroundStyle(CodeEdgeSettingsTheme.error) }
                 }
