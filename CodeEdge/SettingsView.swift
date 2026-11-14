@@ -82,7 +82,7 @@ private struct SettingsScrollablePage<Content: View>: View {
     }
 }
 
-struct GeneralSettingsView: View {
+private struct GeneralSettingsView: View {
     private static let refreshIntervals = [0.0, 60, 300, 900, 1_800]
     @ObservedObject private var appPreferences = AppPreferences.shared
     @AppStorage("refresh-interval") private var refreshInterval = 0.0
